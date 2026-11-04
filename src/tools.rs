@@ -37,6 +37,9 @@ pub struct AgentTool {
     pub tool_dir: &'static str,
     /// The global instruction file location.
     pub instruction_file: &'static str,
+    /// Files (relative to `HOME`) the tool loads instead of the instruction
+    /// file when they exist; `doctor` reports them.
+    pub instruction_overrides: &'static [&'static str],
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
     pub skill_mode: Mode,
@@ -73,6 +76,7 @@ pub const TOOLS: &[AgentTool] = &[
         presence_dir: ".claude",
         tool_dir: ".claude/skills",
         instruction_file: ".claude/CLAUDE.md",
+        instruction_overrides: &[],
         instruction_size_limit: None,
         skill_mode: Mode::Link,
         instruction_mode: Mode::Link,
@@ -90,6 +94,8 @@ pub const TOOLS: &[AgentTool] = &[
         presence_dir: ".codex",
         tool_dir: ".agents/skills",
         instruction_file: ".codex/AGENTS.md",
+        // Codex reads `AGENTS.override.md` instead of `AGENTS.md` when it exists.
+        instruction_overrides: &[".codex/AGENTS.override.md"],
         instruction_size_limit: Some(32768),
         skill_mode: Mode::Link,
         instruction_mode: Mode::Link,
@@ -109,6 +115,7 @@ pub const TOOLS: &[AgentTool] = &[
         presence_dir: ".gemini",
         tool_dir: ".gemini/config/skills",
         instruction_file: ".gemini/GEMINI.md",
+        instruction_overrides: &[],
         // Bytes, inclusive: phase 1 measured 24000 loads whole, 24001 is
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),

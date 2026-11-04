@@ -74,6 +74,59 @@ pub fn install(repo_root: &Path, binary: &Path) -> Result<Installed, Failure> {
     Ok(installed)
 }
 
+/// Where the skill repo's git hooks stand, for `doctor`.
+#[derive(Debug)]
+pub enum Status {
+    /// The skill repo is not in a git repo.
+    NotAGitRepo,
+    /// `core.hooksPath` points to this folder instead of the repo's own.
+    HooksPathElsewhere(PathBuf),
+    /// Each hook file in the hooks folder, in [`hook_names`] order.
+    Hooks {
+        dir: PathBuf,
+        hooks: Vec<(PathBuf, Hook)>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hook {
+    /// Exactly what `install` writes.
+    Installed,
+    Missing,
+    /// skiman's (it has the marker) with other content, e.g. another binary.
+    Outdated,
+    /// Not skiman's: `install` leaves it alone.
+    Foreign,
+    Unreadable(String),
+}
+
+/// Compares every hook file with what [`install`] would write for `binary`. Read-only.
+pub fn status(repo_root: &Path, binary: &Path) -> Result<Status, Failure> {
+    let Some((hooks_dir, own_dir)) = hooks_dirs(repo_root)? else {
+        return Ok(Status::NotAGitRepo);
+    };
+    if hooks_dir != own_dir {
+        return Ok(Status::HooksPathElsewhere(hooks_dir));
+    }
+    let hooks = hook_names()
+        .map(|name| {
+            let path = hooks_dir.join(name);
+            let hook = match std::fs::read(&path) {
+                Ok(current) if current == script(name, binary).as_bytes() => Hook::Installed,
+                Ok(current) if is_skimans(&current) => Hook::Outdated,
+                Ok(_) => Hook::Foreign,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Hook::Missing,
+                Err(e) => Hook::Unreadable(e.to_string()),
+            };
+            (path, hook)
+        })
+        .collect();
+    Ok(Status::Hooks {
+        dir: hooks_dir,
+        hooks,
+    })
+}
+
 fn is_skimans(content: &[u8]) -> bool {
     content
         .split(|b| *b == b'\n')

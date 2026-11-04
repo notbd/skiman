@@ -347,7 +347,7 @@ fn reconcile_instruction_locations(
 
 /// The realpath of `path`'s parent joined with its file name. Fails when the
 /// parent cannot be resolved; sync never creates or replaces it.
-fn instruction_location(path: &Path) -> std::io::Result<PathBuf> {
+pub fn instruction_location(path: &Path) -> std::io::Result<PathBuf> {
     let parent = path.parent().unwrap_or(Path::new("/")).canonicalize()?;
     Ok(parent.join(path.file_name().unwrap_or_default()))
 }
@@ -375,7 +375,7 @@ pub struct Wanted {
 /// Every distributable skill that is not `enabled = false`, in name order,
 /// then `managing-skills`. Folders under `skills/` that are not
 /// distributable are added to `report.items`.
-fn wanted_entries(
+pub fn wanted_entries(
     repo: &SkillRepo,
     manifest: &Manifest,
     report: &mut Report,

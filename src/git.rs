@@ -42,6 +42,31 @@ const LOCAL_ENV_VARS: &[&str] = &[
     "GIT_COMMON_DIR",
 ];
 
+/// The oldest git skiman works with: `merge-file --object-id` (2.43) for
+/// update's merge. `doctor` reports an older git.
+pub const MIN_VERSION: (u32, u32) = (2, 43);
+
+/// The installed git's version as `major.minor.patch` (from `git --version`,
+/// e.g. `git version 2.39.5 (Apple Git-154)` gives `2.39.5`) with its
+/// first two numbers. `Err` when git cannot be run or prints something else.
+pub fn installed_version() -> Result<(String, (u32, u32)), String> {
+    let output = Command::new("git")
+        .arg("--version")
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version = stdout
+        .trim()
+        .strip_prefix("git version ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .ok_or_else(|| format!("`git --version` printed {:?}", stdout.trim()))?;
+    let mut numbers = version.split('.').map(|n| n.parse::<u32>());
+    match (numbers.next(), numbers.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => Ok((version.to_owned(), (major, minor))),
+        _ => Err(format!("`git --version` printed {:?}", stdout.trim())),
+    }
+}
+
 /// How git may ask for credentials.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Prompts {

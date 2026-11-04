@@ -1,5 +1,6 @@
-//! Which tool-directory entries skiman owns, and what every other entry is
-//! (spec Ownership). Link targets are compared lexically; the target need not exist.
+//! Which tool-directory entries and instruction locations skiman owns, and
+//! what every other entry is (spec Ownership). Link targets are compared
+//! lexically; the target need not exist.
 
 use std::ffi::OsStr;
 use std::fs::Metadata;
@@ -28,6 +29,7 @@ pub enum Entry {
 pub struct Ownership {
     skills_dir: PathBuf,
     managing_skills_dir: PathBuf,
+    shared_body: PathBuf,
     /// Realpath of the skill repo `init` just switched away from: links under
     /// it are owned for that one sync.
     previous_repo: Option<PathBuf>,
@@ -61,6 +63,7 @@ impl Ownership {
         Ownership {
             skills_dir: repo.skills_dir(),
             managing_skills_dir: repo.managing_skills_dir(),
+            shared_body: repo.shared_body(),
             previous_repo,
             managed_paths,
             managed_under,
@@ -104,13 +107,27 @@ impl Ownership {
         }
     }
 
+    /// The normalised target of the instruction location `location` (the
+    /// realpath of its parent joined with the file name) when skiman owns it:
+    /// a symlink to the shared body, or under the previous skill repo.
+    pub fn owned_instruction(&self, location: &Path, meta: &Metadata) -> Option<PathBuf> {
+        if !meta.is_symlink() {
+            return None;
+        }
+        let target = link_target(location.parent()?, location)?;
+        (target == self.shared_body || self.is_under_previous_repo(&target)).then_some(target)
+    }
+
     fn is_owned_target(&self, name: &OsStr, target: &Path) -> bool {
         *target == self.skills_dir.join(name)
             || *target == self.managing_skills_dir
-            || self
-                .previous_repo
-                .as_ref()
-                .is_some_and(|previous| target.starts_with(previous))
+            || self.is_under_previous_repo(target)
+    }
+
+    fn is_under_previous_repo(&self, target: &Path) -> bool {
+        self.previous_repo
+            .as_ref()
+            .is_some_and(|previous| target.starts_with(previous))
     }
 }
 

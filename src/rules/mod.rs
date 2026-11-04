@@ -1,6 +1,5 @@
 //! The rule engine (spec Rules): format rules for skills, the config file
-//! formats, unresolved conflicts, secrets and Consistency. The shared body
-//! (#10) plugs in here.
+//! formats, unresolved conflicts, secrets, Consistency and the shared body.
 //!
 //! Entry points:
 //! - [`check_all`]: every rule on a whole [`Tree`] (the warnings a write
@@ -10,6 +9,9 @@
 //! - [`allow_hint`]: the ready-to-paste `[[secrets.allow]]` entries for the
 //!   secret violations in a list.
 //!
+//! [`warnings`] and [`warnings_all`] return what is printed as a warning but
+//! never fails: the shared body at 80 % of its size limit.
+//!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
 //! of content about to be written, or another snapshot.
 
@@ -17,6 +19,7 @@ mod config;
 mod consistency;
 pub(crate) mod frontmatter;
 mod secrets;
+mod shared_body;
 mod skill;
 
 use std::collections::BTreeSet;
@@ -52,6 +55,11 @@ pub mod rule {
     pub const LOCK_VERSION: &str = "lock-version";
     pub const CONSISTENCY: &str = "consistency";
     pub const SNAPSHOT_HASH: &str = "snapshot-hash";
+    /// The shared body is over the smallest instruction size limit among
+    /// enabled tools (a warning from 80 % of it).
+    pub const SHARED_BODY_SIZE: &str = "shared-body-size";
+    /// A token in the shared body that Claude Code reads as a file import.
+    pub const AT_IMPORT: &str = "at-import";
     /// The only rule that exits 3: a source table, lock entry or upstream
     /// snapshot whose skill folder is gone.
     pub const LEFTOVER_RECORD: &str = "leftover-record";
@@ -146,8 +154,8 @@ pub fn exit_of(violations: &[Violation]) -> Exit {
 pub struct Scope {
     /// Files created or changed (repo-relative, e.g. `skills/pdf/SKILL.md`,
     /// `upstream/pdf/run.sh`, `instructions/shared.md`): the per-file rules,
-    /// including the frontmatter rules for a skill's `SKILL.md`, and the
-    /// secret rule.
+    /// including the frontmatter rules for a skill's `SKILL.md` and the
+    /// shared body rules for `instructions/shared.md`, and the secret rule.
     pub files: BTreeSet<String>,
     /// Skill folders (by name) checked as a whole: every file in them plus
     /// the folder rules (name, `SKILL.md` present, file count, total size).
@@ -272,10 +280,14 @@ fn run(
 ) -> io::Result<(Vec<Violation>, Vec<secrets::Found>, config::Records)> {
     let mut out = BTreeSet::new();
     let mut found = Vec::new();
+    let records = config::Records::read(tree)?;
     for name in &scope.skills {
         skill::check_skill(tree, name, &mut out, &mut found)?;
     }
     for path in &scope.files {
+        if path == shared_body::PATH {
+            shared_body::check(tree, &records, &mut out)?;
+        }
         match tree.kind(path)? {
             None => {}
             Some(_) if path.starts_with("skills/") => {
@@ -296,7 +308,6 @@ fn run(
             }
         }
     }
-    let records = config::Records::read(tree)?;
     records.check(scope, &mut out);
     consistency::check(tree, &records, &scope.consistency, &mut out)?;
     let allows = records.secret_allows();
@@ -322,6 +333,20 @@ pub fn allow_hint(violations: &[Violation]) -> Option<String> {
         "If a match is not a real secret, add its entry to {MANIFEST}:\n\n{}",
         blocks.join("\n\n")
     ))
+}
+
+/// Warnings on what `scope` names, sorted by path and line.
+pub fn warnings(tree: &dyn Tree, scope: &Scope) -> io::Result<Vec<Violation>> {
+    let mut out = BTreeSet::new();
+    if scope.files.contains(shared_body::PATH) {
+        shared_body::warnings(tree, &config::Records::read(tree)?, &mut out)?;
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// Warnings on everything in `tree`.
+pub fn warnings_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
+    warnings(tree, &Scope::all(tree)?)
 }
 
 /// `true` when `kind` is a regular file within the per-file size limit, so
@@ -352,6 +377,9 @@ pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
     }
     for violation in check_all(tree).map_err(io)? {
         eprintln!("warning: {violation}");
+    }
+    for warning in warnings_all(tree).map_err(io)? {
+        eprintln!("warning: {warning}");
     }
     Ok(())
 }

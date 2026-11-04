@@ -83,6 +83,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
             "hint: the tool directories hold foreign skills and the skill repo has none yet; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
         );
     }
+    hint_refused_locations(&report, &repo);
     // Settings files are outside the skill repo: do not hold the repo lock
     // while the preview waits for an answer.
     drop(lock);
@@ -98,6 +99,21 @@ fn install_session_hooks(paths: &Paths, binary: &Path, session_hooks: Option<&st
         None => session_hooks::Request::Ask,
     };
     session_hooks::apply(paths.home(), binary, request)
+}
+
+/// Story 5: an instruction location skiman does not own is moved away by
+/// hand; skiman never replaces it.
+fn hint_refused_locations(report: &sync::Report, repo: &SkillRepo) {
+    if report
+        .items
+        .iter()
+        .any(|item| item.kind == ItemKind::RefusedLocation)
+    {
+        eprintln!(
+            "hint: move each instruction file listed above away by hand (copy what you want to keep into {} first), then run `skiman sync`",
+            repo.shared_body().display()
+        );
+    }
 }
 
 /// Installs the git hooks and tells the user what to add by hand where

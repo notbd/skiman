@@ -442,6 +442,7 @@ fn removing_a_tool_from_tools_enabled_removes_only_skimans_links_from_its_tool_d
         .stdout_eq(str![[r#"
 removed [..]/home/.gemini/config/skills/managing-skills
 removed [..]/home/.gemini/config/skills/pdf
+removed [..]/home/.gemini/GEMINI.md
 
 "#]])
         .stderr_eq("");
@@ -502,6 +503,9 @@ retargeted [..]/home/.agents/skills/pdf
 retargeted [..]/home/.gemini/config/skills/managing-skills
 removed [..]/home/.gemini/config/skills/notes
 retargeted [..]/home/.gemini/config/skills/pdf
+retargeted [..]/home/.claude/CLAUDE.md
+retargeted [..]/home/.codex/AGENTS.md
+retargeted [..]/home/.gemini/GEMINI.md
 
 "#]])
         .stderr_eq("");

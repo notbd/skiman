@@ -13,6 +13,7 @@ pub mod fsutil;
 pub mod git;
 pub mod git_hooks;
 pub mod import_guide;
+pub mod import_record;
 pub mod lockfile;
 pub mod managing_skills;
 pub mod manifest;

@@ -23,7 +23,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -32,7 +31,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
 use crate::backup::Backup;
-use crate::commands::has_terminal;
+use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind};
 use crate::fsutil;
@@ -1109,15 +1108,6 @@ fn print_preview(
     );
 }
 
-fn confirm(question: &str) -> Result<bool, Failure> {
-    let io = |e: std::io::Error| Failure::operational(format!("cannot read the answer: {e}"));
-    eprint!("{question}");
-    std::io::stderr().flush().map_err(io)?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(io)?;
-    Ok(matches!(line.trim(), "y" | "Y" | "yes" | "Yes"))
-}
-
 /// The import record as of confirmation: nothing written yet.
 fn record(
     repo: &SkillRepo,
@@ -1163,26 +1153,6 @@ fn record(
     }
 }
 
-fn write_files(dir: &Path, files: &[SnapshotFile]) -> Result<(), Failure> {
-    for file in files {
-        write_file(&dir.join(&file.path), file.executable, &file.content)?;
-    }
-    if files.is_empty() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| Failure::operational(format!("cannot create {}: {e}", dir.display())))?;
-    }
-    Ok(())
-}
-
-fn write_file(path: &Path, executable: bool, content: &[u8]) -> Result<(), Failure> {
-    let io =
-        |e: std::io::Error| Failure::operational(format!("cannot write {}: {e}", path.display()));
-    std::fs::create_dir_all(path.parent().expect("file has a parent")).map_err(io)?;
-    std::fs::write(path, content).map_err(io)?;
-    let mode = if executable { 0o755 } else { 0o644 };
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(io)
-}
-
 /// Writes the temporary area: `upstream/<name>/`, `skiman.lock` and
 /// `skiman.toml` as built, so a resumed import needs no fetch.
 fn write_area(paths: &Paths, candidate: &Candidate) -> Result<(), Failure> {
@@ -1198,17 +1168,17 @@ fn write_area(paths: &Paths, candidate: &Candidate) -> Result<(), Failure> {
         }
     }
     for third in &candidate.thirds {
-        write_files(
+        fsutil::write_files(
             &area.join("upstream").join(&third.name),
             &third.snapshot.files,
         )?;
     }
-    write_file(
+    fsutil::write_file(
         &area.join(rules::LOCKFILE),
         false,
         candidate.lock.as_bytes(),
     )?;
-    write_file(
+    fsutil::write_file(
         &area.join(rules::MANIFEST),
         false,
         candidate.manifest.as_bytes(),
@@ -1440,8 +1410,8 @@ fn write_repo(
     for (piece, _, content) in pieces {
         let path = stage.join(piece.rel());
         match content {
-            PieceContent::Folder(files) => write_files(&path, files)?,
-            PieceContent::File(bytes) => write_file(&path, false, bytes)?,
+            PieceContent::Folder(files) => fsutil::write_files(&path, files)?,
+            PieceContent::File(bytes) => fsutil::write_file(&path, false, bytes)?,
         }
     }
     for (piece, replaces, _) in pieces {

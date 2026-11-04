@@ -652,7 +652,7 @@ error: the URL already names a ref; drop --ref, or give the repository URL with 
 }
 
 /// A local folder `~/src/pdf` holding one skill and a `.git` folder.
-fn local_skill(sandbox: &Sandbox) -> PathBuf {
+fn local_upstream(sandbox: &Sandbox) -> PathBuf {
     let dir = sandbox.home().join("src/pdf");
     std::fs::create_dir_all(&dir).unwrap();
     sandbox.git(&dir, ["init", "--quiet"]);
@@ -668,7 +668,7 @@ fn local_skill(sandbox: &Sandbox) -> PathBuf {
 fn a_local_folder_installs_without_git_content_and_without_a_commit() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     let repo = sandbox.skill_repo();
 
     sandbox
@@ -718,7 +718,7 @@ created [..]/skill-repo/upstream/pdf
 fn absolute_and_dot_relative_local_folders_are_recorded_as_absolute_paths() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     let repo = sandbox.skill_repo();
 
     sandbox
@@ -773,7 +773,7 @@ fn a_local_folder_with_several_skills_installs_the_selected_one() {
 fn a_local_folder_with_a_symlink_or_a_ref_or_that_is_missing_is_refused() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     std::os::unix::fs::symlink("../../etc/passwd", dir.join("passwd")).unwrap();
     let before = world(&sandbox);
 

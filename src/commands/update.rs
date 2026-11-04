@@ -22,7 +22,6 @@
 //!    prints the recovery ([`stopped`]).
 
 use std::collections::BTreeSet;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
@@ -30,7 +29,7 @@ use crate::backup::Backup;
 use crate::commands::has_terminal;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
-use crate::fsutil::write_atomic;
+use crate::fsutil::{self, write_atomic};
 use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::manifest::{self, Manifest, SourceRecord};
@@ -41,7 +40,7 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::skill_md::SkillMd;
-use crate::snapshot::{Snapshot, SnapshotFile};
+use crate::snapshot::Snapshot;
 use crate::source::{Source, SourceKind, check_url};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
@@ -705,8 +704,8 @@ impl Workspace {
     }
 
     fn stage(&self, merged: &Snapshot, snapshot: &Snapshot) -> Result<(), Failure> {
-        write_files(&self.new_skill, &merged.files)?;
-        write_files(&self.new_upstream, &snapshot.files)
+        fsutil::write_files(&self.new_skill, &merged.files)?;
+        fsutil::write_files(&self.new_upstream, &snapshot.files)
     }
 }
 
@@ -716,22 +715,6 @@ impl Drop for Workspace {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
-}
-
-fn write_files(dir: &Path, files: &[SnapshotFile]) -> Result<(), Failure> {
-    std::fs::create_dir_all(dir)
-        .map_err(|e| Failure::operational(format!("cannot create {}: {e}", dir.display())))?;
-    for file in files {
-        let path = dir.join(&file.path);
-        let io = |e: std::io::Error| {
-            Failure::operational(format!("cannot write {}: {e}", path.display()))
-        };
-        std::fs::create_dir_all(path.parent().expect("file has a parent")).map_err(io)?;
-        std::fs::write(&path, &file.content).map_err(io)?;
-        let mode = if file.executable { 0o755 } else { 0o644 };
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(io)?;
-    }
-    Ok(())
 }
 
 /// base = current `upstream/<name>`, ours = current `skills/<name>` (working

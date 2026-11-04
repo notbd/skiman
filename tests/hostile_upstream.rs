@@ -125,7 +125,7 @@ fn plain_upstream(sandbox: &Sandbox, files: &[(&str, Vec<u8>)]) -> Upstream {
 }
 
 /// A local folder `~/src/pdf` holding `SKILL.md`.
-fn local_skill(sandbox: &Sandbox) -> PathBuf {
+fn local_upstream(sandbox: &Sandbox) -> PathBuf {
     let dir = sandbox.home().join("src/pdf");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("SKILL.md"), SKILL_MD).unwrap();
@@ -226,7 +226,7 @@ fn a_git_lfs_pointer_is_refused_for_a_git_and_a_local_source() {
     let stderr = assert_refused(&sandbox, "acme/pdf", "model.bin");
     assert!(stderr.contains("Git LFS pointer"), "{stderr}");
 
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     write(dir.join("data/model.bin"), lfs_pointer());
     assert_refused(&sandbox, "~/src/pdf", "data/model.bin");
 }
@@ -239,7 +239,7 @@ fn an_oversized_file_is_refused_for_a_git_and_a_local_source() {
     plain_upstream(&sandbox, &[("big.bin", big.clone())]);
     assert_refused(&sandbox, "acme/pdf", "big.bin");
 
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     write(dir.join("big.bin"), &big);
     assert_refused(&sandbox, "~/src/pdf", "big.bin");
 }
@@ -271,7 +271,7 @@ fn too_many_files_are_refused_for_a_git_and_a_local_source() {
     let stderr = assert_refused(&sandbox, "acme/pdf", "https://github.com/acme/pdf.git");
     assert!(stderr.contains("1001 files"), "{stderr}");
 
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     for (path, content) in &files {
         write(dir.join(path), content);
     }
@@ -288,7 +288,7 @@ fn a_symlink_is_refused_for_a_git_and_a_local_source() {
     up.commit("v2");
     assert_refused(&sandbox, "acme/pdf", "docs/passwd");
 
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::os::unix::fs::symlink("/etc/passwd", dir.join("docs/passwd")).unwrap();
     assert_refused(&sandbox, "~/src/pdf", "docs/passwd");
@@ -298,7 +298,7 @@ fn a_symlink_is_refused_for_a_git_and_a_local_source() {
 fn a_special_file_in_a_local_source_is_refused_and_never_opened() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     std::fs::create_dir_all(dir.join("io")).unwrap();
     sandbox
         .command("mkfifo")
@@ -340,7 +340,7 @@ fn conflict_record_names_and_marker_lines_in_an_upstream_are_refused() {
 
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let dir = local_skill(&sandbox);
+    let dir = local_upstream(&sandbox);
     write(dir.join("notes.md.skiman-upstream"), "x\n");
     assert_refused(&sandbox, "~/src/pdf", "notes.md.skiman-upstream");
 }

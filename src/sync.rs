@@ -388,16 +388,7 @@ pub fn wanted_entries(
         if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
             continue;
         }
-        let reason = if names::is_reserved(&name) {
-            Some("its name is reserved")
-        } else if !names::is_valid(&name) {
-            Some("its name is not a valid skill name")
-        } else if !dir.join("SKILL.md").is_file() {
-            Some("it holds no SKILL.md")
-        } else {
-            None
-        };
-        match reason {
+        match not_distributable(&name, &dir) {
             Some(reason) => report.items.push(Item {
                 scope: scope.clone(),
                 path: dir,
@@ -414,13 +405,19 @@ pub fn wanted_entries(
     Ok(wanted)
 }
 
-/// The name passes the regex, is not reserved, and `skills/<name>` is a folder holding `SKILL.md`.
-pub fn is_distributable(repo: &SkillRepo, name: &str) -> bool {
-    let dir = repo.skill_dir(name);
-    names::is_valid(name)
-        && !names::is_reserved(name)
-        && std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir())
-        && dir.join("SKILL.md").is_file()
+/// Why the skill folder `dir` (`skills/<name>`) is not distributable; a
+/// distributable one's name passes the regex, is not reserved, and its
+/// folder holds a `SKILL.md`.
+fn not_distributable(name: &str, dir: &Path) -> Option<&'static str> {
+    if names::is_reserved(name) {
+        Some("its name is reserved")
+    } else if !names::is_valid(name) {
+        Some("its name is not a valid skill name")
+    } else if !dir.join("SKILL.md").is_file() {
+        Some("it holds no SKILL.md")
+    } else {
+        None
+    }
 }
 
 /// The entries of `dir` with their own metadata (links not followed), sorted by name.

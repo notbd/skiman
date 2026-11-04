@@ -4,6 +4,9 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
+use crate::failure::Failure;
+use crate::snapshot::SnapshotFile;
+
 /// A temporary name next to `path` (same directory, so a rename stays on one
 /// filesystem). Starts with `.` so a leftover is never taken for a skill.
 fn temporary_sibling(path: &Path) -> PathBuf {
@@ -21,6 +24,26 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
+}
+
+/// Writes `files` below `dir` (created even when `files` is empty), each
+/// with mode `0o755` when executable, else `0o644`.
+pub fn write_files(dir: &Path, files: &[SnapshotFile]) -> Result<(), Failure> {
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Failure::operational(format!("cannot create {}: {e}", dir.display())))?;
+    for file in files {
+        write_file(&dir.join(&file.path), file.executable, &file.content)?;
+    }
+    Ok(())
+}
+
+/// Writes one file of [`write_files`], creating its parent folders.
+pub fn write_file(path: &Path, executable: bool, content: &[u8]) -> Result<(), Failure> {
+    let io = |e: io::Error| Failure::operational(format!("cannot write {}: {e}", path.display()));
+    std::fs::create_dir_all(path.parent().expect("file has a parent")).map_err(io)?;
+    std::fs::write(path, content).map_err(io)?;
+    let mode = if executable { 0o755 } else { 0o644 };
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(io)
 }
 
 /// Like [`write_atomic`], with mode `0o755`, so `path` is never seen without its execute bits.

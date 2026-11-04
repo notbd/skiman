@@ -57,6 +57,7 @@ fn an_existing_regular_claude_md_stays_byte_identical_and_init_tells_the_user_to
         .code(3)
         .stdout_eq(str![[r#"
 created skill repo [..]/skill-repo
+...
 linked [..]/home/.claude/skills/managing-skills
 linked [..]/home/.agents/skills/managing-skills
 linked [..]/home/.gemini/config/skills/managing-skills
@@ -196,6 +197,7 @@ fn init_with_another_skill_repo_retargets_the_instruction_links() {
         .code(0)
         .stdout_eq(str![[r#"
 created skill repo [..]/other-repo
+...
 retargeted [..]/home/.claude/skills/managing-skills
 retargeted [..]/home/.agents/skills/managing-skills
 retargeted [..]/home/.gemini/config/skills/managing-skills

@@ -1,27 +1,38 @@
-//! `skiman check`: report every rule violation in the working tree of the
-//! skill repo on stdout, and warnings on stderr. Read-only; takes no lock.
+//! `skiman check [--staged]`: report every rule violation in the working tree
+//! of the skill repo, or in its staged snapshot, on stdout, and warnings on
+//! stderr. Read-only; takes no lock.
 
 use crate::Exit;
 use crate::failure::{Failure, finish};
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::rules;
-use crate::tree::WorkingTree;
+use crate::staged::StagedTree;
+use crate::tree::{Tree, WorkingTree};
 
-pub fn run() -> Exit {
-    finish(check())
+pub fn run(staged: bool) -> Exit {
+    finish(check(staged))
 }
 
-fn check() -> Result<Exit, Failure> {
+fn check(staged: bool) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
-    let tree = WorkingTree::new(repo.root());
+    let tree: Box<dyn Tree> = if staged {
+        Box::new(StagedTree::read(repo.root()).map_err(|e| {
+            Failure::operational(format!(
+                "cannot read the staged snapshot of {}: {e}",
+                repo.root().display()
+            ))
+        })?)
+    } else {
+        Box::new(WorkingTree::new(repo.root()))
+    };
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let violations = rules::check_all(&tree).map_err(io)?;
+    let violations = rules::check_all(tree.as_ref()).map_err(io)?;
     for violation in &violations {
         println!("{violation}");
     }
-    for warning in rules::warnings_all(&tree).map_err(io)? {
+    for warning in rules::warnings_all(tree.as_ref()).map_err(io)? {
         eprintln!("warning: {warning}");
     }
     Ok(rules::exit_of(&violations))

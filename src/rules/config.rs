@@ -211,6 +211,22 @@ impl Records {
         self.manifest.doc.is_some() && self.lock.doc.is_some()
     }
 
+    /// `[tools].enabled` (string entries only; empty when absent); `None`
+    /// when `skiman.toml` is missing or does not parse.
+    pub fn enabled_tools(&self) -> Option<Vec<String>> {
+        let doc = self.manifest.doc.as_ref()?;
+        let enabled = doc
+            .get("tools")
+            .and_then(|tools| tools.get("enabled"))
+            .and_then(Item::as_array);
+        Some(
+            enabled
+                .into_iter()
+                .flat_map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)))
+                .collect(),
+        )
+    }
+
     pub fn manifest_skills(&self) -> BTreeSet<String> {
         self.manifest.skill_names()
     }

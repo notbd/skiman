@@ -1,11 +1,14 @@
 //! The rule engine (spec Rules): format rules for skills, the config file
-//! formats, unresolved conflicts and Consistency. Secrets (#7) and the shared
-//! body (#10) plug in here.
+//! formats, unresolved conflicts, Consistency and the shared body. Secrets
+//! (#7) plug in here.
 //!
 //! Two entry points:
 //! - [`check_all`]: every rule on a whole [`Tree`] (`skiman check`, and the
 //!   warnings a write command prints).
 //! - [`check`]: only what a [`Scope`] names: what a write command writes.
+//!
+//! [`warnings`] and [`warnings_all`] return what is printed as a warning but
+//! never fails: the shared body at 80 % of its size limit.
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
 //! of content about to be written, or another snapshot.
@@ -13,6 +16,7 @@
 mod config;
 mod consistency;
 mod frontmatter;
+mod shared_body;
 mod skill;
 
 use std::collections::BTreeSet;
@@ -47,6 +51,11 @@ pub mod rule {
     pub const LOCK_VERSION: &str = "lock-version";
     pub const CONSISTENCY: &str = "consistency";
     pub const SNAPSHOT_HASH: &str = "snapshot-hash";
+    /// The shared body is over the smallest instruction size limit among
+    /// enabled tools (a warning from 80 % of it).
+    pub const SHARED_BODY_SIZE: &str = "shared-body-size";
+    /// A token in the shared body that Claude Code reads as a file import.
+    pub const AT_IMPORT: &str = "at-import";
     /// The only rule that exits 3: a source table, lock entry or upstream
     /// snapshot whose skill folder is gone.
     pub const LEFTOVER_RECORD: &str = "leftover-record";
@@ -123,7 +132,8 @@ pub fn exit_of(violations: &[Violation]) -> Exit {
 #[derive(Debug, Clone, Default)]
 pub struct Scope {
     /// Files created or changed (repo-relative, e.g. `skills/pdf/SKILL.md`):
-    /// the per-file rules, including the frontmatter rules for a skill's `SKILL.md`.
+    /// the per-file rules, including the frontmatter rules for a skill's
+    /// `SKILL.md` and the shared body rules for `instructions/shared.md`.
     pub files: BTreeSet<String>,
     /// Skill folders (by name) checked as a whole: every file in them plus
     /// the folder rules (name, `SKILL.md` present, file count, total size).
@@ -150,7 +160,7 @@ impl Scope {
         consistency.extend(records.manifest_skills());
         consistency.extend(records.lock_skills());
         Ok(Scope {
-            files: BTreeSet::new(),
+            files: BTreeSet::from([shared_body::PATH.to_owned()]),
             skills,
             manifest_tables: records.manifest_skills(),
             manifest: true,
@@ -179,18 +189,34 @@ pub fn check_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
 /// The rules on what `scope` names, sorted by path and line.
 pub fn check(tree: &dyn Tree, scope: &Scope) -> io::Result<Vec<Violation>> {
     let mut out = BTreeSet::new();
+    let records = config::Records::read(tree)?;
     for name in &scope.skills {
         skill::check_skill(tree, name, &mut out)?;
     }
     for path in &scope.files {
-        if tree.kind(path)?.is_some() {
+        if path == shared_body::PATH {
+            shared_body::check(tree, &records, &mut out)?;
+        } else if tree.kind(path)?.is_some() {
             skill::check_written_file(tree, path, &mut out)?;
         }
     }
-    let records = config::Records::read(tree)?;
     records.check(scope, &mut out);
     consistency::check(tree, &records, &scope.consistency, &mut out)?;
     Ok(out.into_iter().collect())
+}
+
+/// Warnings on what `scope` names, sorted by path and line.
+pub fn warnings(tree: &dyn Tree, scope: &Scope) -> io::Result<Vec<Violation>> {
+    let mut out = BTreeSet::new();
+    if scope.files.contains(shared_body::PATH) {
+        shared_body::warnings(tree, &config::Records::read(tree)?, &mut out)?;
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// Warnings on everything in `tree`.
+pub fn warnings_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
+    warnings(tree, &Scope::all(tree)?)
 }
 
 /// `true` when `kind` is a regular file within the per-file size limit, so
@@ -216,6 +242,9 @@ pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
     }
     for violation in check_all(tree).map_err(io)? {
         eprintln!("warning: {violation}");
+    }
+    for warning in warnings_all(tree).map_err(io)? {
+        eprintln!("warning: {warning}");
     }
     Ok(())
 }

@@ -79,7 +79,23 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
             "hint: the tool directories hold foreign skills and the skill repo has none yet; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
         );
     }
+    hint_refused_locations(&report, &repo);
     Ok(exit)
+}
+
+/// Story 5: an instruction location skiman does not own is moved away by
+/// hand; skiman never replaces it.
+fn hint_refused_locations(report: &sync::Report, repo: &SkillRepo) {
+    if report
+        .items
+        .iter()
+        .any(|item| item.kind == ItemKind::RefusedLocation)
+    {
+        eprintln!(
+            "hint: move each instruction file listed above away by hand (copy what you want to keep into {} first), then run `skiman sync`",
+            repo.shared_body().display()
+        );
+    }
 }
 
 /// Whether any folder under `skills/` holds a `SKILL.md`.

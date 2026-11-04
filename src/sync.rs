@@ -3,7 +3,8 @@
 //!
 //! [`run`] is the entry point; it needs the repo lock. [`reconcile`] computes
 //! and applies the changes and returns a [`Report`] of what it did and found.
-//! Only owned entries are created, retargeted or removed (spec Ownership);
+//! Only owned entries and instruction locations are created, retargeted or
+//! removed (spec Ownership);
 //! everything else is reported as an [`Item`]. Never spawns `git`:
 //! `sync --hook` must stay fast.
 
@@ -37,7 +38,8 @@ pub enum Output {
 /// `sync --hook` only those not reported at the last sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
-    /// Realpath of the tool directory, or of `skills/` for invalid skill folders.
+    /// Realpath of the tool directory, of `skills/` for invalid skill folders,
+    /// or the instruction location (realpath of its parent joined with the file name).
     pub scope: String,
     pub path: PathBuf,
     pub kind: ItemKind,
@@ -51,6 +53,8 @@ pub enum ItemKind {
     Occupied { name: String },
     /// A folder under `skills/` that is never distributed, and why.
     InvalidSkillFolder { reason: &'static str },
+    /// An instruction location skiman does not own, so the shared body is not linked there (exit 3).
+    RefusedLocation,
 }
 
 impl Item {
@@ -60,6 +64,7 @@ impl Item {
             ItemKind::Foreign { .. } => "foreign",
             ItemKind::Occupied { .. } => "occupied",
             ItemKind::InvalidSkillFolder { .. } => "invalid-skill-folder",
+            ItemKind::RefusedLocation => "refused-location",
         };
         format!("{kind} {}", self.path.display())
     }
@@ -76,11 +81,14 @@ impl Item {
             ItemKind::InvalidSkillFolder { reason } => {
                 format!("skill folder {path} is not distributed: {reason}")
             }
+            ItemKind::RefusedLocation => format!(
+                "instruction file {path} is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`"
+            ),
         }
     }
 }
 
-/// A change sync made to an owned tool-directory entry.
+/// A change sync made to an owned tool-directory entry or instruction location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Change {
     Linked,
@@ -91,7 +99,8 @@ pub enum Change {
 /// What one reconcile did and found.
 #[derive(Debug, Default)]
 pub struct Report {
-    /// Changes in the order they were made, with the tool-directory entry path.
+    /// Changes in the order they were made, with the tool-directory entry or
+    /// instruction location path.
     pub changes: Vec<(Change, PathBuf)>,
     pub items: Vec<Item>,
     /// I/O failures (exit 4); sync goes on with the other entries.
@@ -102,11 +111,12 @@ impl Report {
     pub fn exit(&self) -> Exit {
         if !self.errors.is_empty() {
             Exit::OperationalError
-        } else if self
-            .items
-            .iter()
-            .any(|item| matches!(item.kind, ItemKind::Occupied { .. }))
-        {
+        } else if self.items.iter().any(|item| {
+            matches!(
+                item.kind,
+                ItemKind::Occupied { .. } | ItemKind::RefusedLocation
+            )
+        }) {
             Exit::NeedsAttention
         } else {
             Exit::Success
@@ -184,7 +194,8 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
 /// Materialises `managing-skills`, then makes every installed tool's tool
 /// directory hold an owned link for every wanted entry, removes owned entries
 /// nothing wants, and removes owned entries from tool directories of known
-/// tools that are not enabled.
+/// tools that are not enabled. Then does the same for instruction locations
+/// and the shared body.
 pub fn reconcile(
     home: &Path,
     repo: &SkillRepo,
@@ -247,7 +258,98 @@ pub fn reconcile(
             reconciled.push(real);
         }
     }
+    reconcile_instruction_locations(home, repo, manifest, &ownership, &mut report);
     report
+}
+
+/// Links the shared body to every installed tool's instruction location and
+/// removes owned links from the instruction locations of known tools that are
+/// not enabled. A location is compared by the realpath of its parent joined
+/// with the file name (the file itself is not followed), so aliased locations
+/// are reconciled once and a link from one location to another is not owned.
+fn reconcile_instruction_locations(
+    home: &Path,
+    repo: &SkillRepo,
+    manifest: &Manifest,
+    ownership: &Ownership,
+    report: &mut Report,
+) {
+    let target = repo.shared_body();
+    let mut reconciled = Vec::new();
+    for tool in installed_tools(home, manifest) {
+        let path = home.join(tool.instruction_file);
+        let location = match instruction_location(&path) {
+            Ok(location) => location,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("cannot resolve {}: {e}", path.display()));
+                continue;
+            }
+        };
+        if reconciled.contains(&location) {
+            continue;
+        }
+        match std::fs::symlink_metadata(&location) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match fsutil::symlink_atomic(&target, &location) {
+                    Ok(()) => report.changes.push((Change::Linked, path)),
+                    Err(e) => report
+                        .errors
+                        .push(format!("cannot link {}: {e}", path.display())),
+                }
+            }
+            Err(e) => report
+                .errors
+                .push(format!("cannot inspect {}: {e}", path.display())),
+            Ok(meta) => match ownership.owned_instruction(&location, &meta) {
+                Some(current) if current == target => {}
+                Some(_) => match fsutil::symlink_atomic(&target, &location) {
+                    Ok(()) => report.changes.push((Change::Retargeted, path)),
+                    Err(e) => report
+                        .errors
+                        .push(format!("cannot retarget {}: {e}", path.display())),
+                },
+                None => report.items.push(Item {
+                    scope: location.display().to_string(),
+                    path,
+                    kind: ItemKind::RefusedLocation,
+                }),
+            },
+        }
+        reconciled.push(location);
+    }
+    let enabled = manifest.enabled_tools();
+    for tool in TOOLS
+        .iter()
+        .filter(|t| !enabled.iter().any(|id| id == t.id))
+    {
+        let path = home.join(tool.instruction_file);
+        let Ok(location) = instruction_location(&path) else {
+            continue;
+        };
+        if reconciled.contains(&location) {
+            continue;
+        }
+        if let Ok(meta) = std::fs::symlink_metadata(&location)
+            && ownership.owned_instruction(&location, &meta).is_some()
+        {
+            match std::fs::remove_file(&location) {
+                Ok(()) => report.changes.push((Change::Removed, path)),
+                Err(e) => report
+                    .errors
+                    .push(format!("cannot remove {}: {e}", path.display())),
+            }
+        }
+        reconciled.push(location);
+    }
+}
+
+/// The realpath of `path`'s parent joined with its file name. Fails when the
+/// parent cannot be resolved; sync never creates or replaces it.
+fn instruction_location(path: &Path) -> std::io::Result<PathBuf> {
+    let parent = path.parent().unwrap_or(Path::new("/")).canonicalize()?;
+    Ok(parent.join(path.file_name().unwrap_or_default()))
 }
 
 /// Tools that are enabled in `[tools].enabled` and whose presence directory exists.

@@ -141,6 +141,37 @@ pub fn with_source(text: &str, name: &str, source: &SourceRecord) -> Result<Stri
     Ok(doc.to_string())
 }
 
+/// `text` (a `skiman.toml`) with `ref` and `ref_kind` of
+/// `[skills.<name>.source]` set to `git_ref` and `ref_kind`, each removed
+/// when `None`. A key that already holds its value keeps its bytes, so the
+/// text is unchanged exactly when both already match.
+pub fn with_source_ref(
+    text: &str,
+    name: &str,
+    git_ref: Option<&str>,
+    ref_kind: Option<&str>,
+) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    let source = doc
+        .get_mut("skills")
+        .and_then(|skills| skills.get_mut(name))
+        .and_then(|skill| skill.get_mut("source"))
+        .and_then(Item::as_table_like_mut)
+        .ok_or_else(|| format!("[skills.{name}.source] is not a table"))?;
+    for (key, want) in [("ref", git_ref), ("ref_kind", ref_kind)] {
+        match want {
+            Some(want) if source.get(key).and_then(Item::as_str) != Some(want) => {
+                source.insert(key, value(want));
+            }
+            Some(_) => {}
+            None => {
+                source.remove(key);
+            }
+        }
+    }
+    Ok(doc.to_string())
+}
+
 /// The table `key` of `parent`, created as an implicit table (no header of
 /// its own) when missing; `None` when `key` holds something else.
 pub(crate) fn subtable<'a>(parent: &'a mut Table, key: &str) -> Option<&'a mut Table> {

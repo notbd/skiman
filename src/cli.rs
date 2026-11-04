@@ -35,6 +35,20 @@ pub enum Command {
         #[arg(short = 'd', long)]
         description: Option<String>,
     },
+    /// Install a third-party skill
+    Add {
+        /// Where the skill comes from: a GitHub repository as <owner>/<repo>
+        source: String,
+        /// Install name, when it must differ from the upstream name
+        #[arg(long)]
+        name: Option<String>,
+        /// Show the file list, then stop without writing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Install without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
     /// Import a prepared folder
     Import {
         /// Print the instructions an agent follows to prepare an import folder
@@ -100,6 +114,17 @@ where
             session_hooks,
         } => commands::init::run(&path, session_hooks.as_deref()),
         Command::New { name, description } => commands::new::run(&name, description),
+        Command::Add {
+            source,
+            name,
+            dry_run,
+            yes,
+        } => commands::add::run(commands::add::Args {
+            source,
+            name,
+            dry_run,
+            yes,
+        }),
         Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),

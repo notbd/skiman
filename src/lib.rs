@@ -1,12 +1,15 @@
 //! skiman: keeps agent skills and global instruction files in one skill repo
 //! and distributes them to every agent tool.
 
+pub mod backup;
 pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod exit;
 pub mod failure;
+pub mod fetch;
 pub mod fsutil;
+pub mod git;
 pub mod git_hooks;
 pub mod import_guide;
 pub mod lockfile;
@@ -20,7 +23,11 @@ pub mod repo_lock;
 pub mod reported;
 pub mod rules;
 pub mod session_hooks;
+pub mod skill_md;
+pub mod snapshot;
+pub mod source;
 pub mod staged;
+pub mod staging;
 pub mod sync;
 pub mod tools;
 pub mod tree;

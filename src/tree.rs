@@ -5,6 +5,7 @@
 //! Paths are relative to the view's root, `/`-separated, without a leading
 //! `/`; `""` is the root itself.
 
+use std::collections::BTreeSet;
 use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -151,17 +152,28 @@ fn walk_dir(root: &Path, dir: &str, out: &mut Vec<Entry>) -> io::Result<()> {
     Ok(())
 }
 
-/// A tree with regular, non-executable files laid over it: what the tree will
-/// look like once a write command has written them. Folders above an added
-/// file appear as folders.
+/// A tree with regular files laid over it (non-executable unless named in
+/// [`Overlay::with_executable`]): what the tree will look like once a write
+/// command has written them. Folders above an added file appear as folders.
 pub struct Overlay<'a> {
     base: &'a dyn Tree,
     files: Vec<(String, Vec<u8>)>,
+    executable: BTreeSet<String>,
 }
 
 impl<'a> Overlay<'a> {
     pub fn new(base: &'a dyn Tree, files: Vec<(String, Vec<u8>)>) -> Overlay<'a> {
-        Overlay { base, files }
+        Overlay {
+            base,
+            files,
+            executable: BTreeSet::new(),
+        }
+    }
+
+    /// Marks the added files at `paths` as executable.
+    pub fn with_executable(mut self, paths: BTreeSet<String>) -> Overlay<'a> {
+        self.executable = paths;
+        self
     }
 
     fn file(&self, path: &str) -> Option<&[u8]> {
@@ -185,7 +197,7 @@ impl Tree for Overlay<'_> {
         if let Some(content) = self.file(path) {
             return Ok(Some(Kind::File {
                 size: content.len() as u64,
-                executable: false,
+                executable: self.executable.contains(path),
             }));
         }
         if self.is_added_dir(path) {

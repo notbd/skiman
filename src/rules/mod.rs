@@ -17,7 +17,7 @@
 
 mod config;
 mod consistency;
-mod frontmatter;
+pub(crate) mod frontmatter;
 mod secrets;
 mod shared_body;
 mod skill;

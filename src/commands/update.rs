@@ -8,16 +8,16 @@
 //! where marked:
 //!
 //! 1. [`Current::read`]: the skill's records; refusals before anything is
-//!    fetched (#15: unresolved conflicts, snapshot hash; #16: refs, local
-//!    folders).
-//! 2. [`fetch`]: the new commit and snapshot (#16: which commit).
+//!    fetched (#15: unresolved conflicts, snapshot hash).
+//! 2. [`fetch`]: the version to move to (spec Version semantics) and its
+//!    snapshot; a local folder is re-read.
 //! 3. Same snapshot: up to date, or [`advance_records`] (fragments to a fresh
-//!    backup, then the lock entry).
+//!    backup, then `source.ref` and `ref_kind`, then the lock entry).
 //! 4. Otherwise [`merge`] in `tmp/<timestamp>/merge/<name>/` (#15: conflicts),
 //!    [`validate`] the candidate output, stage it in `tmp/<timestamp>/new/`,
 //!    then [`swap`]: re-hash, fragments, re-hash, renames through
-//!    `tmp/<timestamp>/old/`, lock entry (last write), old folders to the
-//!    backup (#17: failure output and recovery).
+//!    `tmp/<timestamp>/old/`, `source.ref` and `ref_kind`, lock entry (last
+//!    write), old folders to the backup (#17: failure output and recovery).
 
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
@@ -27,7 +27,7 @@ use crate::Exit;
 use crate::backup::Backup;
 use crate::commands::has_terminal;
 use crate::failure::{Failure, finish};
-use crate::fetch::Cache;
+use crate::fetch::{Cache, RefKind, ResolvedRef};
 use crate::fsutil::write_atomic;
 use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry, Lockfile};
@@ -38,12 +38,13 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::{Snapshot, SnapshotFile};
+use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::tree::{Overlay, WorkingTree, tree_hash_of_dir};
 
-pub fn run(names: Vec<String>) -> Exit {
-    finish(update(names))
+pub fn run(names: Vec<String>, git_ref: Option<String>) -> Exit {
+    finish(update(names, git_ref))
 }
 
 /// What every skill's update shares.
@@ -65,7 +66,10 @@ impl Context {
     }
 }
 
-fn update(names: Vec<String>) -> Result<Exit, Failure> {
+fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> {
+    if git_ref.is_some() && names.len() != 1 {
+        return Err(Failure::usage("--ref needs exactly one skill name"));
+    }
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
     let prompts = if has_terminal() {
@@ -103,7 +107,7 @@ fn update(names: Vec<String>) -> Result<Exit, Failure> {
     let mut exit = Exit::Success;
     let mut any_done = names.is_empty();
     for name in &names {
-        match update_skill(&mut context, name) {
+        match update_skill(&mut context, name, git_ref.as_deref()) {
             Ok(()) => any_done = true,
             Err(failure) => {
                 eprintln!("error: skill {name}: {}", failure.message);
@@ -168,17 +172,6 @@ impl Current {
                 "skills/{name} is not a folder; run `skiman check`"
             )));
         }
-        // #16: refs and local-folder sources.
-        if source.git_ref.is_some() || entry.git_ref.is_some() {
-            return Err(Failure::refused(format!(
-                "{name} has a `ref`; skiman cannot update skills with a ref yet"
-            )));
-        }
-        if source.url.starts_with(['/', '~', '.']) {
-            return Err(Failure::refused(format!(
-                "{name} comes from a local folder; skiman cannot update local-folder sources yet"
-            )));
-        }
         // #15: refuse unresolved conflicts and a snapshot that differs from the lock.
         let lock_text = read_text(&repo.lockfile())?.unwrap_or_default();
         Ok(Current {
@@ -203,24 +196,45 @@ fn read_text(path: &Path) -> Result<Option<String>, Failure> {
 
 /// The version an update moves to.
 struct Target {
-    commit: String,
+    /// The commit, or for a local folder the snapshot's tree hash.
+    version: String,
     snapshot: Snapshot,
     /// The new lock entry.
     entry: LockEntry,
+    /// `skiman.toml` with the new `source.ref` and `ref_kind`; `None` when
+    /// they stay the same.
+    manifest_text: Option<String>,
+    /// `  note: ...` lines printed after the skill's result.
+    notes: Vec<String>,
 }
 
-fn update_skill(context: &mut Context, name: &str) -> Result<(), Failure> {
+fn update_skill(context: &mut Context, name: &str, git_ref: Option<&str>) -> Result<(), Failure> {
     let current = Current::read(&context.repo, name)?;
-    let target = fetch(context, &current)?;
+    let target = fetch(context, name, &current, git_ref)?;
+    update_to(context, name, &current, &target)?;
+    for note in &target.notes {
+        println!("  note: {note}");
+    }
+    Ok(())
+}
+
+/// Moves the skill to `target`: records only when its snapshot is the same,
+/// else merge, validate and swap.
+fn update_to(
+    context: &mut Context,
+    name: &str,
+    current: &Current,
+    target: &Target,
+) -> Result<(), Failure> {
     if target.entry.snapshot == current.entry.snapshot {
-        if target.entry == current.entry {
-            println!("skill {name}: up to date at {}", target.commit);
+        if target.entry == current.entry && target.manifest_text.is_none() {
+            println!("skill {name}: up to date at {}", target.version);
             return Ok(());
         }
-        let backup = advance_records(context, name, &current, &target)?;
+        let backup = advance_records(context, name, current, target)?;
         println!(
             "skill {name}: now at {}; no file of the skill changed\nsaved the records of {name} to {}",
-            target.commit,
+            target.version,
             backup.dir().display()
         );
         return Ok(());
@@ -243,25 +257,25 @@ fn update_skill(context: &mut Context, name: &str) -> Result<(), Failure> {
     let changes = changes(&ours, &merged);
     let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
         .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
+    let records = Records {
+        manifest: target.manifest_text.as_deref(),
+        lock: &lock_text,
+    };
     validate(
         &context.repo,
         name,
         &merged,
         &target.snapshot,
-        &lock_text,
+        &records,
         &changes,
     )?;
     work.stage(&merged, &target.snapshot)?;
-    let backup = swap(
-        context,
-        &work,
-        name,
-        &current,
-        &ours.tree_hash(),
-        &lock_text,
-    )?;
+    let backup = swap(context, &work, name, current, &ours.tree_hash(), &records)?;
 
-    println!("skill {name}: updated to {}; changed files:", target.commit);
+    println!(
+        "skill {name}: updated to {}; changed files:",
+        target.version
+    );
     for (change, path) in &changes {
         println!("  {} {path}", change.verb());
     }
@@ -272,22 +286,147 @@ fn update_skill(context: &mut Context, name: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Fetches the upstream's default branch head and reads the skill's folder.
-fn fetch(context: &Context, current: &Current) -> Result<Target, Failure> {
-    let cache = Cache::open(&context.paths, &current.source.url, context.prompts)?;
-    let head = cache.default_branch()?;
-    cache.fetch_commit(&head.commit)?;
-    let snapshot = Snapshot::read(&cache, &head.commit, &current.source.path)?;
+/// Picks the version to move to (spec Version semantics), fetches it and
+/// reads the skill's folder. The ref is `--ref`, else `source.ref`; without
+/// one, the default branch. A branch moves to its head. A tag or commit
+/// stays at the locked commit unless the ref changes (`--ref`, or
+/// `source.ref` differing from the lock's `ref`); a moved tag is reported.
+/// `ref_kind` is always derived, never read.
+fn fetch(
+    context: &Context,
+    name: &str,
+    current: &Current,
+    requested: Option<&str>,
+) -> Result<Target, Failure> {
+    let source = &current.source;
+    if source.url.starts_with(['/', '~', '.']) {
+        return fetch_local(context, name, current, requested);
+    }
+    let cache = Cache::open(&context.paths, &source.url, context.prompts)?;
+    let mut notes = Vec::new();
+    let (resolved, commit) = match requested.or(source.git_ref.as_deref()) {
+        None => (None, cache.default_branch()?.commit),
+        Some(git_ref) => {
+            let resolved = cache.resolve_ref(git_ref)?;
+            let changing = requested.is_some() || source.git_ref != current.entry.git_ref;
+            let commit = pick_commit(name, &resolved, current, changing, &mut notes);
+            (Some(resolved), commit)
+        }
+    };
+    cache.fetch_commit(&commit)?;
+    let snapshot = Snapshot::read(&cache, &commit, &source.path)?;
     let entry = LockEntry {
-        commit: Some(head.commit.clone()),
-        git_ref: current.source.git_ref.clone(),
+        commit: Some(commit.clone()),
+        git_ref: resolved.as_ref().map(|r| r.name.clone()),
         snapshot: snapshot.tree_hash(),
     };
     Ok(Target {
-        commit: head.commit,
+        version: commit,
         snapshot,
         entry,
+        manifest_text: new_manifest_text(name, current, resolved.as_ref())?,
+        notes,
     })
+}
+
+/// The commit a resolved ref moves the skill to.
+fn pick_commit(
+    name: &str,
+    resolved: &ResolvedRef,
+    current: &Current,
+    changing: bool,
+    notes: &mut Vec<String>,
+) -> String {
+    if changing && resolved.also_tag {
+        notes.push(format!(
+            "`{}` is also a tag; the branch is followed",
+            resolved.name
+        ));
+    }
+    let locked = current.entry.commit.as_ref();
+    match (resolved.kind, locked) {
+        (RefKind::Tag | RefKind::Commit, Some(locked)) if !changing => {
+            if resolved.kind == RefKind::Tag && *locked != resolved.commit {
+                notes.push(format!(
+                    "tag `{}` now points to {}; {name} stays at its locked commit, and `skiman update {name} --ref {}` moves it there",
+                    resolved.name,
+                    resolved.commit,
+                    resolved.name
+                ));
+            }
+            locked.clone()
+        }
+        _ => resolved.commit.clone(),
+    }
+}
+
+/// A local-folder source: the folder is re-read as it is now and versioned
+/// by its tree hash; it has no refs. A missing folder is an error (exit 4)
+/// that keeps the current content.
+fn fetch_local(
+    context: &Context,
+    name: &str,
+    current: &Current,
+    requested: Option<&str>,
+) -> Result<Target, Failure> {
+    let source = &current.source;
+    if requested.is_some() {
+        return Err(Failure::refused(format!(
+            "{} is a local folder, which has no versions; drop --ref",
+            source.url
+        )));
+    }
+    if source.git_ref.is_some() {
+        return Err(Failure::refused(format!(
+            "{} is a local folder, which has no versions; remove `ref` from [skills.{name}.source] in skiman.toml",
+            source.url
+        )));
+    }
+    let parsed = Source::parse(&source.url, context.paths.home(), Path::new("/"))?;
+    let SourceKind::Local { dir } = parsed.kind else {
+        unreachable!("a `/`, `~` or `.` source is a local folder");
+    };
+    let dir = if source.path.is_empty() {
+        dir
+    } else {
+        dir.join(&source.path)
+    };
+    if !dir.is_dir() {
+        return Err(Failure::operational(format!(
+            "the local folder {} does not exist; nothing of {name} changed",
+            dir.display()
+        )));
+    }
+    let snapshot = Snapshot::read_local(&dir)?;
+    let entry = LockEntry {
+        commit: None,
+        git_ref: None,
+        snapshot: snapshot.tree_hash(),
+    };
+    Ok(Target {
+        version: entry.snapshot.clone(),
+        snapshot,
+        entry,
+        manifest_text: new_manifest_text(name, current, None)?,
+        notes: Vec::new(),
+    })
+}
+
+/// `skiman.toml` with the skill's `source.ref` and `ref_kind` derived from
+/// `resolved` (both removed without one); `None` when nothing changes.
+fn new_manifest_text(
+    name: &str,
+    current: &Current,
+    resolved: Option<&ResolvedRef>,
+) -> Result<Option<String>, Failure> {
+    let text = manifest::with_source_ref(
+        &current.manifest_text,
+        name,
+        resolved.map(|r| r.name.as_str()),
+        resolved.map(|r| r.kind.as_str()),
+    )
+    .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
+    Ok((text != current.manifest_text).then_some(text))
 }
 
 /// Saves the skill's `skiman.toml` table and lock entry as
@@ -325,14 +464,22 @@ fn advance_records(
     let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
         .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
     let backup = save_fragments(&context.paths, name, current)?;
-    // #16: write changed `source.ref` and `ref_kind` here, before the lock entry.
-    write_lock(&context.repo, &lock_text)?;
+    if let Some(text) = &target.manifest_text {
+        write_record(&context.repo.manifest_file(), text)?;
+    }
+    write_record(&context.repo.lockfile(), &lock_text)?;
     Ok(backup)
 }
 
-fn write_lock(repo: &SkillRepo, text: &str) -> Result<(), Failure> {
-    let path = repo.lockfile();
-    write_atomic(&path, text.as_bytes())
+/// The skill's new `skiman.toml` (when its `source.ref` or `ref_kind`
+/// changes) and `skiman.lock` texts.
+struct Records<'a> {
+    manifest: Option<&'a str>,
+    lock: &'a str,
+}
+
+fn write_record(path: &Path, text: &str) -> Result<(), Failure> {
+    write_atomic(path, text.as_bytes())
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))
 }
 
@@ -456,7 +603,7 @@ fn validate(
     name: &str,
     merged: &Snapshot,
     snapshot: &Snapshot,
-    lock_text: &str,
+    records: &Records,
     changes: &[(Change, String)],
 ) -> Result<(), Failure> {
     let skill = format!("skills/{name}");
@@ -472,7 +619,10 @@ fn validate(
             files.push((path, file.content.clone()));
         }
     }
-    files.push((rules::LOCKFILE.to_owned(), lock_text.as_bytes().to_vec()));
+    files.push((rules::LOCKFILE.to_owned(), records.lock.as_bytes().to_vec()));
+    if let Some(text) = records.manifest {
+        files.push((rules::MANIFEST.to_owned(), text.as_bytes().to_vec()));
+    }
     let working_tree = WorkingTree::new(repo.root());
     let candidate = Overlay::new(&working_tree, files)
         .with_executable(executable)
@@ -496,15 +646,16 @@ fn validate(
 /// Swaps the staged merge result and snapshot in (spec Merge semantics):
 /// re-hash `skills/<name>`, save the fragments, re-hash again, rename the
 /// current folders to `tmp/<timestamp>/old/`, rename the new ones into
-/// place, write the lock entry (always the last write for the skill), then
-/// move the old folders into the same backup. Returns the backup folder.
+/// place, write the changed `source.ref` and `ref_kind`, write the lock
+/// entry (always the last write for the skill), then move the old folders
+/// into the same backup. Returns the backup folder.
 fn swap(
     context: &Context,
     work: &Workspace,
     name: &str,
     current: &Current,
     start_hash: &str,
-    lock_text: &str,
+    records: &Records,
 ) -> Result<PathBuf, Failure> {
     let repo = &context.repo;
     let skill_dir = repo.skill_dir(name);
@@ -547,8 +698,13 @@ fn swap(
         staging::rename_into_place(from, to).map_err(|e| failed(e, &completed))?;
         completed.push(format!("renamed {} to {}", from.display(), to.display()));
     }
-    // #16: write changed `source.ref` and `ref_kind` here, before the lock entry.
-    write_lock(repo, lock_text).map_err(|e| failed(e, &completed))?;
+    if let Some(text) = records.manifest {
+        write_record(&repo.manifest_file(), text).map_err(|e| failed(e, &completed))?;
+        completed.push(format!(
+            "wrote the new `source.ref` and `ref_kind` of {name} to skiman.toml"
+        ));
+    }
+    write_record(&repo.lockfile(), records.lock).map_err(|e| failed(e, &completed))?;
 
     for (old, rel) in [
         (&work.old_skill, format!("repo/skills/{name}")),

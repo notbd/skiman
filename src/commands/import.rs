@@ -2,15 +2,24 @@
 //! import folder (spec Import, ADR 0001), and `skiman import --guide`, the
 //! guide an agent follows to prepare one (read-only).
 //!
-//! Order: no TTY and no `--yes` -> exit 2 -> config -> unfinished record ->
-//! the skill repo holds no skills, snapshots or lock entries -> phase 1 on
-//! the folder (layout, path safety, every rule except Consistency) -> fetch
-//! every declared source -> phase 2 on the complete result (Consistency,
-//! secrets, everything) -> takeover plan -> preview -> confirm -> repo lock,
-//! checks again -> tmp leftovers -> import record and temporary area ->
+//! Order: no TTY and no `--yes` -> exit 2 -> config -> unfinished record
+//! (of this folder: resume, see below; of another: refuse) -> the skill repo
+//! holds no skills, snapshots or lock entries -> phase 1 on the folder
+//! (layout, path safety, every rule except Consistency) -> fetch every
+//! declared source -> phase 2 on the complete result (Consistency, secrets,
+//! everything) -> takeover plan -> preview -> confirm -> repo lock, checks
+//! again -> tmp leftovers -> import record and temporary area ->
 //! `upstream/`, `skiman.lock`, `instructions/shared.md`, `skiman.toml`,
 //! `skills/` (each staged under `.skiman/tmp/` and renamed into place) ->
-//! takeover of locations -> record finished -> sync. Never commits.
+//! takeover of locations -> record finished, area removed -> sync. Never
+//! commits.
+//!
+//! Resume (no preview, no fetch): repo lock -> recorded repo -> folder tree
+//! hash (a difference names the skills or file) -> each repo piece absent,
+//! pre-import or the candidate, nothing unrecorded in `skills/` or
+//! `upstream/` -> locations not yet taken over hold nothing new -> area and
+//! folder content match the record -> tmp leftovers -> the pieces still
+//! absent or pre-import -> the remaining takeovers -> as above.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -44,6 +53,7 @@ use crate::rules::{self, Scope};
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
+use crate::test_hook;
 use crate::tree::{self, Kind, Overlay, Tree, WorkingTree};
 
 pub fn guide() -> Exit {
@@ -70,13 +80,18 @@ fn import(folder: &Path, yes: bool) -> Result<Exit, Failure> {
     }
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
-    refuse_unfinished(&paths)?;
     let folder = folder.canonicalize().map_err(|e| {
         Failure::refused(format!(
             "the import folder {} is not reachable: {e}",
             folder.display()
         ))
     })?;
+    if let Some(record) = unfinished(&paths)? {
+        if record.folder != folder {
+            return Err(another_import(&paths, &record));
+        }
+        return resume(&paths, &repo, &folder);
+    }
     let repo_files = check_repo_is_empty(&repo)?;
     let prompts = if terminal {
         Prompts::Allowed
@@ -108,7 +123,9 @@ fn import(folder: &Path, yes: bool) -> Result<Exit, Failure> {
     }
 
     let lock = RepoLock::wait(&repo)?;
-    refuse_unfinished(&paths)?;
+    if let Some(record) = unfinished(&paths)? {
+        return Err(another_import(&paths, &record));
+    }
     let repo_files_now = check_repo_is_empty(&repo)?;
     if repo_files_now != repo_files {
         return Err(Failure::refused(
@@ -135,44 +152,203 @@ fn import(folder: &Path, yes: bool) -> Result<Exit, Failure> {
         "saved the import record to {}",
         import_record::file(&paths).display()
     );
-    let written = write_repo(&repo, &candidate, &repo_files, &staging, &backup, &paths)
-        .and_then(|()| take_over(&paths, &mut record, &backup));
+    let todo = repo_todo(&repo, &record)?;
+    let pieces = load_pieces(&paths, &record, &candidate.content, todo)?;
+    complete(&paths, &repo, &lock, staging, &mut record, &pieces, &backup)
+}
+
+/// Resumes the unfinished import of `folder` (spec Import, resume): never
+/// fetches; writes from the kept temporary area and the folder every piece
+/// still absent or pre-import, then takes over the remaining locations.
+/// Refuses (exit 1, nothing changed) on any other difference, naming it.
+fn resume(paths: &Paths, repo: &SkillRepo, folder: &Path) -> Result<Exit, Failure> {
+    let lock = RepoLock::wait(repo)?;
+    let mut record = match unfinished(paths)? {
+        Some(record) if record.folder == folder => record,
+        Some(record) => return Err(another_import(paths, &record)),
+        None => {
+            return Err(Failure::refused(
+                "the unfinished import was finished while skiman waited for the skill repo; nothing was changed",
+            ));
+        }
+    };
+    let cannot = |why: String| {
+        Failure::refused(format!(
+            "cannot resume the import of {}: {why}; nothing was changed",
+            folder.display()
+        ))
+    };
+    if record.repo != repo.root() {
+        return Err(cannot(format!(
+            "it was an import into the skill repo {}, but the configured skill repo is {}",
+            record.repo.display(),
+            repo.root().display()
+        )));
+    }
+    refuse_changed_folder(&record)?;
+    let content = Folder::read(folder)?;
+    if content.hash != record.folder_hash {
+        return Err(cannot(
+            "the import folder changed while skiman was reading it".to_owned(),
+        ));
+    }
+    let todo = repo_todo(repo, &record)?;
+    refuse_changed_locations(&record)?;
+    let pieces = load_pieces(paths, &record, &content, todo)?;
+    println!(
+        "resuming the import of {} that stopped part-way (record {})",
+        folder.display(),
+        import_record::file(paths).display()
+    );
+    let staging = Staging::begin(paths, repo, &lock)?;
+    let backup = Backup::existing(record.backup.clone());
+    complete(paths, repo, &lock, staging, &mut record, &pieces, &backup)
+}
+
+/// Writes `pieces`, takes over the locations not yet taken over, marks the
+/// import finished, removes the temporary area and syncs.
+fn complete(
+    paths: &Paths,
+    repo: &SkillRepo,
+    lock: &RepoLock,
+    staging: Staging,
+    record: &mut ImportRecord,
+    pieces: &[(Piece, bool, PieceContent)],
+    backup: &Backup,
+) -> Result<Exit, Failure> {
+    let written =
+        write_repo(repo, pieces, &staging, backup).and_then(|()| take_over(paths, record, backup));
     drop(staging);
     if let Err(failure) = written {
         return Err(Failure {
             exit: failure.exit,
             message: format!(
-                "{}\nthe import stopped part-way: the lines above list what was done; the originals moved so far are in {}; the import record is {}",
+                "{}\nthe import stopped part-way: the lines above list what was done; the originals moved so far are in {}; the import record is {}; run the same command again with the import folder unchanged to finish it",
                 failure.message,
                 backup.dir().display(),
-                import_record::file(&paths).display()
+                import_record::file(paths).display()
             ),
         });
     }
     record.status = Status::Finished;
-    record.save(&paths)?;
-    let _ = std::fs::remove_dir_all(import_record::area(&paths));
-    let exit = sync::run(&paths, &repo, &lock, Output::Normal);
+    record.save(paths)?;
+    let _ = std::fs::remove_dir_all(import_record::area(paths));
+    let exit = sync::run(paths, repo, lock, Output::Normal);
     println!(
         "imported {}; the originals are in {}",
-        folder.display(),
+        record.folder.display(),
         backup.dir().display()
     );
-    println!("the import folder {} can be deleted", folder.display());
+    println!(
+        "the import folder {} can be deleted",
+        record.folder.display()
+    );
     Ok(exit)
 }
 
-/// Refuses (exit 1) while an import that stopped part-way is recorded.
-fn refuse_unfinished(paths: &Paths) -> Result<(), Failure> {
-    match ImportRecord::load(paths)? {
-        Some(record) if record.status == Status::InProgress => Err(Failure::refused(format!(
-            "an import of {} into {} stopped part-way (record {}); this version of skiman cannot resume it",
-            record.folder.display(),
-            record.repo.display(),
-            import_record::file(paths).display()
-        ))),
-        _ => Ok(()),
+/// The recorded import when it is unfinished.
+fn unfinished(paths: &Paths) -> Result<Option<ImportRecord>, Failure> {
+    Ok(ImportRecord::load(paths)?.filter(|record| record.status == Status::InProgress))
+}
+
+/// Refusal (exit 1) while an import of another folder is unfinished.
+fn another_import(paths: &Paths, record: &ImportRecord) -> Failure {
+    Failure::refused(format!(
+        "an import of {} into {} stopped part-way (record {}); finish it first with `skiman import {}`; nothing was changed",
+        record.folder.display(),
+        record.repo.display(),
+        import_record::file(paths).display(),
+        record.folder.display()
+    ))
+}
+
+/// Refuses (exit 1) when the import folder's tree hash differs from the
+/// recorded one, naming the skills or the file that differ.
+fn refuse_changed_folder(record: &ImportRecord) -> Result<(), Failure> {
+    let folder = &record.folder;
+    if Folder::hash(folder)? == record.folder_hash {
+        return Ok(());
     }
+    let mut found = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(folder.join("skills")) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !tree::is_ignored(&name) {
+                found.insert(name, tree::tree_hash_of_dir(&entry.path()).ok());
+            }
+        }
+    }
+    let mut lines = Vec::new();
+    for (name, hashes) in &record.skills {
+        match found.remove(name) {
+            None => lines.push(format!("skills/{name} is gone")),
+            Some(now) if now.as_deref() != Some(hashes.skill.as_str()) => {
+                lines.push(format!("skills/{name} changed"));
+            }
+            Some(_) => {}
+        }
+    }
+    lines.extend(found.keys().map(|name| format!("skills/{name} is new")));
+    let shared = std::fs::read(folder.join(SHARED_BODY)).ok();
+    if shared.as_deref().map(file_hash) != record.candidate.shared_body {
+        lines.push(format!("{SHARED_BODY} changed"));
+    }
+    if lines.is_empty() {
+        lines.push(
+            "skiman.toml, or an entry besides skills/ and instructions/shared.md, changed"
+                .to_owned(),
+        );
+    }
+    let lines: Vec<String> = lines.iter().map(|l| format!("  {l}")).collect();
+    Err(Failure::refused(format!(
+        "cannot resume the import of {}: the import folder changed since the import started; put it back as it was, then run the import again; nothing was changed:\n{}",
+        folder.display(),
+        lines.join("\n")
+    )))
+}
+
+/// Refuses (exit 1) when a location not yet taken over holds something the
+/// takeover would overwrite: an original whose backup already exists, or a
+/// new entry where the original already went to the backup.
+fn refuse_changed_locations(record: &ImportRecord) -> Result<(), Failure> {
+    let mut lines = Vec::new();
+    for location in &record.locations {
+        let path = &location.path;
+        let present = std::fs::symlink_metadata(path).is_ok();
+        match location.state {
+            LocationState::TakenOver => {}
+            LocationState::Planned => {
+                let dest = record.backup.join(&location.backup);
+                if present && std::fs::symlink_metadata(&dest).is_ok() {
+                    lines.push(format!(
+                        "{} is still there, and its backup {} already exists",
+                        path.display(),
+                        dest.display()
+                    ));
+                }
+            }
+            LocationState::BackedUp => {
+                let linked =
+                    location.link.is_some() && std::fs::read_link(path).ok() == location.link;
+                if present && !linked {
+                    lines.push(format!(
+                        "{} holds something new; its original is already in the backup {}",
+                        path.display(),
+                        record.backup.join(&location.backup).display()
+                    ));
+                }
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let lines: Vec<String> = lines.iter().map(|l| format!("  {l}")).collect();
+    Err(Failure::refused(format!(
+        "cannot resume the import of {}: move these away by hand, then run the import again; nothing was changed:\n{}",
+        record.folder.display(),
+        lines.join("\n")
+    )))
 }
 
 /// The skill repo's files an import replaces, as they are before it.
@@ -1011,7 +1187,8 @@ fn write_file(path: &Path, executable: bool, content: &[u8]) -> Result<(), Failu
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(io)
 }
 
-/// Writes the temporary area: `upstream/<name>/` and `skiman.lock` as built.
+/// Writes the temporary area: `upstream/<name>/`, `skiman.lock` and
+/// `skiman.toml` as built, so a resumed import needs no fetch.
 fn write_area(paths: &Paths, candidate: &Candidate) -> Result<(), Failure> {
     let area = import_record::area(paths);
     match std::fs::remove_dir_all(&area) {
@@ -1034,70 +1211,245 @@ fn write_area(paths: &Paths, candidate: &Candidate) -> Result<(), Failure> {
         &area.join(rules::LOCKFILE),
         false,
         candidate.lock.as_bytes(),
+    )?;
+    write_file(
+        &area.join(rules::MANIFEST),
+        false,
+        candidate.manifest.as_bytes(),
     )
 }
 
-/// Writes the skill repo content in the spec's order, each piece staged
-/// under `.skiman/tmp/` and renamed into place; an existing file is moved
+/// One piece of skill repo content the import writes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Piece {
+    Upstream(String),
+    Lock,
+    SharedBody,
+    Manifest,
+    Skill(String),
+}
+
+impl Piece {
+    /// Every piece of `record`, in the order the import writes them.
+    fn all(record: &ImportRecord) -> Vec<Piece> {
+        let mut pieces: Vec<Piece> = record
+            .skills
+            .iter()
+            .filter(|(_, hashes)| hashes.upstream.is_some())
+            .map(|(name, _)| Piece::Upstream(name.clone()))
+            .collect();
+        pieces.extend([Piece::Lock, Piece::SharedBody, Piece::Manifest]);
+        pieces.extend(record.skills.keys().map(|name| Piece::Skill(name.clone())));
+        pieces
+    }
+
+    /// The path relative to the skill repo.
+    fn rel(&self) -> String {
+        match self {
+            Piece::Upstream(name) => format!("upstream/{name}"),
+            Piece::Lock => rules::LOCKFILE.to_owned(),
+            Piece::SharedBody => SHARED_BODY.to_owned(),
+            Piece::Manifest => rules::MANIFEST.to_owned(),
+            Piece::Skill(name) => format!("skills/{name}"),
+        }
+    }
+
+    /// The recorded hashes: before the import (`None`: absent) and as written.
+    fn hashes<'a>(&self, record: &'a ImportRecord) -> (Option<&'a str>, Option<&'a str>) {
+        let skill = |name: &str| record.skills.get(name);
+        match self {
+            Piece::Upstream(name) => (None, skill(name).and_then(|h| h.upstream.as_deref())),
+            Piece::Skill(name) => (None, skill(name).map(|h| h.skill.as_str())),
+            Piece::Lock => (
+                record.pre_import.lock.as_deref(),
+                record.candidate.lock.as_deref(),
+            ),
+            Piece::SharedBody => (
+                record.pre_import.shared_body.as_deref(),
+                record.candidate.shared_body.as_deref(),
+            ),
+            Piece::Manifest => (
+                record.pre_import.manifest.as_deref(),
+                record.candidate.manifest.as_deref(),
+            ),
+        }
+    }
+}
+
+/// What a piece holds as written.
+enum PieceContent {
+    Folder(Vec<SnapshotFile>),
+    File(Vec<u8>),
+}
+
+/// The pieces still to write, each with whether its pre-import original is
+/// in place (and goes to the backup first). A piece equal to the recorded
+/// candidate is done. Refuses (exit 1, nothing changed) when a piece is
+/// neither absent, pre-import nor the candidate, when its backup destination
+/// is taken, or when `skills/` or `upstream/` holds an entry the import does
+/// not write, naming each.
+fn repo_todo(repo: &SkillRepo, record: &ImportRecord) -> Result<Vec<(Piece, bool)>, Failure> {
+    let mut todo = Vec::new();
+    let mut lines = Vec::new();
+    for piece in Piece::all(record) {
+        let rel = piece.rel();
+        let path = repo.root().join(&rel);
+        let (pre, candidate) = piece.hashes(record);
+        let folder = matches!(piece, Piece::Upstream(_) | Piece::Skill(_));
+        let io = |e: std::io::Error| {
+            Failure::operational(format!("cannot read {}: {e}", path.display()))
+        };
+        let meta = match std::fs::symlink_metadata(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                todo.push((piece, false));
+                continue;
+            }
+            Err(e) => return Err(io(e)),
+            Ok(meta) => meta,
+        };
+        let now = if folder && meta.is_dir() {
+            Some(tree::tree_hash_of_dir(&path).map_err(io)?)
+        } else if !folder && meta.is_file() {
+            Some(file_hash(&std::fs::read(&path).map_err(io)?))
+        } else {
+            None
+        };
+        match now.as_deref() {
+            None => lines.push(format!(
+                "{rel} is not a {}",
+                if folder { "folder" } else { "regular file" }
+            )),
+            Some(now) if Some(now) == candidate => {}
+            Some(now) if Some(now) == pre => {
+                let dest = record.backup.join("repo").join(&rel);
+                if std::fs::symlink_metadata(&dest).is_ok() {
+                    lines.push(format!(
+                        "{rel} is as before the import, but its backup {} already exists",
+                        dest.display()
+                    ));
+                } else {
+                    todo.push((piece, true));
+                }
+            }
+            Some(_) if folder => lines.push(format!("{rel} differs from what the import wrote")),
+            Some(_) => lines.push(format!(
+                "{rel} differs from both its content before the import and what the import writes"
+            )),
+        }
+    }
+    for root in ["skills", "upstream"] {
+        let dir = repo.root().join(root);
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| !name.starts_with('.'))
+            .filter(|name| {
+                record
+                    .skills
+                    .get(name)
+                    .is_none_or(|h| root == "upstream" && h.upstream.is_none())
+            })
+            .collect();
+        names.sort();
+        lines.extend(
+            names
+                .iter()
+                .map(|name| format!("{root}/{name} was not written by this import")),
+        );
+    }
+    if lines.is_empty() {
+        return Ok(todo);
+    }
+    let lines: Vec<String> = lines.iter().map(|l| format!("  {l}")).collect();
+    Err(Failure::refused(format!(
+        "cannot resume the import of {}: the skill repo {} changed since the import stopped; undo these changes, then run the import again; nothing was changed:\n{}",
+        record.folder.display(),
+        repo.root().display(),
+        lines.join("\n")
+    )))
+}
+
+/// Reads what each piece in `todo` holds: `upstream/`, `skiman.lock` and
+/// `skiman.toml` from the temporary area, the rest from the folder's
+/// content. Refuses (exit 1) when one differs from its recorded hash.
+fn load_pieces(
+    paths: &Paths,
+    record: &ImportRecord,
+    content: &Folder,
+    todo: Vec<(Piece, bool)>,
+) -> Result<Vec<(Piece, bool, PieceContent)>, Failure> {
+    let area = import_record::area(paths);
+    let mut out = Vec::new();
+    for (piece, replaces) in todo {
+        let (from, read) = match &piece {
+            Piece::Upstream(name) => {
+                let snapshot = Snapshot::from_folder(&area.join("upstream").join(name))?;
+                (
+                    &area,
+                    (snapshot.tree_hash(), PieceContent::Folder(snapshot.files)),
+                )
+            }
+            Piece::Lock | Piece::Manifest => {
+                let bytes = std::fs::read(area.join(piece.rel())).unwrap_or_default();
+                (&area, (file_hash(&bytes), PieceContent::File(bytes)))
+            }
+            Piece::SharedBody => {
+                let bytes = content.shared_body.clone();
+                (
+                    &content.root,
+                    (file_hash(&bytes), PieceContent::File(bytes)),
+                )
+            }
+            Piece::Skill(name) => {
+                let files = content
+                    .skills
+                    .get(name)
+                    .map(|s| s.files.clone())
+                    .unwrap_or_default();
+                let hash = Snapshot {
+                    files: files.clone(),
+                    ..Snapshot::default()
+                }
+                .tree_hash();
+                (&content.root, (hash, PieceContent::Folder(files)))
+            }
+        };
+        let (hash, written) = read;
+        if Some(hash.as_str()) != piece.hashes(record).1 {
+            return Err(Failure::refused(format!(
+                "cannot resume the import of {}: {} no longer holds {} as the import recorded it; nothing was changed",
+                record.folder.display(),
+                from.display(),
+                piece.rel()
+            )));
+        }
+        out.push((piece, replaces, written));
+    }
+    Ok(out)
+}
+
+/// Writes `pieces` into the skill repo in order, each staged under
+/// `.skiman/tmp/` and renamed into place; an original in place is moved
 /// to the backup first.
 fn write_repo(
     repo: &SkillRepo,
-    candidate: &Candidate,
-    repo_files: &RepoFilesNow,
+    pieces: &[(Piece, bool, PieceContent)],
     staging: &Staging,
     backup: &Backup,
-    paths: &Paths,
 ) -> Result<(), Failure> {
-    let area = import_record::area(paths);
     let stage = staging.dir();
-    for third in &candidate.thirds {
-        let snapshot = Snapshot::from_folder(&area.join("upstream").join(&third.name))?;
-        write_files(&stage.join("upstream").join(&third.name), &snapshot.files)?;
+    for (piece, _, content) in pieces {
+        let path = stage.join(piece.rel());
+        match content {
+            PieceContent::Folder(files) => write_files(&path, files)?,
+            PieceContent::File(bytes) => write_file(&path, false, bytes)?,
+        }
     }
-    let lock = std::fs::read(area.join(rules::LOCKFILE))
-        .map_err(|e| Failure::operational(format!("cannot read {}: {e}", area.display())))?;
-    write_file(&stage.join(rules::LOCKFILE), false, &lock)?;
-    write_file(
-        &stage.join(SHARED_BODY),
-        false,
-        &candidate.content.shared_body,
-    )?;
-    write_file(
-        &stage.join(rules::MANIFEST),
-        false,
-        candidate.manifest.as_bytes(),
-    )?;
-    for (name, skill) in &candidate.content.skills {
-        write_files(&stage.join("skills").join(name), &skill.files)?;
-    }
-
-    for third in &candidate.thirds {
-        let rel = format!("upstream/{}", third.name);
-        put_in_place(repo, stage, &rel, false, backup)?;
-    }
-    put_in_place(
-        repo,
-        stage,
-        rules::LOCKFILE,
-        repo_files.lock.is_some(),
-        backup,
-    )?;
-    put_in_place(
-        repo,
-        stage,
-        SHARED_BODY,
-        repo_files.shared_body.is_some(),
-        backup,
-    )?;
-    put_in_place(
-        repo,
-        stage,
-        rules::MANIFEST,
-        repo_files.manifest.is_some(),
-        backup,
-    )?;
-    for name in candidate.content.skills.keys() {
-        put_in_place(repo, stage, &format!("skills/{name}"), false, backup)?;
+    for (piece, replaces, _) in pieces {
+        put_in_place(repo, stage, &piece.rel(), *replaces, backup)?;
     }
     Ok(())
 }
@@ -1123,27 +1475,40 @@ fn put_in_place(
             })?;
         println!("moved {} to {}", target.display(), dest.display());
     }
+    test_hook::at("import", &format!("rename:{rel}"));
     staging::rename_into_place(&stage.join(rel), &target)?;
     println!("created {}", target.display());
     Ok(())
 }
 
-/// Moves each original to the backup, then creates the owned link in its
-/// place, saving the record after each step.
+/// Takes over each location not yet taken over: moves the original to the
+/// backup (unless it is already there or gone), then creates the owned link
+/// in its place, saving the record after each step.
 fn take_over(paths: &Paths, record: &mut ImportRecord, backup: &Backup) -> Result<(), Failure> {
     for i in 0..record.locations.len() {
         let location = record.locations[i].clone();
-        let dest = backup
-            .move_in(&location.path, &location.backup)
-            .map_err(|e| {
-                Failure::operational(format!(
-                    "cannot move {} to the backup: {e}",
-                    location.path.display()
-                ))
-            })?;
-        println!("moved {} to {}", location.path.display(), dest.display());
-        record.locations[i].state = LocationState::BackedUp;
-        record.save(paths)?;
+        if location.state == LocationState::TakenOver {
+            continue;
+        }
+        let point = location.backup.display();
+        if location.state == LocationState::Planned {
+            test_hook::at("import", &format!("back-up:{point}"));
+            if std::fs::symlink_metadata(&location.path).is_ok() {
+                let dest = backup
+                    .move_in(&location.path, &location.backup)
+                    .map_err(|e| {
+                        Failure::operational(format!(
+                            "cannot move {} to the backup: {e}",
+                            location.path.display()
+                        ))
+                    })?;
+                println!("moved {} to {}", location.path.display(), dest.display());
+            }
+            test_hook::at("import", &format!("moved:{point}"));
+            record.locations[i].state = LocationState::BackedUp;
+            record.save(paths)?;
+        }
+        test_hook::at("import", &format!("link:{point}"));
         if let Some(target) = &location.link {
             fsutil::symlink_atomic(target, &location.path).map_err(|e| {
                 Failure::operational(format!("cannot link {}: {e}", location.path.display()))

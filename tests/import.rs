@@ -596,7 +596,7 @@ fn a_folder_without_tools_keeps_the_repo_tools_and_one_with_tools_uses_its_own()
 }
 
 #[test]
-fn a_failure_during_takeover_stops_the_import_prints_what_was_done_and_keeps_the_record() {
+fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_command_resumes_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let claude = sandbox.tool_dir(Tool::ClaudeCode);
@@ -668,8 +668,40 @@ fn a_failure_during_takeover_stops_the_import_prints_what_was_done_and_keeps_the
             .is_file()
     );
 
-    // Until resuming exists, a second run refuses and changes nothing.
-    assert_refused(&sandbox, &folder, 1, &["stopped part-way"]);
+    assert!(
+        stderr.contains("run the same command again with the import folder unchanged"),
+        "{stderr}"
+    );
+
+    // With the tool directory writable again, the same command finishes it.
+    let output = sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("resuming the import of"), "{stdout}");
+    assert!(
+        !stdout.contains(&format!("created {}", repo.display())),
+        "{stdout}"
+    );
+    assert_eq!(
+        read(backup.join("claude-code/notes/SKILL.md")),
+        skill_md("notes")
+    );
+    support::assert_symlink(
+        claude.join("notes"),
+        repo.join("skills/notes"),
+        repo.join("skills/notes"),
+    );
+    let record: toml_edit::DocumentMut = read(&record_file).parse().unwrap();
+    assert_eq!(record["status"].as_str(), Some("finished"));
+    assert!(!sandbox.state_home().join("skiman/import/area").exists());
+    assert_eq!(tree(&folder), folder_before);
 }
 
 #[test]

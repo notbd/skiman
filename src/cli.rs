@@ -100,8 +100,14 @@ pub enum Command {
     },
     /// Import a prepared folder
     Import {
+        /// The import folder: skills/, instructions/shared.md and skiman.toml
+        #[arg(required_unless_present = "guide", conflicts_with = "guide")]
+        folder: Option<PathBuf>,
+        /// Import without asking for confirmation
+        #[arg(long, conflicts_with = "guide")]
+        yes: bool,
         /// Print the instructions an agent follows to prepare an import folder
-        #[arg(long, required = true)]
+        #[arg(long)]
         guide: bool,
     },
     /// Make every tool directory match the skill repo
@@ -201,7 +207,10 @@ where
         Command::Remove { name, yes } => commands::remove::run(&name, yes),
         Command::Mv { old, new } => commands::mv::run(&old, &new),
         Command::Adopt { name, from, yes } => commands::adopt::run(&name, &from, yes),
-        Command::Import { guide: _ } => commands::import::guide(),
+        Command::Import { folder, yes, .. } => match folder {
+            Some(folder) => commands::import::run(&folder, yes),
+            None => commands::import::guide(),
+        },
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),
         Command::List => commands::list::run(),

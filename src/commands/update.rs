@@ -17,7 +17,8 @@
 //!    [`validate`] the candidate output, stage it in `tmp/<timestamp>/new/`,
 //!    then [`swap`]: re-hash, fragments, re-hash, renames through
 //!    `tmp/<timestamp>/old/`, lock entry (last write), old folders to the
-//!    backup (#17: failure output and recovery).
+//!    backup; a failure before the lock entry prints the recovery
+//!    ([`stopped`]).
 
 use std::collections::BTreeSet;
 use std::os::unix::fs::PermissionsExt;
@@ -40,6 +41,7 @@ use crate::rules::{self, Scope};
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
+use crate::test_hook;
 use crate::tree::{Overlay, WorkingTree, tree_hash_of_dir};
 
 pub fn run(names: Vec<String>) -> Exit {
@@ -252,7 +254,7 @@ fn update_skill(context: &mut Context, name: &str) -> Result<(), Failure> {
         &changes,
     )?;
     work.stage(&merged, &target.snapshot)?;
-    let backup = swap(
+    let (backup, old_folders_saved) = swap(
         context,
         &work,
         name,
@@ -265,10 +267,12 @@ fn update_skill(context: &mut Context, name: &str) -> Result<(), Failure> {
     for (change, path) in &changes {
         println!("  {} {path}", change.verb());
     }
-    println!(
-        "saved the old folders and records of {name} to {}",
-        backup.display()
-    );
+    let saved = if old_folders_saved {
+        "the old folders and records"
+    } else {
+        "the records"
+    };
+    println!("saved {saved} of {name} to {}", backup.display());
     Ok(())
 }
 
@@ -326,8 +330,86 @@ fn advance_records(
         .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
     let backup = save_fragments(&context.paths, name, current)?;
     // #16: write changed `source.ref` and `ref_kind` here, before the lock entry.
-    write_lock(&context.repo, &lock_text)?;
+    test_hook::at(name, "before-lock");
+    write_lock(&context.repo, &lock_text)
+        .map_err(|e| stopped(e, &[], &context.repo, name, &backup, &[]))?;
     Ok(backup)
+}
+
+/// A failure before the lock entry was written (spec Merge semantics,
+/// clarification 1): `failure` with the completed steps, the backup folder
+/// and the recovery. `swapped_out` holds each folder the swap already
+/// renamed into `tmp/<timestamp>/old/` (path in the skill repo, old folder).
+/// Recovery moves aside what the completed steps put in place, puts back the
+/// old folders, pastes the two fragments back and runs `skiman sync`.
+fn stopped(
+    failure: Failure,
+    completed: &[String],
+    repo: &SkillRepo,
+    name: &str,
+    backup: &Backup,
+    swapped_out: &[(String, &Path)],
+) -> Failure {
+    let mut message = failure.message;
+    for step in completed {
+        message.push_str(&format!("\n  done: {step}"));
+    }
+    let dir = backup.dir();
+    message.push_str(&format!(
+        "\n  backup folder: {}\n  to undo the update of {name}, in this order:",
+        dir.display()
+    ));
+    let mut steps = Vec::new();
+    for (place, _) in swapped_out.iter().rev() {
+        steps.push(format!(
+            "move {} (if it exists) to {}",
+            repo.root().join(place).display(),
+            dir.join("aside").join(place).display()
+        ));
+    }
+    let first_put_back = steps.len() + 1;
+    for (place, old) in swapped_out {
+        steps.push(format!(
+            "move {} to {}",
+            old.display(),
+            repo.root().join(place).display()
+        ));
+    }
+    let last_put_back = steps.len();
+    steps.push(format!(
+        "in {}, replace the [skills.{name}] table and its subtables with {}",
+        rules::MANIFEST,
+        dir.join(format!("repo/{}.{name}.fragment", rules::MANIFEST))
+            .display()
+    ));
+    steps.push(format!(
+        "in {}, replace the [skills.{name}] entry with {}",
+        rules::LOCKFILE,
+        dir.join(format!("repo/{}.{name}.fragment", rules::LOCKFILE))
+            .display()
+    ));
+    steps.push("run `skiman sync`".to_owned());
+    for (i, step) in steps.iter().enumerate() {
+        message.push_str(&format!("\n  {}. {step}", i + 1));
+    }
+    if let Some((_, old)) = swapped_out.first() {
+        // `tmp/<timestamp>/old/`, as a later command keeps it below `<path>/`.
+        let old_dir = old
+            .parent()
+            .and_then(Path::parent)
+            .and_then(|d| d.strip_prefix(repo.tmp_dir()).ok())
+            .expect("old folders are in tmp/<timestamp>/old/");
+        let which = if first_put_back == last_put_back {
+            format!("step {first_put_back}")
+        } else {
+            format!("steps {first_put_back} and {last_put_back}")
+        };
+        message.push_str(&format!(
+            "\n  if a later command moved the tmp leftovers to a backup (it printed `moved tmp leftovers to <path>`), take the folders of {which} from <path>/{}/ instead",
+            old_dir.display()
+        ));
+    }
+    Failure::operational(message)
 }
 
 fn write_lock(repo: &SkillRepo, text: &str) -> Result<(), Failure> {
@@ -497,7 +579,8 @@ fn validate(
 /// re-hash `skills/<name>`, save the fragments, re-hash again, rename the
 /// current folders to `tmp/<timestamp>/old/`, rename the new ones into
 /// place, write the lock entry (always the last write for the skill), then
-/// move the old folders into the same backup. Returns the backup folder.
+/// move the old folders into the same backup. Returns the backup folder and
+/// whether both old folders reached it (else they are tmp leftovers).
 fn swap(
     context: &Context,
     work: &Workspace,
@@ -505,7 +588,7 @@ fn swap(
     current: &Current,
     start_hash: &str,
     lock_text: &str,
-) -> Result<PathBuf, Failure> {
+) -> Result<(PathBuf, bool), Failure> {
     let repo = &context.repo;
     let skill_dir = repo.skill_dir(name);
     let upstream_dir = repo.upstream_dir(name);
@@ -523,11 +606,12 @@ fn swap(
             "skills/{name} changed during the update, so the update of {name} stopped and nothing was swapped{saved}; your newer edits are kept"
         )))
     };
+    test_hook::at(name, "before-rehash-1");
     unchanged(None)?;
     let backup = save_fragments(&context.paths, name, current)?;
+    test_hook::at(name, "before-rehash-2");
     unchanged(Some(&backup))?;
 
-    // #17: on failure, print the completed steps and the recovery.
     let mut completed: Vec<String> = Vec::new();
     let steps: [(&Path, &Path); 4] = [
         (&skill_dir, &work.old_skill),
@@ -536,20 +620,24 @@ fn swap(
         (&work.new_skill, &skill_dir),
     ];
     let failed = |e: Failure, completed: &[String]| {
-        let mut message = e.message;
-        for step in completed {
-            message.push_str(&format!("\n  done: {step}"));
-        }
-        message.push_str(&format!("\n  backup folder: {}", backup.dir().display()));
-        Failure::operational(message)
+        let swapped_out = [
+            (format!("skills/{name}"), work.old_skill.as_path()),
+            (format!("upstream/{name}"), work.old_upstream.as_path()),
+        ];
+        let swapped_out = &swapped_out[..completed.len().min(2)];
+        stopped(e, completed, repo, name, &backup, swapped_out)
     };
-    for (from, to) in steps {
+    for (i, (from, to)) in steps.into_iter().enumerate() {
+        test_hook::at(name, &format!("before-rename-{}", i + 1));
         staging::rename_into_place(from, to).map_err(|e| failed(e, &completed))?;
         completed.push(format!("renamed {} to {}", from.display(), to.display()));
     }
     // #16: write changed `source.ref` and `ref_kind` here, before the lock entry.
+    test_hook::at(name, "before-lock");
     write_lock(repo, lock_text).map_err(|e| failed(e, &completed))?;
 
+    test_hook::at(name, "before-backup-move");
+    let mut all_saved = true;
     for (old, rel) in [
         (&work.old_skill, format!("repo/skills/{name}")),
         (&work.old_upstream, format!("repo/upstream/{name}")),
@@ -559,7 +647,8 @@ fn swap(
                 "warning: skill {name}: cannot move {} to the backup ({e}); it stays in .skiman/tmp/ as a tmp leftover",
                 old.display()
             );
+            all_saved = false;
         }
     }
-    Ok(backup.dir().to_path_buf())
+    Ok((backup.dir().to_path_buf(), all_saved))
 }

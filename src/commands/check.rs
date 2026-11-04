@@ -2,6 +2,9 @@
 //! of the skill repo, or in its staged snapshot, on stdout, and warnings on
 //! stderr. Read-only; takes no lock.
 
+use std::path::PathBuf;
+use std::process::Command;
+
 use crate::Exit;
 use crate::failure::{Failure, finish};
 use crate::paths::Paths;
@@ -17,6 +20,14 @@ pub fn run(staged: bool) -> Exit {
 fn check(staged: bool) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
+    if staged && let Some(other) = hook_of_another_repo(&repo) {
+        println!(
+            "skiman: {} is not the skill repo ({}), so its skiman pre-commit hook checks nothing",
+            other.display(),
+            repo.root().display()
+        );
+        return Ok(Exit::Success);
+    }
     let tree: Box<dyn Tree> = if staged {
         Box::new(StagedTree::read(repo.root()).map_err(|e| {
             Failure::operational(format!(
@@ -42,4 +53,25 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         eprintln!("warning: {warning}");
     }
     Ok(rules::exit_of(&report.violations))
+}
+
+/// Run from a git hook (`git commit` sets `GIT_INDEX_FILE`) of a repository
+/// that is not the skill repo, e.g. a previous skill repo that still has
+/// skiman's hooks: that repository's top level.
+fn hook_of_another_repo(repo: &SkillRepo) -> Option<PathBuf> {
+    std::env::var_os("GIT_INDEX_FILE")?;
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let top = PathBuf::from(
+        String::from_utf8(output.stdout)
+            .ok()?
+            .trim_end_matches('\n'),
+    );
+    let top = top.canonicalize().unwrap_or(top);
+    (top != repo.root()).then_some(top)
 }

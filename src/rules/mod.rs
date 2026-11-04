@@ -163,6 +163,7 @@ pub fn exit_of(violations: &[Violation]) -> Exit {
 
 /// The rules [`Scope::content_only_skills`] applies besides the secret rule.
 const CONTENT_RULES: &[&str] = &[
+    rule::SKILL_MD,
     rule::SYMLINK,
     rule::FILE_SIZE,
     rule::FILE_COUNT,
@@ -182,7 +183,8 @@ pub struct Scope {
     pub skills: BTreeSet<String>,
     /// Skill folders written as a whole whose files are otherwise unchanged
     /// (`update`: the files the merge changed go in `files`): only the
-    /// secret, symlink and size rules on every file and on the folder.
+    /// `SKILL.md` present, secret, symlink and size rules on every file and
+    /// on the folder.
     pub content_only_skills: BTreeSet<String>,
     /// Upstream snapshots `upstream/<name>` written as a whole: the secret
     /// rule on every file in them.

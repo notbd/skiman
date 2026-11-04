@@ -538,6 +538,49 @@ fn another_rule_violation_in_a_merged_file_refuses_a_conflicting_update() {
     assert_eq!(skill_repo_tree(&sandbox), before);
 }
 
+#[test]
+fn an_update_that_leaves_no_skill_md_is_refused() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    up.remove("SKILL.md");
+    up.commit("v2");
+    let before = skill_repo_tree(&sandbox);
+    let links = || {
+        let mut all = tree(sandbox.home());
+        all.retain(|path, _| path.ends_with("skills/pdf"));
+        all
+    };
+    let links_before = links();
+    assert_eq!(links_before.len(), 3);
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(
+            "error: skill pdf: refusing to write content that breaks the rules:\n\
+             \x20 skills/pdf: skill-md: no SKILL.md at the top of the skill folder\n",
+        );
+    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(links(), links_before);
+
+    // A SKILL.md I changed and upstream deleted stays, with a deletion record.
+    let mine = skill_md("Fill PDF forms", "# my pdf\n");
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    write(skill(&sandbox).join("SKILL.md"), &mine);
+    up.remove("SKILL.md");
+    up.commit("v2");
+    sandbox.skiman().args(["update", "pdf"]).assert().code(3);
+    assert_eq!(read(skill(&sandbox).join("SKILL.md")), mine.as_bytes());
+    assert!(
+        skill(&sandbox)
+            .join("SKILL.md.skiman-upstream-deleted")
+            .exists()
+    );
+}
+
 /// What the new upstream gains, and a word its refusal names.
 type UpstreamChange<'a> = (&'a str, &'a dyn Fn(&Upstream));
 

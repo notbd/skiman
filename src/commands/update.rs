@@ -774,12 +774,13 @@ fn changes(ours: &Snapshot, merged: &Snapshot) -> Vec<(Change, String)> {
 
 /// The checks on the candidate output before anything is staged: path
 /// safety on the merged skill folder; the files the merge created or changed
-/// get every rule; every file of the merged skill and of the new snapshot
-/// gets the secret, symlink and size rules; the lock entry and Consistency
-/// for the skill. Violations elsewhere, including the other rules on files
-/// the merge did not change, are warnings. The conflict representation is
-/// excused: unresolved-conflict violations in the skill, and the frontmatter
-/// rules on a `SKILL.md` whose markers start inside its frontmatter.
+/// get every rule; the merged skill must hold a `SKILL.md`; every file of
+/// the merged skill and of the new snapshot gets the secret, symlink and
+/// size rules; the lock entry and Consistency for the skill. Violations
+/// elsewhere, including the other rules on files the merge did not change,
+/// are warnings. The conflict representation is excused: unresolved-conflict
+/// violations in the skill, and the frontmatter rules on a `SKILL.md` whose
+/// markers start inside its frontmatter.
 fn validate(
     repo: &SkillRepo,
     name: &str,

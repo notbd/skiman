@@ -725,3 +725,19 @@ fn the_default_import_folder_inside_the_skill_repo_works_and_is_left_in_place() 
     assert_eq!(read(repo.join("skills/notes/SKILL.md")), skill_md("notes"));
     sandbox.skiman().arg("check").assert().code(0);
 }
+
+/// Spec Import: the import folder defaults to `<skill repo>/.skiman/import/`.
+#[test]
+fn import_without_a_folder_uses_the_default_import_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.skill_repo();
+    let folder = repo.join(".skiman/import");
+    write(folder.join("skills/notes/SKILL.md"), skill_md("notes"));
+    write(folder.join("instructions/shared.md"), "Shared.\n");
+    write(folder.join("skiman.toml"), TOOLS);
+
+    sandbox.skiman().args(["import", "--yes"]).assert().code(0);
+    assert_eq!(read(repo.join("skills/notes/SKILL.md")), skill_md("notes"));
+    assert_eq!(read(repo.join("instructions/shared.md")), "Shared.\n");
+}

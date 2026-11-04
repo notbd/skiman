@@ -66,13 +66,14 @@ pub fn guide() -> Exit {
     )
 }
 
-pub fn run(folder: &Path, yes: bool) -> Exit {
+/// `folder` defaults to `<skill repo>/.skiman/import/`.
+pub fn run(folder: Option<&Path>, yes: bool) -> Exit {
     finish(import(folder, yes))
 }
 
 const SHARED_BODY: &str = "instructions/shared.md";
 
-fn import(folder: &Path, yes: bool) -> Result<Exit, Failure> {
+fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let terminal = has_terminal();
     if !terminal && !yes {
         return Err(Failure::usage(
@@ -81,6 +82,7 @@ fn import(folder: &Path, yes: bool) -> Result<Exit, Failure> {
     }
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
+    let folder = folder.map_or_else(|| repo.default_import_dir(), Path::to_path_buf);
     let folder = folder.canonicalize().map_err(|e| {
         Failure::refused(format!(
             "the import folder {} is not reachable: {e}",

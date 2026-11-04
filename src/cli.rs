@@ -100,8 +100,8 @@ pub enum Command {
     },
     /// Import a prepared folder
     Import {
-        /// The import folder: skills/, instructions/shared.md and skiman.toml
-        #[arg(required_unless_present = "guide", conflicts_with = "guide")]
+        /// The import folder: skills/, instructions/shared.md and skiman.toml [default: <skill repo>/.skiman/import/]
+        #[arg(conflicts_with = "guide")]
         folder: Option<PathBuf>,
         /// Import without asking for confirmation
         #[arg(long, conflicts_with = "guide")]
@@ -207,10 +207,13 @@ where
         Command::Remove { name, yes } => commands::remove::run(&name, yes),
         Command::Mv { old, new } => commands::mv::run(&old, &new),
         Command::Adopt { name, from, yes } => commands::adopt::run(&name, &from, yes),
-        Command::Import { folder, yes, .. } => match folder {
-            Some(folder) => commands::import::run(&folder, yes),
-            None => commands::import::guide(),
-        },
+        Command::Import { folder, yes, guide } => {
+            if guide {
+                commands::import::guide()
+            } else {
+                commands::import::run(folder.as_deref(), yes)
+            }
+        }
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),
         Command::List => commands::list::run(),

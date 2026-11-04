@@ -1,5 +1,7 @@
 //! `skiman init <path>`: create or reuse a skill repo, write the user config,
-//! then sync. Git hooks are #8; session-start entries are #9.
+//! then sync. When the user config pointed to another skill repo, that sync
+//! treats the previous repo's links as owned. Git hooks are #8;
+//! session-start entries are #9.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -16,7 +18,7 @@ use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
-use crate::sync::{self, Output};
+use crate::sync::{self, ItemKind, Output};
 use crate::tools::TOOLS;
 
 /// `session_hooks` is the validated `--session-hooks` value (`none` or tool ids).
@@ -54,12 +56,38 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
         println!("created skill repo {}", path.display());
     }
+    let previous_repo = UserConfig::load(&paths)
+        .ok()
+        .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
+        .filter(|previous| previous != repo.root());
     UserConfig {
         repo: path,
         binary: invoked_binary(&cwd),
     }
     .save(&paths)?;
-    Ok(sync::run(&paths, &repo, &lock, Output::Normal))
+    let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo);
+    let foreign = report
+        .items
+        .iter()
+        .any(|item| matches!(item.kind, ItemKind::Foreign { .. }));
+    if foreign && has_skills(&repo) {
+        eprintln!(
+            "hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`"
+        );
+    } else if foreign {
+        eprintln!(
+            "hint: the tool directories hold foreign skills and the skill repo has none yet; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
+        );
+    }
+    Ok(exit)
+}
+
+/// Whether any folder under `skills/` holds a `SKILL.md`.
+fn has_skills(repo: &SkillRepo) -> bool {
+    repo.skill_folder_names()
+        .unwrap_or_default()
+        .iter()
+        .any(|name| repo.skill_dir(name).join("SKILL.md").is_file())
 }
 
 fn inspect(path: &Path) -> Result<Target, Failure> {

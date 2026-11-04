@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{DocumentMut, Item, Table, Value, value};
 
 use crate::failure::Failure;
 use crate::repo::SkillRepo;
@@ -99,6 +99,78 @@ pub fn skill_fragment(text: &str, name: &str) -> Result<String, String> {
         skills.insert(name, item.clone());
     }
     Ok(fragment.to_string().trim_start().to_owned())
+}
+
+/// `text` (a `skiman.toml` or `skiman.lock`) without the `[skills.<name>]`
+/// table and its subtables. Everything else keeps its bytes.
+pub fn without_skill(text: &str, name: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    if let Some(skills) = doc.get_mut("skills").and_then(Item::as_table_like_mut) {
+        skills.remove(name);
+    }
+    Ok(doc.to_string())
+}
+
+/// `text` (a `skiman.toml`) with the skill `old` renamed to `new`: its
+/// `[skills.<old>]` table (with `enabled` and `source`), the source's
+/// `upstream_name` (written when `new` differs from the upstream name,
+/// removed when it equals it), and every `[[secrets.allow]]` path under
+/// `skills/<old>/` or `upstream/<old>/`. Everything else keeps its bytes.
+pub fn with_skill_renamed(text: &str, old: &str, new: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    rename_skill_table(&mut doc, old, new);
+    if let Some(source) = doc
+        .get_mut("skills")
+        .and_then(|skills| skills.get_mut(new))
+        .and_then(|skill| skill.get_mut("source"))
+        .and_then(Item::as_table_like_mut)
+    {
+        let upstream_name = source
+            .get("upstream_name")
+            .and_then(Item::as_str)
+            .unwrap_or(old)
+            .to_owned();
+        if upstream_name == new {
+            source.remove("upstream_name");
+        } else {
+            source.insert("upstream_name", value(upstream_name));
+        }
+    }
+    if let Some(Item::ArrayOfTables(allows)) = doc
+        .get_mut("secrets")
+        .and_then(|secrets| secrets.get_mut("allow"))
+    {
+        for allow in allows.iter_mut() {
+            let Some(path) = allow.get_mut("path").and_then(Item::as_value_mut) else {
+                continue;
+            };
+            let Some(renamed) = path.as_str().and_then(|p| renamed_path(p, old, new)) else {
+                continue;
+            };
+            let decor = path.decor().clone();
+            *path = Value::from(renamed);
+            *path.decor_mut() = decor;
+        }
+    }
+    Ok(doc.to_string())
+}
+
+/// `path` with its `skills/<old>/` or `upstream/<old>/` prefix renamed.
+fn renamed_path(path: &str, old: &str, new: &str) -> Option<String> {
+    ["skills", "upstream"].into_iter().find_map(|root| {
+        path.strip_prefix(&format!("{root}/{old}/"))
+            .map(|rest| format!("{root}/{new}/{rest}"))
+    })
+}
+
+/// Moves the `[skills.<old>]` item of `doc` (a `skiman.toml` or
+/// `skiman.lock`) to `[skills.<new>]`. Its tables keep their place in the file.
+pub(crate) fn rename_skill_table(doc: &mut DocumentMut, old: &str, new: &str) {
+    if let Some(skills) = doc.get_mut("skills").and_then(Item::as_table_like_mut)
+        && let Some(item) = skills.remove(old)
+    {
+        skills.insert(new, item);
+    }
 }
 
 /// The text `init` writes into a new `skiman.toml`.

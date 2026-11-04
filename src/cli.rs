@@ -72,6 +72,32 @@ pub enum Command {
         #[arg(long = "ref", value_name = "REF")]
         git_ref: Option<String>,
     },
+    /// Remove a skill: its folders go to a backup, its records and links are removed
+    Remove {
+        /// Name of the skill
+        name: String,
+        /// Remove without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Rename a skill: folder, `name` field, records, upstream snapshot and secret exemptions
+    Mv {
+        /// Current name
+        old: String,
+        /// New name
+        new: String,
+    },
+    /// Bring a foreign skill from an agent tool's tool directory into the skill repo
+    Adopt {
+        /// Name of the entry in the tool directory, which becomes the skill's name
+        name: String,
+        /// Id of the agent tool whose tool directory holds the entry
+        #[arg(long, value_name = "tool id", value_parser = parse_tool_id)]
+        from: String,
+        /// Adopt without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
     /// Import a prepared folder
     Import {
         /// Print the instructions an agent follows to prepare an import folder
@@ -94,6 +120,18 @@ pub enum Command {
     List,
     /// Diagnose the setup: skill repo, hooks, agent tools, entries skiman does not own, leftovers
     Doctor,
+}
+
+/// The id of a known agent tool.
+fn parse_tool_id(value: &str) -> Result<String, String> {
+    if TOOLS.iter().any(|tool| tool.id == value) {
+        return Ok(value.to_owned());
+    }
+    let ids: Vec<&str> = TOOLS.iter().map(|tool| tool.id).collect();
+    Err(format!(
+        "`{value}` is not an agent tool id (known: {})",
+        ids.join(", ")
+    ))
 }
 
 /// `none`, or a comma-separated list of tool ids that have a session-start hook.
@@ -160,6 +198,9 @@ where
         }),
         Command::Diff { name } => commands::diff::run(&name),
         Command::Update { names, git_ref } => commands::update::run(names, git_ref),
+        Command::Remove { name, yes } => commands::remove::run(&name, yes),
+        Command::Mv { old, new } => commands::mv::run(&old, &new),
+        Command::Adopt { name, from, yes } => commands::adopt::run(&name, &from, yes),
         Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),

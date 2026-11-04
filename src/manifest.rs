@@ -62,6 +62,30 @@ impl Manifest {
             })
             .collect()
     }
+
+    /// The `[skills.<name>.source]` table, when there is one. Missing or
+    /// non-string `url` and `path` read as empty; a `ref_kind` other than
+    /// `branch`, `tag` or `commit` reads as absent.
+    pub fn source(&self, name: &str) -> Option<SourceRecord> {
+        let source = self
+            .doc
+            .get("skills")?
+            .get(name)?
+            .get("source")?
+            .as_table_like()?;
+        let field = |key| source.get(key).and_then(Item::as_str).map(str::to_owned);
+        Some(SourceRecord {
+            url: field("url").unwrap_or_default(),
+            path: field("path").unwrap_or_default(),
+            git_ref: field("ref"),
+            ref_kind: field("ref_kind").and_then(|kind| {
+                ["branch", "tag", "commit"]
+                    .into_iter()
+                    .find(|known| *known == kind)
+            }),
+            upstream_name: field("upstream_name"),
+        })
+    }
 }
 
 /// The text `init` writes into a new `skiman.toml`.

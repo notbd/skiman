@@ -41,6 +41,17 @@ impl Lockfile {
             .map(|t| t.iter().map(|(name, _)| name.to_owned()).collect())
             .unwrap_or_default()
     }
+
+    /// The `[skills.<name>]` entry; a missing or non-string `snapshot` reads as empty.
+    pub fn entry(&self, name: &str) -> Option<LockEntry> {
+        let entry = self.doc.get("skills")?.get(name)?.as_table_like()?;
+        let field = |key| entry.get(key).and_then(Item::as_str).map(str::to_owned);
+        Some(LockEntry {
+            commit: field("commit"),
+            git_ref: field("ref"),
+            snapshot: field("snapshot").unwrap_or_default(),
+        })
+    }
 }
 
 /// One `[skills.<name>]` entry of `skiman.lock` (spec Data formats).

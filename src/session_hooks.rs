@@ -55,6 +55,48 @@ pub fn apply(home: &Path, binary: &Path, request: Request) -> Exit {
     }
 }
 
+/// Whether a settings file holds skiman's session-start entry, for `doctor`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Status {
+    /// Exactly the group `init` adds for this binary, and no other skiman hook.
+    Installed,
+    /// skiman hooks that differ from what `init` adds now (another binary or matcher).
+    Different,
+    /// No skiman hook (or no settings file).
+    Missing,
+    /// The file cannot be read or has an unexpected shape.
+    Unusable(String),
+}
+
+/// The settings file of `tool` (which must have one) and its [`Status`]. Read-only.
+pub fn status(home: &Path, tool: &AgentTool, binary: &Path) -> (PathBuf, Status) {
+    let path = settings_path(home, tool);
+    let settings = match load(path.clone()) {
+        Ok(settings) => settings,
+        Err(Unusable::NotInstalled(_)) => return (path, Status::Missing),
+        Err(Unusable::Broken(reason)) => return (path, Status::Unusable(reason)),
+    };
+    let groups = match session_start(&settings.root) {
+        Ok(groups) => groups.map_or(&[][..], Vec::as_slice),
+        Err(what) => {
+            return (
+                path.clone(),
+                Status::Unusable(format!("{}: {what}", path.display())),
+            );
+        }
+    };
+    let ours: Vec<&Value> = groups.iter().filter(|g| hook_count(g) > 0).collect();
+    let total: usize = groups.iter().map(hook_count).sum();
+    let status = if total == 0 {
+        Status::Missing
+    } else if total == 1 && ours == [&entry_group(binary)] {
+        Status::Installed
+    } else {
+        Status::Different
+    };
+    (path, status)
+}
+
 /// The `hooks.SessionStart` group skiman adds.
 pub fn entry_group(binary: &Path) -> Value {
     json!({

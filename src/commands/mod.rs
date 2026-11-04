@@ -3,8 +3,11 @@
 
 pub mod add;
 pub mod check;
+pub mod diff;
+pub mod doctor;
 pub mod import;
 pub mod init;
+pub mod list;
 pub mod new;
 pub mod sync;
 

@@ -58,6 +58,22 @@ impl RepoLock {
         }
     }
 
+    /// Whether another process holds the lock. Read-only: a missing lock
+    /// file means nobody holds it, and it is never created; when the lock
+    /// is free, it is taken and released at once.
+    pub fn is_held(repo: &SkillRepo) -> std::io::Result<bool> {
+        let file = match File::open(repo.repo_lock_file()) {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        match file.try_lock() {
+            Ok(()) => Ok(false),
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Error(e)) => Err(e),
+        }
+    }
+
     /// Takes the lock, waiting up to [`WAIT`].
     pub fn wait(repo: &SkillRepo) -> Result<RepoLock, Failure> {
         Ok(RepoLock::acquire(repo, Acquire::Wait)?.expect("waiting never returns busy"))

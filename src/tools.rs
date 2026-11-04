@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 pub enum Mode {
     /// A symlink to the skill repo (the spec default).
     Link,
-    /// A copy refreshed at every refresh point (for tools that cannot follow symlinks).
+    /// A copy refreshed at every refresh point (for tools that cannot follow
+    /// symlinks). Not built: phase 1 found every location follows symlinks
+    /// (`docs/phase1-results.md`, Summary), so no tool uses it.
     Copy,
 }
 
@@ -107,7 +109,8 @@ pub const TOOLS: &[AgentTool] = &[
         presence_dir: ".gemini",
         tool_dir: ".gemini/config/skills",
         instruction_file: ".gemini/GEMINI.md",
-        // Unit to confirm in phase 1 (#3).
+        // Bytes, inclusive: phase 1 measured 24000 loads whole, 24001 is
+        // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
         skill_mode: Mode::Link,
         instruction_mode: Mode::Link,

@@ -14,6 +14,7 @@ use std::process::{Command, Stdio};
 
 use crate::failure::Failure;
 use crate::git;
+use crate::path_safety::Content;
 use crate::snapshot::{Snapshot, SnapshotFile};
 
 /// `$GIT_DIR/info/attributes` takes precedence over in-tree
@@ -112,6 +113,7 @@ impl MergeRepo {
                 || self.git(),
                 &tree,
                 "the merge result",
+                Content::Output,
             )?)),
             Some(1) => {
                 let mut paths: Vec<String> = records

@@ -596,9 +596,12 @@ fn a_backup_folder_whose_timestamp_exists_gets_the_2_suffix() {
 fn upstream_content_that_breaks_a_rule_is_refused_and_nothing_is_written() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let up = single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    up.write("notes.md", "<<<<<<< local (skiman)\nmine\n");
-    up.commit("v2");
+    let long = "x".repeat(1025);
+    single_skill(
+        &sandbox,
+        "pdf",
+        &format!("---\nname: pdf\ndescription: {long}\n---\n"),
+    );
     let before = world(&sandbox);
 
     sandbox
@@ -612,7 +615,7 @@ skill pdf from https://github.com/acme/pdf.git at [..] (default branch main):
 "#]])
         .stderr_eq(str![[r#"
 error: refusing to write content that breaks the rules:
-  skills/pdf/notes.md:1: unresolved-conflict: conflict marker from an update; resolve the conflict and remove the markers
+  skills/pdf/SKILL.md:3: description-length: [..]
 
 "#]]);
 

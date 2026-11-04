@@ -22,6 +22,23 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     })
 }
 
+/// Like [`write_atomic`], but the new file gets `permissions` before the rename,
+/// so rewriting a file keeps its mode.
+pub fn rewrite_atomic(
+    path: &Path,
+    contents: &[u8],
+    permissions: std::fs::Permissions,
+) -> io::Result<()> {
+    let tmp = temporary_sibling(path);
+    let result = std::fs::write(&tmp, contents)
+        .and_then(|()| std::fs::set_permissions(&tmp, permissions))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Creates a symlink at `link` pointing to `target` under a temporary name in
 /// the same directory, then renames it into place.
 pub fn symlink_atomic(target: &Path, link: &Path) -> io::Result<()> {

@@ -18,6 +18,7 @@ pub mod repo;
 pub mod repo_lock;
 pub mod reported;
 pub mod rules;
+pub mod session_hooks;
 pub mod sync;
 pub mod tools;
 pub mod tree;

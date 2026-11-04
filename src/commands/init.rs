@@ -1,7 +1,7 @@
 //! `skiman init <path>`: create or reuse a skill repo, write the user config,
 //! then sync. When the user config pointed to another skill repo, that sync
-//! treats the previous repo's links as owned. Git hooks are #8;
-//! session-start entries are #9.
+//! treats the previous repo's links as owned, and finally add or remove the
+//! session-start hook entries. Git hooks are #8.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -18,6 +18,7 @@ use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
+use crate::session_hooks;
 use crate::sync::{self, ItemKind, Output};
 use crate::tools::TOOLS;
 
@@ -60,9 +61,10 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         .ok()
         .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
         .filter(|previous| previous != repo.root());
+    let binary = invoked_binary(&cwd);
     UserConfig {
         repo: path,
-        binary: invoked_binary(&cwd),
+        binary: binary.clone(),
     }
     .save(&paths)?;
     let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo);
@@ -79,7 +81,21 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
             "hint: the tool directories hold foreign skills and the skill repo has none yet; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
         );
     }
-    Ok(exit)
+    // Settings files are outside the skill repo: do not hold the repo lock
+    // while the preview waits for an answer.
+    drop(lock);
+    Ok(exit.combine(install_session_hooks(&paths, &binary, session_hooks)))
+}
+
+/// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag
+/// (only possible with a terminal) previews the entries and asks.
+fn install_session_hooks(paths: &Paths, binary: &Path, session_hooks: Option<&str>) -> Exit {
+    let request = match session_hooks {
+        Some("none") => session_hooks::Request::Remove,
+        Some(ids) => session_hooks::Request::Add(ids),
+        None => session_hooks::Request::Ask,
+    };
+    session_hooks::apply(paths.home(), binary, request)
 }
 
 /// Whether any folder under `skills/` holds a `SKILL.md`.

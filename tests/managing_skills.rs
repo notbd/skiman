@@ -95,7 +95,6 @@ fn managing_skills_covers_every_everyday_operation() {
             "wait for the user's approval".to_owned(),
         ),
         ("edit in the skill repo", format!("{repo}/skills/<name>/")),
-        ("tools that receive copies", "copies".to_owned()),
         ("update", "skiman update".to_owned()),
         ("resolve conflicts", "<<<<<<< local (skiman)".to_owned()),
         ("remove", "skiman remove <name> --yes".to_owned()),

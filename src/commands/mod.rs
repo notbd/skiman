@@ -2,6 +2,7 @@
 //! called from `cli::run`.
 
 pub mod check;
+pub mod import;
 pub mod init;
 pub mod new;
 pub mod sync;

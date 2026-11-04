@@ -1,7 +1,7 @@
 //! `skiman init <path>`: create or reuse a skill repo, write the user config,
 //! then sync. When the user config pointed to another skill repo, that sync
 //! treats the previous repo's links as owned. Before that sync it installs the
-//! git hooks; session-start entries are #9.
+//! git hooks, and finally it adds or removes the session-start hook entries.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -19,6 +19,7 @@ use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
+use crate::session_hooks;
 use crate::sync::{self, ItemKind, Output};
 use crate::tools::TOOLS;
 
@@ -83,7 +84,21 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         );
     }
     hint_refused_locations(&report, &repo);
-    Ok(exit)
+    // Settings files are outside the skill repo: do not hold the repo lock
+    // while the preview waits for an answer.
+    drop(lock);
+    Ok(exit.combine(install_session_hooks(&paths, &binary, session_hooks)))
+}
+
+/// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag
+/// (only possible with a terminal) previews the entries and asks.
+fn install_session_hooks(paths: &Paths, binary: &Path, session_hooks: Option<&str>) -> Exit {
+    let request = match session_hooks {
+        Some("none") => session_hooks::Request::Remove,
+        Some(ids) => session_hooks::Request::Add(ids),
+        None => session_hooks::Request::Ask,
+    };
+    session_hooks::apply(paths.home(), binary, request)
 }
 
 /// Story 5: an instruction location skiman does not own is moved away by

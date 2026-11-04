@@ -51,6 +51,7 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::{Snapshot, SnapshotFile};
+use crate::source::{UrlKind, check_url};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::test_hook;
@@ -713,7 +714,9 @@ fn fetch_sources(
             ))
         };
         let url = &source.url;
-        if url.starts_with('/') || url.starts_with('~') {
+        let kind = check_url(url)
+            .map_err(|why| refuse(&format!("unsupported `url` `{url}`: it {why}")))?;
+        if kind == UrlKind::Local {
             if source.git_ref.is_some() {
                 return Err(refuse("a local folder has no versions; drop `ref`"));
             }
@@ -741,15 +744,6 @@ fn fetch_sources(
                 ref_kind: None,
             });
             continue;
-        }
-        let is_git_url = (url.starts_with("https://") || url.starts_with("ssh://"))
-            || url
-                .split_once(':')
-                .is_some_and(|(user_host, _)| user_host.contains('@') && !user_host.contains('/'));
-        if !is_git_url || url.contains("::") || url.starts_with('-') {
-            return Err(refuse(&format!(
-                "unsupported `url` `{url}`: give an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path"
-            )));
         }
         let cache = Cache::open(paths, url, prompts)?;
         let (commit, ref_kind) = match &source.git_ref {

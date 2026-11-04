@@ -41,7 +41,7 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::snapshot::{Snapshot, SnapshotFile};
-use crate::source::{Source, SourceKind};
+use crate::source::{Source, SourceKind, check_url};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::test_hook;
@@ -164,6 +164,12 @@ impl Current {
         if source.url.is_empty() {
             return Err(Failure::refused(format!(
                 "[skills.{name}.source] in skiman.toml has no `url`; run `skiman check`"
+            )));
+        }
+        if let Err(why) = check_url(&source.url) {
+            return Err(Failure::refused(format!(
+                "[skills.{name}.source] in skiman.toml: the `url` `{}` {why}; nothing was fetched",
+                source.url
             )));
         }
         let entry = Lockfile::load(repo)?
@@ -363,7 +369,7 @@ fn fetch(
     requested: Option<&str>,
 ) -> Result<Target, Failure> {
     let source = &current.source;
-    if source.url.starts_with(['/', '~', '.']) {
+    if source.url.starts_with(['/', '~']) {
         return fetch_local(context, name, current, requested);
     }
     let cache = Cache::open(&context.paths, &source.url, context.prompts)?;
@@ -448,7 +454,7 @@ fn fetch_local(
     }
     let parsed = Source::parse(&source.url, context.paths.home(), Path::new("/"))?;
     let SourceKind::Local { dir } = parsed.kind else {
-        unreachable!("a `/`, `~` or `.` source is a local folder");
+        unreachable!("a `/` or `~` source is a local folder");
     };
     let dir = if source.path.is_empty() {
         dir

@@ -614,3 +614,54 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
         .stderr_eq("error: skill pdf: pdf has no entry in skiman.lock; run `skiman check`\n");
     assert_eq!(skill_repo_tree(&sandbox), before);
 }
+
+/// Spec Source fetching: a `url` in skiman.toml (a cloned skill repo or a
+/// hand edit) gets the same check as `add`'s source, before git runs on it.
+#[test]
+fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
+    let sandbox = Sandbox::new();
+    installed(&sandbox);
+    let repo = sandbox.skill_repo();
+    let bin = sandbox.root().join("bin");
+    let pwned = sandbox.home().join("PWNED");
+    write(
+        bin.join("git-remote-evil"),
+        &format!("#!/bin/sh\ntouch '{}'\n", pwned.display()),
+    );
+    std::fs::set_permissions(
+        bin.join("git-remote-evil"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    for url in ["evil::whatever", "file:///tmp/repo", "git://example.test/x"] {
+        let manifest = read(repo.join("skiman.toml"));
+        let line = manifest
+            .lines()
+            .find(|l| l.starts_with("url = "))
+            .expect("a url line")
+            .to_owned();
+        write(
+            repo.join("skiman.toml"),
+            &manifest.replace(&line, &format!("url = \"{url}\"")),
+        );
+        let before = skill_repo_tree(&sandbox);
+        sandbox
+            .skiman()
+            .env("PATH", &path)
+            .args(["update", "pdf"])
+            .assert()
+            .code(1)
+            .stdout_eq("")
+            .stderr_eq(format!(
+                "error: skill pdf: [skills.pdf.source] in skiman.toml: the `url` `{url}` [..]; nothing was fetched\n"
+            ));
+        assert_eq!(skill_repo_tree(&sandbox), before);
+        assert!(!pwned.exists(), "the remote helper ran for {url}");
+    }
+}

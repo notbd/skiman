@@ -15,8 +15,10 @@ pub mod ownership;
 pub mod paths;
 pub mod repo;
 pub mod repo_lock;
+pub mod rules;
 pub mod sync;
 pub mod tools;
+pub mod tree;
 
 pub use exit::Exit;
 

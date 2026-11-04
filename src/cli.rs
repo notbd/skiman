@@ -41,6 +41,8 @@ pub enum Command {
         #[arg(long)]
         hook: bool,
     },
+    /// Report every rule violation in the skill repo's working tree
+    Check,
 }
 
 /// `none`, or a comma-separated list of tool ids that have a session-start hook.
@@ -89,5 +91,6 @@ where
         } => commands::init::run(&path, session_hooks.as_deref()),
         Command::New { name, description } => commands::new::run(&name, description),
         Command::Sync { hook } => commands::sync::run(hook),
+        Command::Check => commands::check::run(),
     }
 }

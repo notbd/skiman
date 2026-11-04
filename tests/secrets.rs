@@ -571,3 +571,50 @@ fn new_refuses_a_description_that_contains_a_secret() {
         assert!(!sandbox.skill_repo().join("skills/pdf").exists());
     }
 }
+
+#[test]
+fn pre_commit_rejects_a_staged_secret_until_the_printed_entry_is_added() {
+    let sandbox = repo();
+    let key = aws_key();
+    let repo = sandbox.skill_repo();
+    write(
+        &sandbox,
+        "skills/pdf/tests/fixture.env",
+        format!("KEY={key}\n"),
+    );
+    sandbox.git(&repo, ["add", "--all"]);
+    // Only the staged snapshot holds the secret.
+    write(&sandbox, "skills/pdf/tests/fixture.env", "KEY=\n");
+    let commit = || {
+        run(sandbox.command("git").current_dir(&repo).args([
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=user@example.test",
+            "commit",
+            "--quiet",
+            "-m",
+            "add pdf",
+        ]))
+    };
+
+    // git shows the pre-commit hook's stdout on stderr.
+    let rejected = commit();
+    let stderr = String::from_utf8(rejected.stderr).unwrap();
+    assert_eq!(rejected.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains(&key), "matched text leaked:\n{stderr}");
+    let entries = printed_entries(&stderr);
+
+    append(&sandbox, "skiman.toml", &format!("\n{entries}"));
+    sandbox.git(&repo, ["add", "skiman.toml"]);
+    let accepted = commit();
+    assert!(
+        accepted.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+    assert_eq!(
+        sandbox.git(&repo, ["show", "HEAD:skills/pdf/tests/fixture.env"]),
+        format!("KEY={key}")
+    );
+}

@@ -1,10 +1,13 @@
 //! Command-line definitions (every command's flags live here) and dispatch.
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
 use crate::Exit;
+use crate::commands;
+use crate::tools::TOOLS;
 
 #[derive(Debug, Parser)]
 #[command(name = "skiman", version, about)]
@@ -15,7 +18,51 @@ pub struct Cli {
 
 /// One variant per command; each command's logic lives in `commands::<name>`.
 #[derive(Debug, Subcommand)]
-pub enum Command {}
+pub enum Command {
+    /// Create or reuse a skill repo and distribute it
+    Init {
+        /// Folder of the skill repo: missing, empty, or holding skiman.toml
+        path: PathBuf,
+        /// Agent tools whose session-start hooks to install (comma-separated ids), or `none`
+        #[arg(long, value_name = "ids|none", value_parser = parse_session_hooks)]
+        session_hooks: Option<String>,
+    },
+    /// Create an own skill
+    New {
+        /// Skill name: lowercase letters, digits and single hyphens
+        name: String,
+        /// What the skill does and when to use it
+        #[arg(short = 'd', long)]
+        description: Option<String>,
+    },
+    /// Make every tool directory match the skill repo
+    Sync {
+        /// Run from a git or session-start hook: print only new findings, always exit 0
+        #[arg(long)]
+        hook: bool,
+    },
+}
+
+/// `none`, or a comma-separated list of tool ids that have a session-start hook.
+fn parse_session_hooks(value: &str) -> Result<String, String> {
+    if value == "none" {
+        return Ok(value.to_owned());
+    }
+    let hookable: Vec<&str> = TOOLS
+        .iter()
+        .filter(|tool| tool.session_hook_file.is_some())
+        .map(|tool| tool.id)
+        .collect();
+    for id in value.split(',') {
+        if !hookable.contains(&id) {
+            return Err(format!(
+                "`{id}` is not an agent tool with session-start hooks (use `none` or a comma-separated list of: {})",
+                hookable.join(", ")
+            ));
+        }
+    }
+    Ok(value.to_owned())
+}
 
 /// Parses `args` (including the program name) and runs the command.
 /// Help and version go to stdout with exit 0; usage errors go to stderr with exit 2.
@@ -35,5 +82,12 @@ where
             };
         }
     };
-    match cli.command {}
+    match cli.command {
+        Command::Init {
+            path,
+            session_hooks,
+        } => commands::init::run(&path, session_hooks.as_deref()),
+        Command::New { name, description } => commands::new::run(&name, description),
+        Command::Sync { hook } => commands::sync::run(hook),
+    }
 }

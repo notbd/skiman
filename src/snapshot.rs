@@ -2,6 +2,8 @@
 //! (`ls-tree`, `cat-file`), never by checkout (spec Source fetching), so no
 //! filter, hook or attribute of the upstream can run.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -9,6 +11,7 @@ use std::process::{Command, Stdio};
 use crate::failure::Failure;
 use crate::fetch::Cache;
 use crate::git;
+use crate::path_safety::{self, Content};
 use crate::tree::{self, Kind, Tree, WorkingTree, is_ignored};
 
 /// One regular file of a snapshot.
@@ -75,56 +78,127 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    /// Reads folder `path` (`""` = the root) of `commit`, which must be in the cache.
+    /// Reads folder `path` (`""` = the root) of `commit`, which must be in
+    /// the cache, as upstream content.
     pub fn read(cache: &Cache, commit: &str, path: &str) -> Result<Snapshot, Failure> {
-        Snapshot::read_tree(|| cache.git(), &treeish(commit, path), cache.url())
+        let origin = if path.is_empty() {
+            cache.url().to_owned()
+        } else {
+            format!("{} ({path})", cache.url())
+        };
+        Snapshot::read_tree(
+            || cache.git(),
+            &treeish(commit, path),
+            &origin,
+            Content::Upstream,
+        )
     }
 
     /// Reads `treeish` from the repository `git` commands run on; `origin`
-    /// names where it comes from in messages.
+    /// names where it comes from in messages. The listing passes
+    /// [`path_safety::check`] as `content` before any file content is read.
     pub fn read_tree(
         git: impl Fn() -> Command,
         treeish: &str,
         origin: &str,
+        content: Content,
     ) -> Result<Snapshot, Failure> {
         let mut ls = git();
-        ls.args(["ls-tree", "-r", "-t", "-z", "--full-tree", treeish]);
-        let listing = git::run(ls, &format!("listing {treeish} of {origin}"))?;
+        ls.args(["ls-tree", "-r", "-t", "-z", "-l", "--full-tree", treeish]);
+        let output = git::run(ls, &format!("listing {treeish} of {origin}"))?;
 
         let mut snapshot = Snapshot::default();
-        let mut blobs = Vec::new();
-        for record in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+        let mut listing = Listing {
+            git: &git,
+            entries: Vec::new(),
+            oids: BTreeMap::new(),
+            contents: RefCell::new(None),
+        };
+        for record in output.split(|b| *b == 0).filter(|r| !r.is_empty()) {
             let entry = Entry::parse(record, origin)?;
-            check_path(&entry.path, origin)?;
-            match entry.mode.as_str() {
-                "040000" => {}
-                "100644" | "100755" if is_ignored(&entry.path) => {}
-                "100644" | "100755" => blobs.push(entry),
-                "160000" => snapshot.submodules.push(entry.path),
-                "120000" => {
-                    return Err(Failure::refused(format!(
-                        "{} holds a symlink at {}; symlinks are not allowed in skills",
-                        origin, entry.path
-                    )));
+            let kind = match entry.mode.as_str() {
+                "040000" => Kind::Dir,
+                "100644" | "100755" => Kind::File {
+                    size: entry.size.ok_or_else(|| entry.unexpected())?,
+                    executable: entry.mode == "100755",
+                },
+                "120000" => Kind::Symlink,
+                "160000" => {
+                    snapshot.submodules.push(entry.path);
+                    continue;
                 }
                 mode => {
                     return Err(Failure::refused(format!(
-                        "{} holds {} with unsupported git mode {mode}",
-                        origin, entry.path
+                        "{origin} holds {} with unsupported git mode {mode}",
+                        entry.path
                     )));
                 }
+            };
+            if matches!(kind, Kind::File { .. }) && !is_ignored(&entry.path) {
+                listing.oids.insert(entry.path.clone(), entry.oid);
             }
-        }
-        let contents = cat_blobs(git(), blobs.iter().map(|e| e.oid.as_str()))?;
-        for (entry, content) in blobs.into_iter().zip(contents) {
-            snapshot.files.push(SnapshotFile {
-                executable: entry.mode == "100755",
+            listing.entries.push(tree::Entry {
                 path: entry.path,
-                content,
+                kind,
             });
         }
-        snapshot.files.sort_by(|a, b| a.path.cmp(&b.path));
+        listing.entries.sort_by(|a, b| a.path.cmp(&b.path));
+        path_safety::check(&listing, "", origin, content)?;
+
+        let io = |e: std::io::Error| Failure::operational(e.to_string());
+        for entry in &listing.entries {
+            if let Kind::File { executable, .. } = entry.kind
+                && !is_ignored(&entry.path)
+            {
+                snapshot.files.push(SnapshotFile {
+                    path: entry.path.clone(),
+                    executable,
+                    content: listing.read(&entry.path).map_err(io)?,
+                });
+            }
+        }
         Ok(snapshot)
+    }
+}
+
+/// A git listing seen as a [`Tree`]: the regular files are read in one
+/// `cat-file --batch` on the first [`Tree::read`].
+struct Listing<'a> {
+    git: &'a dyn Fn() -> Command,
+    /// Sorted by path bytes.
+    entries: Vec<tree::Entry>,
+    /// Path to blob id of every regular file that is not ignored.
+    oids: BTreeMap<String, String>,
+    contents: RefCell<Option<BTreeMap<String, Vec<u8>>>>,
+}
+
+impl Tree for Listing<'_> {
+    fn kind(&self, path: &str) -> std::io::Result<Option<Kind>> {
+        Ok(self.entries.iter().find(|e| e.path == path).map(|e| e.kind))
+    }
+
+    fn walk(&self, dir: &str) -> std::io::Result<Vec<tree::Entry>> {
+        Ok(self
+            .entries
+            .iter()
+            .filter(|e| {
+                dir.is_empty() || e.path.strip_prefix(dir).is_some_and(|r| r.starts_with('/'))
+            })
+            .cloned()
+            .collect())
+    }
+
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        let mut contents = self.contents.borrow_mut();
+        if contents.is_none() {
+            let blobs = cat_blobs((self.git)(), self.oids.values().map(String::as_str))
+                .map_err(|f| std::io::Error::other(f.message))?;
+            *contents = Some(self.oids.keys().cloned().zip(blobs).collect());
+        }
+        contents
+            .as_ref()
+            .and_then(|c| c.get(path).cloned())
+            .ok_or_else(|| std::io::Error::other(format!("{path} is not a regular file")))
     }
 }
 
@@ -184,57 +258,56 @@ fn walk_local(dir: &Path) -> Result<Vec<tree::Entry>, Failure> {
     Ok(entries
         .into_iter()
         .filter(|e| e.kind != Kind::Dir)
-        .filter(|e| !e.path.split('/').any(|c| c.eq_ignore_ascii_case(".git")))
+        .filter(|e| !in_dot_git(&e.path))
         .collect())
 }
 
 impl Snapshot {
-    /// Reads the local folder `dir` as it is now, without `.git`. Symlinks,
-    /// special files and names that are not UTF-8 are refused (exit 1).
+    /// Reads the local folder `dir` as it is now, without `.git`, after
+    /// [`path_safety::check`] passed on it.
     pub fn read_local(dir: &Path) -> Result<Snapshot, Failure> {
         let label = dir.display().to_string();
-        let working_tree = WorkingTree::new(dir);
+        let io = |e: std::io::Error| Failure::operational(format!("cannot read {label}: {e}"));
+        walk_local(dir)?;
+        let folder = LocalFolder(WorkingTree::new(dir));
+        path_safety::check(&folder, "", &label, Content::Upstream)?;
         let mut snapshot = Snapshot::default();
-        for entry in walk_local(dir)? {
-            if entry.path.contains('\u{FFFD}') {
-                return Err(Failure::refused(format!(
-                    "{label} holds a path that is not valid UTF-8: {:?}",
-                    entry.path
-                )));
-            }
-            check_path(&entry.path, &label)?;
-            match entry.kind {
-                Kind::File { .. } if is_ignored(&entry.path) => {}
-                Kind::File { executable, .. } => {
-                    let content = working_tree.read(&entry.path).map_err(|e| {
-                        Failure::operational(format!(
-                            "cannot read {}: {e}",
-                            working_tree.path(&entry.path).display()
-                        ))
-                    })?;
-                    snapshot.files.push(SnapshotFile {
-                        path: entry.path,
-                        executable,
-                        content,
-                    });
-                }
-                Kind::Symlink => {
-                    return Err(Failure::refused(format!(
-                        "{label} holds a symlink at {}; symlinks are not allowed in skills",
-                        entry.path
-                    )));
-                }
-                Kind::Dir | Kind::Special => {
-                    return Err(Failure::refused(format!(
-                        "{label} holds {}, which is not a regular file (a FIFO, socket or device)",
-                        entry.path
-                    )));
-                }
+        for entry in folder.walk("").map_err(io)? {
+            if let Kind::File { executable, .. } = entry.kind
+                && !is_ignored(&entry.path)
+            {
+                snapshot.files.push(SnapshotFile {
+                    content: folder.read(&entry.path).map_err(io)?,
+                    path: entry.path,
+                    executable,
+                });
             }
         }
-        snapshot.files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(snapshot)
     }
+}
+
+/// A local folder without anything inside `.git` (at any depth, any case).
+struct LocalFolder(WorkingTree);
+
+impl Tree for LocalFolder {
+    fn kind(&self, path: &str) -> std::io::Result<Option<Kind>> {
+        self.0.kind(path)
+    }
+
+    fn walk(&self, dir: &str) -> std::io::Result<Vec<tree::Entry>> {
+        let mut entries = self.0.walk(dir)?;
+        entries.retain(|e| !in_dot_git(&e.path));
+        Ok(entries)
+    }
+
+    fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
+        self.0.read(path)
+    }
+}
+
+fn in_dot_git(path: &str) -> bool {
+    path.split('/').any(|c| c.eq_ignore_ascii_case(".git"))
 }
 
 fn treeish(commit: &str, path: &str) -> String {
@@ -245,16 +318,20 @@ fn treeish(commit: &str, path: &str) -> String {
     }
 }
 
+/// One record of `git ls-tree -l`.
 struct Entry {
+    record: String,
     mode: String,
     oid: String,
+    /// `None` for trees and gitlinks (`-`).
+    size: Option<u64>,
     path: String,
 }
 
 impl Entry {
-    /// `<mode> SP <type> SP <oid> TAB <path>`; the path is verbatim with `-z`.
-    /// A path that is not UTF-8 is refused (exit 1).
-    fn parse(record: &[u8], url: &str) -> Result<Entry, Failure> {
+    /// `<mode> SP <type> SP <oid> SP+ <size> TAB <path>`; the path is
+    /// verbatim with `-z`. A path that is not UTF-8 is refused (exit 1).
+    fn parse(record: &[u8], origin: &str) -> Result<Entry, Failure> {
         let unexpected = || {
             Failure::operational(format!(
                 "unexpected `git ls-tree` output: {}",
@@ -266,38 +343,28 @@ impl Entry {
             .position(|b| *b == b'\t')
             .ok_or_else(unexpected)?;
         let head = std::str::from_utf8(&record[..tab]).map_err(|_| unexpected())?;
-        let mut fields = head.split(' ');
-        let (Some(mode), Some(_kind), Some(oid)) = (fields.next(), fields.next(), fields.next())
-        else {
+        let fields: Vec<&str> = head.split_whitespace().collect();
+        let [mode, _kind, oid, size] = fields[..] else {
             return Err(unexpected());
         };
         let path = String::from_utf8(record[tab + 1..].to_vec()).map_err(|e| {
             Failure::refused(format!(
-                "{url} holds a path that is not valid UTF-8: {:?}",
+                "{origin} holds a path that is not valid UTF-8: {:?}",
                 String::from_utf8_lossy(e.as_bytes())
             ))
         })?;
         Ok(Entry {
+            record: String::from_utf8_lossy(record).into_owned(),
             mode: mode.to_owned(),
             oid: oid.to_owned(),
+            size: size.parse().ok(),
             path,
         })
     }
-}
 
-/// Refuses a path that could leave the snapshot folder when written:
-/// an empty component, `.`, `..` or `.git`. Full path safety (collisions,
-/// LFS pointers, sizes) is applied on top of this by #13.
-fn check_path(path: &str, url: &str) -> Result<(), Failure> {
-    let unsafe_component = path
-        .split('/')
-        .any(|c| c.is_empty() || c == "." || c == ".." || c.eq_ignore_ascii_case(".git"));
-    if unsafe_component {
-        return Err(Failure::refused(format!(
-            "{url} holds an unsafe path: {path:?}"
-        )));
+    fn unexpected(&self) -> Failure {
+        Failure::operational(format!("unexpected `git ls-tree` output: {}", self.record))
     }
-    Ok(())
 }
 
 /// The contents of `oids`, in order, through one `git cat-file --batch`.

@@ -610,3 +610,37 @@ fn a_failed_lock_write_when_only_the_records_advance_prints_the_fragment_recover
     follow_recovery(&sandbox, &stderr, None);
     assert_eq!(content(&sandbox), before);
 }
+
+/// With `--ref`, `skiman.toml` is written before the lock entry; a failed
+/// lock write lists it as done and the recovery pastes its fragment back.
+#[test]
+fn following_the_recovery_after_a_ref_change_restores_skiman_toml_too() {
+    let sandbox = Sandbox::new();
+    pdf_with_an_update(&sandbox).branch("stable");
+    let repo = sandbox.skill_repo();
+    let manifest = read(repo.join("skiman.toml"));
+    let before = content(&sandbox);
+
+    let assert = sandbox
+        .skiman()
+        .args(["update", "pdf", "--ref", "stable"])
+        .env("SKIMAN_TEST_HOOK", "pdf:before-lock")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("chmod 555 '{}'", repo.display()),
+        )
+        .assert();
+    chmod(&repo, 0o755);
+    let assert = assert.code(4).stdout_eq("");
+    let stderr = stderr_of(&assert);
+    assert!(
+        stderr.contains(
+            "\n  done: wrote the new `source.ref` and `ref_kind` of pdf to skiman.toml\n"
+        ),
+        "{stderr}"
+    );
+    assert_ne!(read(repo.join("skiman.toml")), manifest);
+
+    follow_recovery(&sandbox, &stderr, None);
+    assert_eq!(content(&sandbox), before);
+}

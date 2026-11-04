@@ -3,8 +3,20 @@
 
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod exit;
+pub mod failure;
+pub mod fsutil;
+pub mod lockfile;
+pub mod managing_skills;
+pub mod manifest;
+pub mod names;
+pub mod ownership;
 pub mod paths;
+pub mod repo;
+pub mod repo_lock;
+pub mod sync;
+pub mod tools;
 
 pub use exit::Exit;
 

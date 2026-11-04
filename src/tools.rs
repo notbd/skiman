@@ -44,6 +44,8 @@ pub struct AgentTool {
     pub reserved_names: &'static [&'static str],
     /// Settings file that holds the tool's session-start hooks; `None` when the tool has none.
     pub session_hook_file: Option<&'static str>,
+    /// Why skiman writes no session-start hook entry for this tool yet; `None` when it does.
+    pub session_hook_unavailable: Option<&'static str>,
 }
 
 impl AgentTool {
@@ -79,6 +81,7 @@ pub const TOOLS: &[AgentTool] = &[
         ],
         reserved_names: &["synced"],
         session_hook_file: Some(".claude/settings.json"),
+        session_hook_unavailable: None,
     },
     AgentTool {
         id: "codex",
@@ -94,6 +97,10 @@ pub const TOOLS: &[AgentTool] = &[
         ],
         reserved_names: &[],
         session_hook_file: Some(".codex/hooks.json"),
+        // Phase 1 (#3) could not confirm that a trusted entry runs on startup and resume.
+        session_hook_unavailable: Some(
+            "session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4)",
+        ),
     },
     AgentTool {
         id: "antigravity",
@@ -107,5 +114,6 @@ pub const TOOLS: &[AgentTool] = &[
         managed_elsewhere: &[],
         reserved_names: &[],
         session_hook_file: None,
+        session_hook_unavailable: None,
     },
 ];

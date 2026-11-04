@@ -4,6 +4,6 @@ skiman's core job is managing, installing and updating skills and global instruc
 
 ## Considered Options
 
-- **Built-in recognisers in skiman** (spec v8's source detection and `skiman adopt`): every new setup shape needs a code change, and some shapes will always be missed.
+- **Built-in recognisers in skiman** (spec v8's source detection and its general-purpose `skiman adopt`): every new setup shape needs a code change, and some shapes will always be missed. v1 keeps only a narrow `skiman adopt` that copies one named foreign skill from a tool directory into the skill repo; it recognises nothing on its own.
 - **An action-list import plan** ("register this folder as third-party", "drop that copy"): a second format for skiman to define and validate, and the user has to imagine the result instead of seeing it.
 - **Let the LLM move files directly**: no preview, not reproducible, hard to audit.

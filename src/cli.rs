@@ -68,6 +68,9 @@ pub enum Command {
     Update {
         /// Skills to update; without names, every third-party skill
         names: Vec<String>,
+        /// Move the skill to this branch, tag or full 40-hex commit (single skill only)
+        #[arg(long = "ref", value_name = "REF")]
+        git_ref: Option<String>,
     },
     /// Import a prepared folder
     Import {
@@ -156,7 +159,7 @@ where
             yes,
         }),
         Command::Diff { name } => commands::diff::run(&name),
-        Command::Update { names } => commands::update::run(names),
+        Command::Update { names, git_ref } => commands::update::run(names, git_ref),
         Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),

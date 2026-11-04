@@ -319,6 +319,18 @@ fn run(
     Ok((out.into_iter().collect(), found, records))
 }
 
+/// The unresolved-conflict violations of the skill folder `skills/<name>`
+/// (spec Merge semantics: markers, conflict records, `.skiman-conflicts`).
+pub fn unresolved_conflicts(tree: &dyn Tree, name: &str) -> io::Result<Vec<Violation>> {
+    let scope = Scope {
+        skills: BTreeSet::from([name.to_owned()]),
+        ..Scope::default()
+    };
+    let mut violations = check(tree, &scope)?;
+    violations.retain(|v| v.rule == rule::UNRESOLVED_CONFLICT);
+    Ok(violations)
+}
+
 /// The ready-to-paste `[[secrets.allow]]` entries for the secret violations
 /// in `violations` (one per distinct entry), with a line saying what they
 /// are for; `None` when there are none.

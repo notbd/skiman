@@ -49,6 +49,11 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Show the local modifications of a third-party skill against its upstream snapshot
+    Diff {
+        /// Name of the third-party skill
+        name: String,
+    },
     /// Import a prepared folder
     Import {
         /// Print the instructions an agent follows to prepare an import folder
@@ -67,6 +72,10 @@ pub enum Command {
         #[arg(long)]
         staged: bool,
     },
+    /// Show every skill: kind, source, version, local modifications, conflicts, enabled
+    List,
+    /// Diagnose the setup: skill repo, hooks, agent tools, entries skiman does not own, leftovers
+    Doctor,
 }
 
 /// `none`, or a comma-separated list of tool ids that have a session-start hook.
@@ -125,8 +134,11 @@ where
             dry_run,
             yes,
         }),
+        Command::Diff { name } => commands::diff::run(&name),
         Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),
+        Command::List => commands::list::run(),
+        Command::Doctor => commands::doctor::run(),
     }
 }

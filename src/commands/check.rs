@@ -15,10 +15,16 @@ pub fn run() -> Exit {
 fn check() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
-    let violations = rules::check_all(&WorkingTree::new(repo.root()))
+    let report = rules::check_repo(&WorkingTree::new(repo.root()))
         .map_err(|e| Failure::operational(format!("cannot read {}: {e}", repo.root().display())))?;
-    for violation in &violations {
+    for violation in &report.violations {
         println!("{violation}");
     }
-    Ok(rules::exit_of(&violations))
+    for unused in &report.unused_allows {
+        println!("{unused}");
+    }
+    if let Some(hint) = rules::allow_hint(&report.violations) {
+        println!("\n{hint}");
+    }
+    Ok(rules::exit_of(&report.violations))
 }

@@ -517,6 +517,7 @@ name = "skiman"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "regex",
  "rexpect",
  "saphyr",
  "sha2",

@@ -1,11 +1,14 @@
 //! The rule engine (spec Rules): format rules for skills, the config file
-//! formats, unresolved conflicts and Consistency. Secrets (#7) and the shared
-//! body (#10) plug in here.
+//! formats, unresolved conflicts, secrets and Consistency. The shared body
+//! (#10) plugs in here.
 //!
-//! Two entry points:
-//! - [`check_all`]: every rule on a whole [`Tree`] (`skiman check`, and the
-//!   warnings a write command prints).
+//! Entry points:
+//! - [`check_all`]: every rule on a whole [`Tree`] (the warnings a write
+//!   command prints); [`check_repo`] adds the unused secret exemptions
+//!   (`skiman check`).
 //! - [`check`]: only what a [`Scope`] names: what a write command writes.
+//! - [`allow_hint`]: the ready-to-paste `[[secrets.allow]]` entries for the
+//!   secret violations in a list.
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
 //! of content about to be written, or another snapshot.
@@ -13,6 +16,7 @@
 mod config;
 mod consistency;
 mod frontmatter;
+mod secrets;
 mod skill;
 
 use std::collections::BTreeSet;
@@ -24,6 +28,7 @@ use crate::failure::Failure;
 use crate::tree::{Kind, Tree};
 
 pub use config::{LOCKFILE, MANIFEST};
+pub use secrets::{AllowEntry, DETECTORS, DETECTORS_VERSION, Detector};
 
 /// Rule ids, printed with every violation.
 pub mod rule {
@@ -75,6 +80,8 @@ pub struct Violation {
     pub line: Option<usize>,
     pub rule: &'static str,
     pub message: String,
+    /// For a secret match: the entry that would exempt it.
+    pub allow: Option<AllowEntry>,
 }
 
 impl Violation {
@@ -89,6 +96,21 @@ impl Violation {
             line,
             rule,
             message: message.into(),
+            allow: None,
+        }
+    }
+
+    /// A secret match that no `[[secrets.allow]]` entry covers.
+    fn secret(found: &secrets::Found) -> Self {
+        Violation {
+            path: found.path.clone(),
+            line: Some(found.line),
+            rule: found.rule,
+            message: format!(
+                "looks like a secret; fingerprint = \"{}\"",
+                found.fingerprint
+            ),
+            allow: Some(AllowEntry::for_match(found)),
         }
     }
 
@@ -122,12 +144,17 @@ pub fn exit_of(violations: &[Violation]) -> Exit {
 /// What a write command writes, and so what [`check`] validates.
 #[derive(Debug, Clone, Default)]
 pub struct Scope {
-    /// Files created or changed (repo-relative, e.g. `skills/pdf/SKILL.md`):
-    /// the per-file rules, including the frontmatter rules for a skill's `SKILL.md`.
+    /// Files created or changed (repo-relative, e.g. `skills/pdf/SKILL.md`,
+    /// `upstream/pdf/run.sh`, `instructions/shared.md`): the per-file rules,
+    /// including the frontmatter rules for a skill's `SKILL.md`, and the
+    /// secret rule.
     pub files: BTreeSet<String>,
     /// Skill folders (by name) checked as a whole: every file in them plus
     /// the folder rules (name, `SKILL.md` present, file count, total size).
     pub skills: BTreeSet<String>,
+    /// Upstream snapshots `upstream/<name>` written as a whole: the secret
+    /// rule on every file in them.
+    pub upstreams: BTreeSet<String>,
     /// `[skills.<name>]` tables of `skiman.toml` written.
     pub manifest_tables: BTreeSet<String>,
     /// The rest of `skiman.toml` written: top-level keys, `[tools]`, `[secrets]`.
@@ -146,12 +173,20 @@ impl Scope {
         let records = config::Records::read(tree)?;
         let skills = folder_names(tree, "skills")?;
         let mut consistency: BTreeSet<String> = skills.iter().cloned().collect();
-        consistency.extend(folder_names(tree, "upstream")?);
+        let upstreams = folder_names(tree, "upstream")?;
+        consistency.extend(upstreams.iter().cloned());
         consistency.extend(records.manifest_skills());
         consistency.extend(records.lock_skills());
+        let files = tree
+            .walk("instructions")?
+            .into_iter()
+            .filter(|e| matches!(e.kind, Kind::File { .. }) && !crate::tree::is_ignored(&e.path))
+            .map(|e| e.path)
+            .collect();
         Ok(Scope {
-            files: BTreeSet::new(),
+            files,
             skills,
+            upstreams,
             manifest_tables: records.manifest_skills(),
             manifest: true,
             lock_entries: records.lock_skills(),
@@ -176,21 +211,117 @@ pub fn check_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     check(tree, &Scope::all(tree)?)
 }
 
+/// What `skiman check` reports.
+#[derive(Debug, Default)]
+pub struct Report {
+    /// Every violation in the tree, sorted by path and line.
+    pub violations: Vec<Violation>,
+    /// `[[secrets.allow]]` entries that cover no match: listed, not violations.
+    pub unused_allows: Vec<UnusedAllow>,
+}
+
+/// A `[[secrets.allow]]` entry none of whose covered paths has its match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnusedAllow {
+    pub entry: AllowEntry,
+    /// Line of the entry in `skiman.toml`.
+    pub line: Option<usize>,
+}
+
+impl fmt::Display for UnusedAllow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{MANIFEST}")?;
+        if let Some(line) = self.line {
+            write!(f, ":{line}")?;
+        }
+        write!(
+            f,
+            ": unused secret exemption: no file it covers has a `{}` match with fingerprint {} \
+             (path = {}); delete the entry",
+            self.entry.rule,
+            self.entry.fingerprint,
+            toml_edit::Value::from(self.entry.path.as_str())
+        )
+    }
+}
+
+/// Every rule on everything in `tree`, plus the unused secret exemptions.
+pub fn check_repo(tree: &dyn Tree) -> io::Result<Report> {
+    let (violations, found, records) = run(tree, &Scope::all(tree)?)?;
+    let unused_allows = records
+        .secret_allows()
+        .into_iter()
+        .filter(|(entry, _)| !found.iter().any(|f| entry.covers(f)))
+        .map(|(entry, line)| UnusedAllow { entry, line })
+        .collect();
+    Ok(Report {
+        violations,
+        unused_allows,
+    })
+}
+
 /// The rules on what `scope` names, sorted by path and line.
 pub fn check(tree: &dyn Tree, scope: &Scope) -> io::Result<Vec<Violation>> {
+    Ok(run(tree, scope)?.0)
+}
+
+/// The violations, every secret match (exempted or not) and the config records.
+fn run(
+    tree: &dyn Tree,
+    scope: &Scope,
+) -> io::Result<(Vec<Violation>, Vec<secrets::Found>, config::Records)> {
     let mut out = BTreeSet::new();
+    let mut found = Vec::new();
     for name in &scope.skills {
-        skill::check_skill(tree, name, &mut out)?;
+        skill::check_skill(tree, name, &mut out, &mut found)?;
     }
     for path in &scope.files {
-        if tree.kind(path)?.is_some() {
-            skill::check_written_file(tree, path, &mut out)?;
+        match tree.kind(path)? {
+            None => {}
+            Some(_) if path.starts_with("skills/") => {
+                skill::check_written_file(tree, path, &mut out, &mut found)?;
+            }
+            Some(Kind::File { .. })
+                if path.starts_with("upstream/") || path.starts_with("instructions/") =>
+            {
+                secrets::scan(path, &tree.read(path)?, &mut found);
+            }
+            Some(_) => {}
+        }
+    }
+    for name in &scope.upstreams {
+        for entry in tree.walk(&format!("upstream/{name}"))? {
+            if matches!(entry.kind, Kind::File { .. }) && !crate::tree::is_ignored(&entry.path) {
+                secrets::scan(&entry.path, &tree.read(&entry.path)?, &mut found);
+            }
         }
     }
     let records = config::Records::read(tree)?;
     records.check(scope, &mut out);
     consistency::check(tree, &records, &scope.consistency, &mut out)?;
-    Ok(out.into_iter().collect())
+    let allows = records.secret_allows();
+    for f in &found {
+        if !allows.iter().any(|(entry, _)| entry.covers(f)) {
+            out.insert(Violation::secret(f));
+        }
+    }
+    Ok((out.into_iter().collect(), found, records))
+}
+
+/// The ready-to-paste `[[secrets.allow]]` entries for the secret violations
+/// in `violations` (one per distinct entry), with a line saying what they
+/// are for; `None` when there are none.
+pub fn allow_hint(violations: &[Violation]) -> Option<String> {
+    let entries: BTreeSet<&AllowEntry> =
+        violations.iter().filter_map(|v| v.allow.as_ref()).collect();
+    if entries.is_empty() {
+        return None;
+    }
+    let blocks: Vec<String> = entries.iter().map(|e| e.to_string()).collect();
+    Some(format!(
+        "If a match is not a real secret, add its entry to {MANIFEST}:\n\n{}",
+        blocks.join("\n\n")
+    ))
 }
 
 /// `true` when `kind` is a regular file within the per-file size limit, so
@@ -209,10 +340,15 @@ pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
     let blocking = check(tree, scope).map_err(io)?;
     if !blocking.is_empty() {
         let lines: Vec<String> = blocking.iter().map(|v| format!("  {v}")).collect();
-        return Err(Failure::refused(format!(
+        let mut message = format!(
             "refusing to write content that breaks the rules:\n{}",
             lines.join("\n")
-        )));
+        );
+        if let Some(hint) = allow_hint(&blocking) {
+            message.push_str("\n\n");
+            message.push_str(&hint);
+        }
+        return Err(Failure::refused(message));
     }
     for violation in check_all(tree).map_err(io)? {
         eprintln!("warning: {violation}");

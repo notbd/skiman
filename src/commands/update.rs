@@ -779,8 +779,9 @@ fn changes(ours: &Snapshot, merged: &Snapshot) -> Vec<(Change, String)> {
 /// size rules; the lock entry and Consistency for the skill. Violations
 /// elsewhere, including the other rules on files the merge did not change,
 /// are warnings. The conflict representation is excused: unresolved-conflict
-/// violations in the skill, and the frontmatter rules on a `SKILL.md` whose
-/// markers start inside its frontmatter.
+/// violations in the skill, the frontmatter rules on a `SKILL.md` whose
+/// markers start inside its frontmatter, and a missing `SKILL.md` when the
+/// local side deleted it and upstream's version is in the conflict record.
 fn validate(
     repo: &SkillRepo,
     name: &str,
@@ -833,13 +834,17 @@ fn validate(
                 .file("SKILL.md")
                 .is_some_and(|f| markers_in_frontmatter(&f.content))
     });
+    let skill_md_upstream = conflicts
+        .iter()
+        .any(|c| matches!(c.kind, ConflictKind::UpstreamVersion { .. }) && c.path == "SKILL.md");
     let inside = format!("{skill}/");
     let excused = |v: &Violation| {
-        v.path.starts_with(&inside)
-            && (v.rule == rule::UNRESOLVED_CONFLICT
-                || (frontmatter_markers
-                    && v.path == skill_md
-                    && FRONTMATTER_RULES.contains(&v.rule)))
+        (skill_md_upstream && v.rule == rule::SKILL_MD && v.path == skill)
+            || (v.path.starts_with(&inside)
+                && (v.rule == rule::UNRESOLVED_CONFLICT
+                    || (frontmatter_markers
+                        && v.path == skill_md
+                        && FRONTMATTER_RULES.contains(&v.rule))))
     };
     rules::validate_write_except(&candidate, &scope, &excused)
 }

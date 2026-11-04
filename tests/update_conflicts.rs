@@ -581,6 +581,37 @@ fn an_update_that_leaves_no_skill_md_is_refused() {
     );
 }
 
+#[test]
+fn a_skill_md_i_deleted_and_upstream_changed_comes_back_only_as_a_record() {
+    let theirs = skill_md("Fill PDF forms", "# their pdf\n");
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    std::fs::remove_file(skill(&sandbox).join("SKILL.md")).unwrap();
+    up.write("SKILL.md", &theirs);
+    let commit = up.commit("v2");
+    let assert = sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(3)
+        .stderr_eq(
+            "warning: skill folder [..]/skills/pdf is not distributed: it holds no SKILL.md\n",
+        );
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    // The links go too: a skill folder without SKILL.md is not distributed.
+    assert_eq!(
+        conflict_list(&stdout)[0],
+        "  SKILL.md: upstream's version is in SKILL.md.skiman-upstream"
+    );
+    assert!(!skill(&sandbox).join("SKILL.md").exists());
+    assert_eq!(
+        read(skill(&sandbox).join("SKILL.md.skiman-upstream")),
+        theirs.as_bytes()
+    );
+    let lock = String::from_utf8(read(sandbox.skill_repo().join("skiman.lock"))).unwrap();
+    assert!(lock.contains(&format!("commit = \"{commit}\"")), "{lock}");
+}
+
 /// What the new upstream gains, and a word its refusal names.
 type UpstreamChange<'a> = (&'a str, &'a dyn Fn(&Upstream));
 

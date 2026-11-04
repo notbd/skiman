@@ -77,6 +77,12 @@ impl Backup {
         })
     }
 
+    /// The backup folder `dir` an earlier run created (a resumed import
+    /// keeps using its own).
+    pub fn existing(dir: PathBuf) -> Backup {
+        Backup { dir }
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }

@@ -1,13 +1,13 @@
 //! The record of an import in progress, in machine state (spec Import):
 //! `<state dir>/import/record.toml`, plus the temporary area
-//! `<state dir>/import/area/` holding the built `upstream/` and
-//! `skiman.lock` until the import finishes.
+//! `<state dir>/import/area/` holding the built `upstream/`, `skiman.lock`
+//! and `skiman.toml` until the import finishes.
 //!
 //! `skiman import` writes the record once the user confirms, before it
 //! writes anything into the skill repo, and updates each location's state
 //! as it takes the location over. A finished import keeps its record with
 //! `status = "finished"`; its area is removed. Resuming an import that
-//! stopped part-way reads this record (#20).
+//! stopped part-way reads this record and writes from the area.
 //!
 //! Hashes: a skill or snapshot folder is its tree hash; a single file is
 //! `sha256:<hex of its content>`; an absent key means the file was absent.
@@ -33,7 +33,8 @@ pub fn file(paths: &Paths) -> PathBuf {
     dir(paths).join("record.toml")
 }
 
-/// `<state dir>/import/area/`: `upstream/<name>/` and `skiman.lock` as fetched.
+/// `<state dir>/import/area/`: `upstream/<name>/`, `skiman.lock` and
+/// `skiman.toml` as built.
 pub fn area(paths: &Paths) -> PathBuf {
     dir(paths).join("area")
 }

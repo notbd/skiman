@@ -1,7 +1,7 @@
 //! `skiman init <path>`: create or reuse a skill repo, write the user config,
 //! then sync. When the user config pointed to another skill repo, that sync
-//! treats the previous repo's links as owned. Git hooks are #8;
-//! session-start entries are #9.
+//! treats the previous repo's links as owned. Before that sync it installs the
+//! git hooks; session-start entries are #9.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -14,6 +14,7 @@ use crate::commands::has_terminal;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::fsutil::absolute_lexical;
+use crate::git_hooks;
 use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -60,11 +61,13 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         .ok()
         .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
         .filter(|previous| previous != repo.root());
+    let binary = invoked_binary(&cwd);
     UserConfig {
         repo: path,
-        binary: invoked_binary(&cwd),
+        binary: binary.clone(),
     }
     .save(&paths)?;
+    install_git_hooks(&repo, &binary)?;
     let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo);
     let foreign = report
         .items
@@ -80,6 +83,39 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         );
     }
     Ok(exit)
+}
+
+/// Installs the git hooks and tells the user what to add by hand where
+/// skiman left a hook alone.
+fn install_git_hooks(repo: &SkillRepo, binary: &Path) -> Result<(), Failure> {
+    let installed = git_hooks::install(repo.root(), binary)?;
+    if installed.not_a_git_repo {
+        eprintln!(
+            "warning: {} is not in a git repository, so skiman installed no git hooks; run `git init` there, then `skiman init` again",
+            repo.root().display()
+        );
+    }
+    for path in &installed.written {
+        println!("installed git hook {}", path.display());
+    }
+    for path in &installed.foreign {
+        let name = path.file_name().expect("hook has a name").to_string_lossy();
+        eprintln!(
+            "warning: {} is not skiman's git hook, so skiman left it unchanged; add this line to it:\n  {}",
+            path.display(),
+            git_hooks::line_to_add(&name, binary)
+        );
+    }
+    if let Some(dir) = &installed.hooks_path_elsewhere {
+        eprintln!(
+            "warning: core.hooksPath points to {}, so skiman installed no git hooks; add these lines to the hooks there:",
+            dir.display()
+        );
+        for name in git_hooks::hook_names() {
+            eprintln!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
+        }
+    }
+    Ok(())
 }
 
 /// Whether any folder under `skills/` holds a `SKILL.md`.

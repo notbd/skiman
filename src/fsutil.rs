@@ -1,6 +1,7 @@
 //! Small filesystem helpers: writes that appear in one step, and lexical paths.
 
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 
 /// A temporary name next to `path` (same directory, so a rename stays on one
@@ -20,6 +21,18 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     std::fs::rename(&tmp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
+}
+
+/// Like [`write_atomic`], with mode `0o755`, so `path` is never seen without its execute bits.
+pub fn write_atomic_executable(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let tmp = temporary_sibling(path);
+    let result = std::fs::write(&tmp, contents)
+        .and_then(|()| std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// Creates a symlink at `link` pointing to `target` under a temporary name in

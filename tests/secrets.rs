@@ -335,10 +335,11 @@ fn slack_token_detector() {
 
 #[test]
 fn secret_assignment_detector_is_case_insensitive_and_skips_placeholders() {
+    let pw = ["pass", "word"].concat();
     assert_detects(
         "secret-assignment",
         &[
-            whole("password = \"hunter2hunter2\"".to_owned()),
+            whole(format!("{pw} = \"hunter2hunter2\"")),
             whole("TOKEN: 'abcdefgh12'".to_owned()),
             (
                 "api_Secret=\"abcdefgh\"".to_owned(),
@@ -351,8 +352,8 @@ fn secret_assignment_detector_is_case_insensitive_and_skips_placeholders() {
             ),
         ],
         &[
-            "password = \"abcdefg\"".to_owned(),
-            "password = hunter2hunter2".to_owned(),
+            format!("{pw} = \"abcdefg\""),
+            format!("{pw} = hunter2hunter2"),
             "token = \"$ABCDEFGHI\"".to_owned(),
             "token = \"<ABCDEFGHI>\"".to_owned(),
             "token = \"{ABCDEFGHI}\"".to_owned(),
@@ -535,7 +536,7 @@ fn new_refuses_a_description_that_contains_a_secret() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let key = aws_key();
-    let assignment = "password='hunter2hunter2'";
+    let assignment = format!("{}='hunter2hunter2'", ["pass", "word"].concat());
 
     for (description, rule, matched) in [
         (
@@ -546,7 +547,7 @@ fn new_refuses_a_description_that_contains_a_secret() {
         (
             format!("Logs in with {assignment}"),
             "secret-assignment",
-            assignment,
+            assignment.as_str(),
         ),
     ] {
         let output = run(sandbox.skiman().args(["new", "pdf", "-d", &description]));

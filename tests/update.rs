@@ -589,3 +589,50 @@ fn a_conflicting_update_changes_nothing() {
 
     assert_eq!(skill_repo_tree(&sandbox), before);
 }
+
+/// Both records are read leniently since #21 (`list` shows a damaged table);
+/// `update` refuses a source table without `url` and a lock entry without
+/// `snapshot`, before fetching.
+#[test]
+fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    up.write("forms.md", lines(&[(5, "theirs")]));
+    up.commit("v2");
+    let repo = sandbox.skill_repo();
+    let manifest = read(repo.join("skiman.toml"));
+    let lock = read(repo.join("skiman.lock"));
+
+    let without = |text: &str, key: &str| -> String {
+        let kept: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.starts_with(&format!("{key} =")))
+            .collect();
+        assert_ne!(kept.len(), text.lines().count(), "no `{key}` in:\n{text}");
+        kept.join("\n") + "\n"
+    };
+    write(repo.join("skiman.toml"), &without(&manifest, "url"));
+    let before = skill_repo_tree(&sandbox);
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(
+            "error: skill pdf: [skills.pdf.source] in skiman.toml has no `url`; run `skiman check`\n",
+        );
+    assert_eq!(skill_repo_tree(&sandbox), before);
+
+    write(repo.join("skiman.toml"), &manifest);
+    write(repo.join("skiman.lock"), &without(&lock, "snapshot"));
+    let before = skill_repo_tree(&sandbox);
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq("error: skill pdf: pdf has no entry in skiman.lock; run `skiman check`\n");
+    assert_eq!(skill_repo_tree(&sandbox), before);
+}

@@ -47,12 +47,7 @@ impl Snapshot {
         let mut snapshot = Snapshot::default();
         let mut blobs = Vec::new();
         for record in listing.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-            let entry = Entry::parse(record).ok_or_else(|| {
-                Failure::operational(format!(
-                    "unexpected `git ls-tree` output: {}",
-                    String::from_utf8_lossy(record)
-                ))
-            })?;
+            let entry = Entry::parse(record, cache.url())?;
             check_path(&entry.path, cache.url())?;
             match entry.mode.as_str() {
                 "040000" => {}
@@ -96,15 +91,35 @@ struct Entry {
 
 impl Entry {
     /// `<mode> SP <type> SP <oid> TAB <path>`; the path is verbatim with `-z`.
-    fn parse(record: &[u8]) -> Option<Entry> {
-        let tab = record.iter().position(|b| *b == b'\t')?;
-        let head = std::str::from_utf8(&record[..tab]).ok()?;
+    /// A path that is not UTF-8 is refused (exit 1).
+    fn parse(record: &[u8], url: &str) -> Result<Entry, Failure> {
+        let unexpected = || {
+            Failure::operational(format!(
+                "unexpected `git ls-tree` output: {}",
+                String::from_utf8_lossy(record)
+            ))
+        };
+        let tab = record
+            .iter()
+            .position(|b| *b == b'\t')
+            .ok_or_else(unexpected)?;
+        let head = std::str::from_utf8(&record[..tab]).map_err(|_| unexpected())?;
         let mut fields = head.split(' ');
-        let mode = fields.next()?.to_owned();
-        let _kind = fields.next()?;
-        let oid = fields.next()?.to_owned();
-        let path = String::from_utf8(record[tab + 1..].to_vec()).ok()?;
-        Some(Entry { mode, oid, path })
+        let (Some(mode), Some(_kind), Some(oid)) = (fields.next(), fields.next(), fields.next())
+        else {
+            return Err(unexpected());
+        };
+        let path = String::from_utf8(record[tab + 1..].to_vec()).map_err(|e| {
+            Failure::refused(format!(
+                "{url} holds a path that is not valid UTF-8: {:?}",
+                String::from_utf8_lossy(e.as_bytes())
+            ))
+        })?;
+        Ok(Entry {
+            mode: mode.to_owned(),
+            oid: oid.to_owned(),
+            path,
+        })
     }
 }
 

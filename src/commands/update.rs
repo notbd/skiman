@@ -40,6 +40,7 @@ use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
+use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind, check_url};
 use crate::staging::{self, Staging};
@@ -57,7 +58,8 @@ struct Context {
     repo: SkillRepo,
     lock: RepoLock,
     prompts: Prompts,
-    /// The command's `tmp/<timestamp>/`, begun when the first skill needs a merge.
+    /// The command's `tmp/<timestamp>/`, begun before the first skill writes
+    /// (a merge or a records-only advance), so tmp leftovers move first.
     staging: Option<Staging>,
 }
 
@@ -244,8 +246,8 @@ struct Target {
     snapshot: Snapshot,
     /// The new lock entry.
     entry: LockEntry,
-    /// `skiman.toml` with the new `source.ref` and `ref_kind`; `None` when
-    /// they stay the same.
+    /// `skiman.toml` with the new `source.ref`, `ref_kind` and
+    /// `upstream_name`; `None` when they stay the same.
     manifest_text: Option<String>,
     /// `  note: ...` lines printed after the skill's result.
     notes: Vec<String>,
@@ -273,14 +275,17 @@ fn update_to(
     if target.entry.snapshot == current.entry.snapshot {
         if target.entry == current.entry && target.manifest_text.is_none() {
             println!("skill {name}: up to date at {}", target.version);
+            print_submodules(&target.snapshot);
             return Ok(Exit::Success);
         }
+        context.staging()?;
         let backup = advance_records(context, name, current, target)?;
         println!(
-            "skill {name}: now at {}; no file of the skill changed\nsaved the records of {name} to {}",
-            target.version,
-            backup.dir().display()
+            "skill {name}: now at {}; no file of the skill changed",
+            target.version
         );
+        print_submodules(&target.snapshot);
+        println!("saved the records of {name} to {}", backup.dir().display());
         return Ok(Exit::Success);
     }
 
@@ -292,6 +297,7 @@ fn update_to(
         Outcome::Clean(merged) => (merged, Vec::new()),
         Outcome::Conflicts { merged, conflicts } => (merged, conflicts),
     };
+    let merged = with_install_name(name, merged);
     let changes = changes(&ours, &merged);
     let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
         .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
@@ -324,6 +330,7 @@ fn update_to(
     for (change, path) in &changes {
         println!("  {} {path}", change.verb());
     }
+    print_submodules(&target.snapshot);
     let saved = if old_folders_saved {
         "the old folders and records"
     } else {
@@ -340,6 +347,13 @@ fn update_to(
         println!("  {}", describe(conflict));
     }
     Ok(Exit::NeedsAttention)
+}
+
+/// The snapshot's submodules, which are not fetched (as `add` lists them).
+fn print_submodules(snapshot: &Snapshot) {
+    for submodule in &snapshot.submodules {
+        println!("  {submodule}  [submodule, not fetched]");
+    }
 }
 
 /// One line of the conflict list, naming the file and its record.
@@ -390,11 +404,12 @@ fn fetch(
         git_ref: resolved.as_ref().map(|r| r.name.clone()),
         snapshot: snapshot.tree_hash(),
     };
+    let manifest_text = new_manifest_text(name, current, resolved.as_ref(), &snapshot)?;
     Ok(Target {
         version: commit,
         snapshot,
         entry,
-        manifest_text: new_manifest_text(name, current, resolved.as_ref())?,
+        manifest_text,
         notes,
     })
 }
@@ -473,30 +488,59 @@ fn fetch_local(
         git_ref: None,
         snapshot: snapshot.tree_hash(),
     };
+    let manifest_text = new_manifest_text(name, current, None, &snapshot)?;
     Ok(Target {
         version: entry.snapshot.clone(),
         snapshot,
         entry,
-        manifest_text: new_manifest_text(name, current, None)?,
+        manifest_text,
         notes: Vec::new(),
     })
 }
 
 /// `skiman.toml` with the skill's `source.ref` and `ref_kind` derived from
-/// `resolved` (both removed without one); `None` when nothing changes.
+/// `resolved` (both removed without one) and its `source.upstream_name`
+/// from the snapshot's `SKILL.md`; `None` when nothing changes.
 fn new_manifest_text(
     name: &str,
     current: &Current,
     resolved: Option<&ResolvedRef>,
+    snapshot: &Snapshot,
 ) -> Result<Option<String>, Failure> {
-    let text = manifest::with_source_ref(
+    let refused = |e: String| Failure::refused(format!("skiman.toml: {e}"));
+    let mut text = manifest::with_source_ref(
         &current.manifest_text,
         name,
         resolved.map(|r| r.name.as_str()),
         resolved.map(|r| r.kind.as_str()),
     )
-    .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
+    .map_err(refused)?;
+    if let Some(upstream_name) = upstream_name(snapshot) {
+        text = manifest::with_upstream_name(&text, name, &upstream_name).map_err(refused)?;
+    }
     Ok((text != current.manifest_text).then_some(text))
+}
+
+/// The frontmatter `name` of the snapshot's `SKILL.md`, when it has one.
+fn upstream_name(snapshot: &Snapshot) -> Option<String> {
+    let file = snapshot.file("SKILL.md")?;
+    let skill_md = SkillMd::parse_for_rename("SKILL.md", &file.content).ok()?;
+    skill_md.name().map(str::to_owned)
+}
+
+/// `merged` with its `SKILL.md` `name` line set back to the install name
+/// when the merge took another one from upstream (the same edit as `add`'s;
+/// a local modification). A `SKILL.md` that cannot be read is left to
+/// [`validate`].
+fn with_install_name(name: &str, mut merged: Snapshot) -> Snapshot {
+    if let Some(file) = merged.files.iter_mut().find(|f| f.path == "SKILL.md")
+        && let Ok(skill_md) = SkillMd::parse_for_rename("SKILL.md", &file.content)
+        && skill_md.name() != Some(name)
+        && let Ok(text) = skill_md.with_name(name)
+    {
+        file.content = text.into_bytes();
+    }
+    merged
 }
 
 /// Saves the skill's `skiman.toml` table and lock entry as
@@ -623,8 +667,8 @@ fn stopped(
     Failure::operational(message)
 }
 
-/// The skill's new `skiman.toml` (when its `source.ref` or `ref_kind`
-/// changes) and `skiman.lock` texts.
+/// The skill's new `skiman.toml` (when its `source.ref`, `ref_kind` or
+/// `upstream_name` changes) and `skiman.lock` texts.
 struct Records<'a> {
     manifest: Option<&'a str>,
     lock: &'a str,

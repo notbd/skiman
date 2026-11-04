@@ -57,13 +57,17 @@ A user-level directory an agent tool reads skills from, such as `~/.claude/skill
 _Avoid_: target, skill path, install dir
 
 **Distribution** (分发):
-Making every tool directory and global instruction file location reflect the skill repo.
-_Avoid_: publish, deploy, link, sync
+Making every tool directory and global instruction file location reflect the skill repo; the command that performs it is `skiman sync`.
+_Avoid_: publish, deploy, link
+
+**Managed elsewhere** (别的管理器管的):
+Content in a tool directory that another manager owns (a plugin system, claude.ai sync, a tool's bundled skills); skiman never touches it.
+_Avoid_: system skill, protected entry
 
 ### Bringing an existing setup in
 
 **Foreign skill** (外来 skill):
-A skill folder in a tool directory that skiman did not put there and that no other manager (a plugin system, claude.ai sync, a tool's bundled skills) owns.
+A skill folder in a tool directory that skiman does not own and that is not managed elsewhere.
 _Avoid_: stray skill, unmanaged skill, orphan
 
 **Import folder** (导入文件夹):

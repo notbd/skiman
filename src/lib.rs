@@ -16,6 +16,7 @@ pub mod ownership;
 pub mod paths;
 pub mod repo;
 pub mod repo_lock;
+pub mod reported;
 pub mod sync;
 pub mod tools;
 

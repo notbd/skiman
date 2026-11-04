@@ -1,0 +1,3 @@
+# Edit third-party skills in place; merge upstream updates three-way
+
+A third-party skill is edited directly in the skill repo like an own skill, and the repo also keeps a read-only upstream snapshot at the pinned version; local modifications are the diff between the two, and an update merges three-way (old snapshot, new upstream, current files) with conflicts left as standard conflict markers. Spec v8 instead kept the upstream copy as the only stored version, required opening an edit workspace, and stored local modifications as patch files applied at distribution time; that needed edit, patch, close, rebase and continue commands, while in-place editing costs only a second copy of a small folder.

@@ -130,7 +130,12 @@ fn run(command: snapbox::cmd::Command) -> std::process::Output {
 
 /// Runs `skiman check` and asserts that none of `secrets` appears in its output.
 fn check(sandbox: &Sandbox, secrets: &[&str]) -> Checked {
-    let output = run(sandbox.skiman().arg("check"));
+    check_with(sandbox, &[], secrets)
+}
+
+/// [`check`] with extra arguments (`--staged`).
+fn check_with(sandbox: &Sandbox, args: &[&str], secrets: &[&str]) -> Checked {
+    let output = run(sandbox.skiman().arg("check").args(args));
     let checked = Checked {
         code: output.status.code().unwrap(),
         stdout: String::from_utf8(output.stdout).unwrap(),
@@ -616,5 +621,63 @@ fn pre_commit_rejects_a_staged_secret_until_the_printed_entry_is_added() {
     assert_eq!(
         sandbox.git(&repo, ["show", "HEAD:skills/pdf/tests/fixture.env"]),
         format!("KEY={key}")
+    );
+}
+
+#[test]
+fn check_and_check_staged_apply_the_secret_and_shared_body_rules_to_their_own_tree() {
+    let sandbox = repo();
+    let key = aws_key();
+    let repo = sandbox.skill_repo();
+    // About 83 % of Antigravity's 24000-byte limit, with a secret on line 3
+    // and an `@` import on line 4.
+    let mut body = format!("# Shared\n\nkey {key}\n@imports/rules.md\n");
+    body.push_str(&("x".repeat(99) + "\n").repeat(200));
+    write(&sandbox, "instructions/shared.md", &body);
+    sandbox.git(&repo, ["add", "--all"]);
+    // The working tree has a clean shared body and an unused entry; neither is staged.
+    write(&sandbox, "instructions/shared.md", "# Shared\n");
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[[secrets.allow]]\npath = \"skills/pdf/gone.env\"\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n",
+    );
+
+    let checked = check(&sandbox, &[&key]);
+    assert_eq!(checked.code, 0, "{}", checked.stdout);
+    assert!(
+        checked.stdout.contains(": unused secret exemption: ")
+            && checked.stdout.lines().count() == 1,
+        "{}",
+        checked.stdout
+    );
+    assert_eq!(checked.stderr, "");
+
+    let staged = check_with(&sandbox, &["--staged"], &[&key]);
+    assert_eq!(staged.code, 1, "{}", staged.stdout);
+    assert_eq!(
+        reported(&staged.stdout, "instructions/shared.md"),
+        [(3, "aws-access-key".to_owned(), fingerprint(&key))]
+    );
+    assert!(
+        staged
+            .stdout
+            .contains("instructions/shared.md:4: at-import: `@imports/rules.md` "),
+        "{}",
+        staged.stdout
+    );
+    assert!(
+        !staged.stdout.contains("unused secret exemption"),
+        "{}",
+        staged.stdout
+    );
+    assert!(printed_entries(&staged.stdout).contains("path = \"instructions/shared.md\""));
+    assert!(
+        staged.stderr.starts_with(&format!(
+            "warning: instructions/shared.md: shared-body-size: {} bytes is at least 80 % of the limit of 24000 bytes",
+            body.len()
+        )),
+        "{}",
+        staged.stderr
     );
 }

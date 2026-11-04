@@ -44,7 +44,7 @@ fn an_edit_to_the_shared_body_is_visible_through_every_instruction_location() {
 }
 
 #[test]
-fn an_existing_regular_claude_md_stays_byte_identical_and_init_tells_the_user_to_move_it_away() {
+fn an_existing_regular_claude_md_stays_byte_identical_and_init_points_to_import() {
     let sandbox = Sandbox::new();
     let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
     std::fs::write(&claude_md, b"my own rules\n\xff").unwrap();
@@ -67,7 +67,7 @@ linked [..]/home/.gemini/GEMINI.md
 "#]])
         .stderr_eq(str![[r#"
 warning: instruction file [..]/home/.claude/CLAUDE.md is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`
-hint: move each instruction file listed above away by hand (copy what you want to keep into [..]/skill-repo/instructions/shared.md first), then run `skiman sync`
+hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)
 
 "#]]);
     assert_eq!(std::fs::read(&claude_md).unwrap(), b"my own rules\n\xff");

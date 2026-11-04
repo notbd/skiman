@@ -489,6 +489,7 @@ fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
+added .skiman/ to [..]/skill-repo/.gitignore
 installed git hook [..]/skill-repo/.git/hooks/pre-commit
 installed git hook [..]/skill-repo/.git/hooks/post-commit
 installed git hook [..]/skill-repo/.git/hooks/post-merge
@@ -534,7 +535,7 @@ fn init_with_a_foreign_skill_points_to_import_when_the_skill_repo_has_no_skills(
         .code(0)
         .stderr_eq(str![[r#"
 warning: foreign skill [..]/home/.claude/skills/theirs is not managed by skiman; bring it in with `skiman adopt theirs --from claude-code`
-hint: the tool directories hold foreign skills and the skill repo has none yet; bring your existing setup in with `skiman import` (see `skiman import --guide`)
+hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)
 
 "#]]);
 }

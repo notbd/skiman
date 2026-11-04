@@ -185,3 +185,43 @@ fn init_refuses_an_unknown_session_hooks_value_as_a_usage_error() {
 
     assert!(!sandbox.skill_repo().exists());
 }
+
+/// Spec Skill repo layout: `init` writes the `.gitignore` entry for
+/// `.skiman/`, also in a reused repo that lacks it; nothing else changes.
+#[test]
+fn init_on_a_reused_repo_adds_the_skiman_gitignore_entry_once() {
+    let sandbox = Sandbox::new();
+    let repo = sandbox.skill_repo();
+    std::fs::create_dir_all(&repo).unwrap();
+    let manifest = "[tools]\nenabled = []\n";
+    std::fs::write(repo.join("skiman.toml"), manifest).unwrap();
+    std::fs::write(repo.join(".gitignore"), "target").unwrap();
+    sandbox.git(&repo, ["init", "--quiet"]);
+    let init = || {
+        sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(&repo)
+            .assert()
+            .code(0)
+    };
+
+    init().stdout_eq(str![[r#"
+added .skiman/ to [..]/skill-repo/.gitignore
+...
+"#]]);
+    assert_eq!(read(repo.join(".gitignore")), "target\n.skiman/\n");
+    assert_eq!(read(repo.join("skiman.toml")), manifest);
+    assert_eq!(
+        sandbox.git(&repo, ["status", "--porcelain", "--untracked-files=all"]),
+        "?? .gitignore\n?? skiman.toml"
+    );
+
+    let out = init().get_output().stdout.clone();
+    assert!(!String::from_utf8_lossy(&out).contains("added .skiman/"));
+    assert_eq!(read(repo.join(".gitignore")), "target\n.skiman/\n");
+
+    std::fs::remove_file(repo.join(".gitignore")).unwrap();
+    init();
+    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+}

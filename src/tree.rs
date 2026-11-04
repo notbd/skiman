@@ -159,6 +159,8 @@ pub struct Overlay<'a> {
     base: &'a dyn Tree,
     files: Vec<(String, Vec<u8>)>,
     executable: BTreeSet<String>,
+    /// Folders of `base` whose content is hidden: only added files show there.
+    replaced: Vec<String>,
 }
 
 impl<'a> Overlay<'a> {
@@ -167,7 +169,25 @@ impl<'a> Overlay<'a> {
             base,
             files,
             executable: BTreeSet::new(),
+            replaced: Vec::new(),
         }
+    }
+
+    /// Hides everything `base` has at and below each of `dirs`, so those
+    /// folders hold exactly the added files below them (a folder written as
+    /// a whole, such as a merged skill replacing `skills/<name>`).
+    pub fn replacing(mut self, dirs: Vec<String>) -> Overlay<'a> {
+        self.replaced = dirs;
+        self
+    }
+
+    fn is_replaced(&self, path: &str) -> bool {
+        self.replaced.iter().any(|d| {
+            path == d
+                || path
+                    .strip_prefix(d.as_str())
+                    .is_some_and(|r| r.starts_with('/'))
+        })
     }
 
     /// Marks the added files at `paths` as executable.
@@ -203,11 +223,15 @@ impl Tree for Overlay<'_> {
         if self.is_added_dir(path) {
             return Ok(Some(Kind::Dir));
         }
+        if self.is_replaced(path) {
+            return Ok(None);
+        }
         self.base.kind(path)
     }
 
     fn walk(&self, dir: &str) -> io::Result<Vec<Entry>> {
         let mut out = self.base.walk(dir)?;
+        out.retain(|e| !self.is_replaced(&e.path));
         let inside =
             |p: &str| dir.is_empty() || p.strip_prefix(dir).is_some_and(|r| r.starts_with('/'));
         for (path, _) in &self.files {
@@ -241,6 +265,7 @@ impl Tree for Overlay<'_> {
     fn read(&self, path: &str) -> io::Result<Vec<u8>> {
         match self.file(path) {
             Some(content) => Ok(content.to_vec()),
+            None if self.is_replaced(path) => Err(io::ErrorKind::NotFound.into()),
             None => self.base.read(path),
         }
     }
@@ -262,16 +287,36 @@ pub fn tree_hash(tree: &dyn Tree, dir: &str) -> io::Result<String> {
             continue;
         }
         let content = Sha256::digest(tree.read(&entry.path)?);
-        hasher.update(&entry.path.as_bytes()[skip..]);
-        hasher.update(if executable {
-            b"\x001\x00"
-        } else {
-            b"\x000\x00"
-        });
-        hasher.update(hex(&content).as_bytes());
-        hasher.update(b"\n");
+        hash_file(&mut hasher, &entry.path[skip..], executable, &content);
     }
     Ok(format!("sha256:{}", hex(&hasher.finalize())))
+}
+
+/// [`tree_hash`] of files held in memory: `(path relative to the folder,
+/// executable, content)`, in any order. `.DS_Store` and `Thumbs.db` are skipped.
+pub fn files_hash<'a>(files: impl IntoIterator<Item = (&'a str, bool, &'a [u8])>) -> String {
+    let mut files: Vec<_> = files
+        .into_iter()
+        .filter(|(path, _, _)| !is_ignored(path))
+        .collect();
+    files.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let mut hasher = Sha256::new();
+    for (path, executable, content) in files {
+        hash_file(&mut hasher, path, executable, &Sha256::digest(content));
+    }
+    format!("sha256:{}", hex(&hasher.finalize()))
+}
+
+/// One file's line of the tree hash: `path \0 executable-bit \0 sha256(content) \n`.
+fn hash_file(hasher: &mut Sha256, path: &str, executable: bool, content_sha: &[u8]) {
+    hasher.update(path.as_bytes());
+    hasher.update(if executable {
+        b"\x001\x00"
+    } else {
+        b"\x000\x00"
+    });
+    hasher.update(hex(content_sha).as_bytes());
+    hasher.update(b"\n");
 }
 
 /// [`tree_hash`] of a folder on disk.

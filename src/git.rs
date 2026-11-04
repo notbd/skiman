@@ -4,8 +4,10 @@
 //! (a hook may set `GIT_DIR` or `GIT_INDEX_FILE`).
 //!
 //! [`fetch_command`] is the FETCH profile: the user's config stays in effect
-//! (credentials, SSH config, `insteadOf`). A profile for merging in a
-//! temporary repo (#14) drops the user's config as well.
+//! (credentials, SSH config, `insteadOf`). [`merge_command`] is the MERGE
+//! profile for the temporary merge repository: it drops the user's config,
+//! attributes and environment as well, so no merge driver, filter or hook of
+//! the user's can run and no setting changes the merge result.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -94,6 +96,40 @@ pub fn fetch_command(git_dir: &Path, prompts: Prompts) -> Command {
             "GIT_SSH_COMMAND",
             format!("{} -o BatchMode=yes", effective_ssh_command(git_dir)),
         );
+    }
+    cmd
+}
+
+/// Settings the MERGE profile adds: the user's global attributes file is not
+/// covered by `GIT_CONFIG_GLOBAL` (git-fetch-and-merge.md 1.3).
+const MERGE_CONFIG: &[&str] = &["core.attributesFile=/dev/null"];
+
+/// A git command in the MERGE profile on the temporary bare repository
+/// `git_dir`. Nothing is inherited from the environment except `PATH`;
+/// `HOME` and `XDG_CONFIG_HOME` point at `home` (a folder of the temporary
+/// merge area), global and system config are off, and commits get a fixed
+/// identity and date.
+pub fn merge_command(git_dir: &Path, home: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env_clear();
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.env("HOME", home)
+        .env("XDG_CONFIG_HOME", home)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_ATTR_NOSYSTEM", "1")
+        .env("GIT_DIR", git_dir)
+        .env("LC_ALL", "C");
+    for (who, value) in [("NAME", "skiman"), ("EMAIL", "skiman@invalid")] {
+        cmd.env(format!("GIT_AUTHOR_{who}"), value)
+            .env(format!("GIT_COMMITTER_{who}"), value);
+    }
+    cmd.env("GIT_AUTHOR_DATE", "@0 +0000")
+        .env("GIT_COMMITTER_DATE", "@0 +0000");
+    for setting in SAFE_CONFIG.iter().chain(MERGE_CONFIG) {
+        cmd.args(["-c", setting]);
     }
     cmd
 }

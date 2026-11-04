@@ -16,6 +16,7 @@ pub mod import_guide;
 pub mod lockfile;
 pub mod managing_skills;
 pub mod manifest;
+pub mod merge;
 pub mod names;
 pub mod ownership;
 pub mod paths;

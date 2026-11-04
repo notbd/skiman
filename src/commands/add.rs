@@ -318,10 +318,9 @@ fn candidate_files(install: &Install) -> Vec<(String, bool, Vec<u8>)> {
 
 /// The rules on everything `add` writes, before anything is written. The
 /// candidate output is complete here: every file of both folders is in
-/// `scope.files` (the skill also in `scope.skills`), plus the new source
-/// table and lock entry. The secret scan of the candidate output (#7) runs
-/// on `scope.files` inside `rules::check`; a separate scan entry point
-/// belongs here, on `candidate` and `scope.files`.
+/// `scope.files` (the skill also in `scope.skills`, the snapshot in
+/// `scope.upstreams`), plus the new source table and lock entry, so the
+/// secret rule scans the complete candidate output.
 fn validate(
     repo: &SkillRepo,
     install: &Install,
@@ -344,6 +343,7 @@ fn validate(
     let scope = Scope {
         files: files.iter().map(|(path, _, _)| path.clone()).collect(),
         skills: name.clone(),
+        upstreams: name.clone(),
         manifest_tables: name.clone(),
         lock_entries: name.clone(),
         lock: !records.lock_existed,

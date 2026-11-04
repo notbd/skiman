@@ -741,3 +741,69 @@ fn add_ignores_the_git_environment_of_a_calling_git_process() {
 
     assert!(sandbox.skill_repo().join("upstream/pdf/SKILL.md").is_file());
 }
+
+fn fingerprint(matched: &str) -> String {
+    format!("sha256:{}", hex(&Sha256::digest(matched.as_bytes())))
+}
+
+#[test]
+fn a_secret_in_the_upstream_is_refused_until_its_entry_is_added() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    // Assembled at runtime so the source never holds a secret-like value.
+    let key = ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat();
+    up.write(
+        "tests/fixture.env",
+        format!("# fixture\nAWS_ACCESS_KEY_ID={key}\n"),
+    );
+    up.commit("v2");
+    let before = world(&sandbox);
+
+    let output = sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        !stdout.contains(&key) && !stderr.contains(&key),
+        "{stdout}{stderr}"
+    );
+    let fp = fingerprint(&key);
+    let entry = format!(
+        "[[secrets.allow]]\npath = \"skills/pdf/tests/fixture.env\"\nrule = \"aws-access-key\"\nfingerprint = \"{fp}\"\n"
+    );
+    assert_eq!(
+        stderr,
+        format!(
+            "error: refusing to write content that breaks the rules:\n\
+             \x20 skills/pdf/tests/fixture.env:2: aws-access-key: looks like a secret; fingerprint = \"{fp}\"\n\
+             \x20 upstream/pdf/tests/fixture.env:2: aws-access-key: looks like a secret; fingerprint = \"{fp}\"\n\
+             \n\
+             If a match is not a real secret, add its entry to skiman.toml:\n\
+             \n\
+             {entry}"
+        )
+    );
+    assert_eq!(world(&sandbox), before);
+
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let mut text = read(&manifest);
+    text.push('\n');
+    text.push_str(&entry);
+    std::fs::write(&manifest, text).unwrap();
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+    assert!(
+        sandbox
+            .skill_repo()
+            .join("upstream/pdf/tests/fixture.env")
+            .is_file()
+    );
+}

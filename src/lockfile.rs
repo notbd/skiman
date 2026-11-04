@@ -33,6 +33,17 @@ impl Lockfile {
         Ok(Lockfile { doc })
     }
 
+    /// The entry of `name`, when it has one with a string `snapshot`.
+    pub fn entry(&self, name: &str) -> Option<LockEntry> {
+        let entry = self.doc.get("skills")?.get(name)?;
+        let field = |key| entry.get(key).and_then(Item::as_str).map(str::to_owned);
+        Some(LockEntry {
+            commit: field("commit"),
+            git_ref: field("ref"),
+            snapshot: field("snapshot")?,
+        })
+    }
+
     /// Names that have a `[skills.<name>]` entry.
     pub fn skill_names(&self) -> BTreeSet<String> {
         self.doc

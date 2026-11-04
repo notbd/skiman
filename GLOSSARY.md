@@ -71,5 +71,5 @@ A skill folder in a tool directory that skiman does not own and that is not mana
 _Avoid_: stray skill, unmanaged skill, orphan
 
 **Import folder** (导入文件夹):
-A folder an LLM prepares from an existing setup, laid out exactly like the skill repo should look after import; skiman checks it with its everyday rules and moves it into the skill repo.
+A folder an LLM prepares from an existing setup, laid out exactly like the skill repo should look after import; skiman checks it with its everyday rules and copies it into the skill repo.
 _Avoid_: import plan, manifest, staging area, migration script

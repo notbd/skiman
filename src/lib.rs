@@ -5,6 +5,7 @@ pub mod backup;
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod discovery;
 pub mod exit;
 pub mod failure;
 pub mod fetch;

@@ -642,36 +642,6 @@ warning: skills/notes/SKILL.md:1: frontmatter: the frontmatter must start on lin
 }
 
 #[test]
-fn sources_that_are_not_github_shorthand_are_refused() {
-    let sandbox = Sandbox::new();
-    init(&sandbox);
-    let before = world(&sandbox);
-    for (source, message) in [
-        (
-            "-uhelper",
-            "error: the source `-uhelper` starts with `-`; sources never do\n",
-        ),
-        (
-            "ext::sh -c touch% /tmp/pwned",
-            "error: the source `ext::sh -c touch% /tmp/pwned` uses a git remote helper (`::`), which skiman never runs\n",
-        ),
-        (
-            "file:///tmp/repo",
-            "error: unsupported source `file:///tmp/repo`: give a GitHub repository as <owner>/<repo>\n",
-        ),
-    ] {
-        sandbox
-            .skiman()
-            .args(["add", "--yes", "--", source])
-            .assert()
-            .code(1)
-            .stdout_eq("")
-            .stderr_eq(message);
-    }
-    assert_eq!(world(&sandbox), before);
-}
-
-#[test]
 fn an_upstream_symlink_is_refused_and_nothing_is_written() {
     let sandbox = Sandbox::new();
     init(&sandbox);

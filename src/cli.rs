@@ -37,11 +37,21 @@ pub enum Command {
     },
     /// Install a third-party skill
     Add {
-        /// Where the skill comes from: a GitHub repository as <owner>/<repo>
+        /// Where the skills come from: <owner>/<repo>, an https:// or ssh:// git URL,
+        /// user@host:path, a GitHub tree or blob URL, or a local folder (/, ~ or .)
         source: String,
-        /// Install name, when it must differ from the upstream name
+        /// Install the skill with this upstream name (repeatable)
+        #[arg(long = "skill", value_name = "NAME")]
+        skills: Vec<String>,
+        /// Install every skill the source holds
+        #[arg(long, conflicts_with = "skills")]
+        all: bool,
+        /// Install name, when it must differ from the upstream name (single skill only)
         #[arg(long)]
         name: Option<String>,
+        /// Branch, tag or full 40-hex commit to install instead of the default branch
+        #[arg(long = "ref", value_name = "REF")]
+        git_ref: Option<String>,
         /// Show the file list, then stop without writing anything
         #[arg(long)]
         dry_run: bool,
@@ -125,12 +135,18 @@ where
         Command::New { name, description } => commands::new::run(&name, description),
         Command::Add {
             source,
+            skills,
+            all,
             name,
+            git_ref,
             dry_run,
             yes,
         } => commands::add::run(commands::add::Args {
             source,
+            skills,
+            all,
             name,
+            git_ref,
             dry_run,
             yes,
         }),

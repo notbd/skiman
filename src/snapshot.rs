@@ -3,12 +3,13 @@
 //! filter, hook or attribute of the upstream can run.
 
 use std::io::{BufRead, BufReader, Read, Write};
+use std::path::Path;
 use std::process::Stdio;
 
 use crate::failure::Failure;
 use crate::fetch::Cache;
 use crate::git;
-use crate::tree::is_ignored;
+use crate::tree::{self, Kind, Tree, WorkingTree, is_ignored};
 
 /// One regular file of a snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,11 +36,7 @@ impl Snapshot {
 
     /// Reads folder `path` (`""` = the root) of `commit`, which must be in the cache.
     pub fn read(cache: &Cache, commit: &str, path: &str) -> Result<Snapshot, Failure> {
-        let treeish = if path.is_empty() {
-            format!("{commit}^{{tree}}")
-        } else {
-            format!("{commit}:{path}")
-        };
+        let treeish = treeish(commit, path);
         let mut ls = cache.git();
         ls.args(["ls-tree", "-r", "-t", "-z", "--full-tree", &treeish]);
         let listing = git::run(ls, &format!("listing {treeish} of {}", cache.url()))?;
@@ -80,6 +77,123 @@ impl Snapshot {
         }
         snapshot.files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(snapshot)
+    }
+}
+
+/// The paths of every file and symlink below folder `path` of `commit`
+/// (relative to it, names that are not UTF-8 converted lossily), without
+/// reading any content: what skill discovery looks at. A `path` that is not a
+/// folder at `commit` is refused (exit 1).
+pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<String>, Failure> {
+    let treeish = treeish(commit, path);
+    let mut kind = cache.git();
+    kind.args(["cat-file", "-t", &treeish]);
+    let is_tree = kind
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout == b"tree\n");
+    if !is_tree {
+        return Err(Failure::refused(format!(
+            "{} has no folder `{path}` at {commit}",
+            cache.url()
+        )));
+    }
+    let mut ls = cache.git();
+    ls.args(["ls-tree", "-r", "-z", "--full-tree", &treeish]);
+    let listing = git::run(ls, &format!("listing {treeish} of {}", cache.url()))?;
+    Ok(listing
+        .split(|b| *b == 0)
+        .filter(|record| !record.starts_with(b"160000 "))
+        .filter_map(|record| {
+            let tab = record.iter().position(|b| *b == b'\t')?;
+            Some(String::from_utf8_lossy(&record[tab + 1..]).into_owned())
+        })
+        .collect())
+}
+
+/// The contents of the files at `paths` (relative to the root of `commit`).
+pub fn read_files(cache: &Cache, commit: &str, paths: &[String]) -> Result<Vec<Vec<u8>>, Failure> {
+    let names: Vec<String> = paths.iter().map(|p| format!("{commit}:{p}")).collect();
+    cat_blobs(cache, names.iter().map(String::as_str))
+}
+
+/// The paths of every non-folder entry below the local folder `dir`,
+/// skipping `.git` at any depth. A missing `dir` is refused (exit 1).
+pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
+    Ok(walk_local(dir)?.into_iter().map(|e| e.path).collect())
+}
+
+/// Every entry below the local folder `dir` except folders and `.git`.
+fn walk_local(dir: &Path) -> Result<Vec<tree::Entry>, Failure> {
+    if !dir.is_dir() {
+        return Err(Failure::refused(format!(
+            "the local folder {} does not exist",
+            dir.display()
+        )));
+    }
+    let entries = WorkingTree::new(dir)
+        .walk("")
+        .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))?;
+    Ok(entries
+        .into_iter()
+        .filter(|e| e.kind != Kind::Dir)
+        .filter(|e| !e.path.split('/').any(|c| c.eq_ignore_ascii_case(".git")))
+        .collect())
+}
+
+impl Snapshot {
+    /// Reads the local folder `dir` as it is now, without `.git`. Symlinks,
+    /// special files and names that are not UTF-8 are refused (exit 1).
+    pub fn read_local(dir: &Path) -> Result<Snapshot, Failure> {
+        let label = dir.display().to_string();
+        let working_tree = WorkingTree::new(dir);
+        let mut snapshot = Snapshot::default();
+        for entry in walk_local(dir)? {
+            if entry.path.contains('\u{FFFD}') {
+                return Err(Failure::refused(format!(
+                    "{label} holds a path that is not valid UTF-8: {:?}",
+                    entry.path
+                )));
+            }
+            check_path(&entry.path, &label)?;
+            match entry.kind {
+                Kind::File { .. } if is_ignored(&entry.path) => {}
+                Kind::File { executable, .. } => {
+                    let content = working_tree.read(&entry.path).map_err(|e| {
+                        Failure::operational(format!(
+                            "cannot read {}: {e}",
+                            working_tree.path(&entry.path).display()
+                        ))
+                    })?;
+                    snapshot.files.push(SnapshotFile {
+                        path: entry.path,
+                        executable,
+                        content,
+                    });
+                }
+                Kind::Symlink => {
+                    return Err(Failure::refused(format!(
+                        "{label} holds a symlink at {}; symlinks are not allowed in skills",
+                        entry.path
+                    )));
+                }
+                Kind::Dir | Kind::Special => {
+                    return Err(Failure::refused(format!(
+                        "{label} holds {}, which is not a regular file (a FIFO, socket or device)",
+                        entry.path
+                    )));
+                }
+            }
+        }
+        snapshot.files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(snapshot)
+    }
+}
+
+fn treeish(commit: &str, path: &str) -> String {
+    if path.is_empty() {
+        format!("{commit}^{{tree}}")
+    } else {
+        format!("{commit}:{path}")
     }
 }
 

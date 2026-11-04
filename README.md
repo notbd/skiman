@@ -47,13 +47,20 @@ confirmed; see [docs/phase1-results.md](docs/phase1-results.md).
 
 1. Run `skiman --version`.
 2. Try `skiman init` in a throwaway home, so your real agent tools stay
-   untouched:
+   untouched (the parentheses keep your shell's `HOME` as it is):
 
    ```sh
-   export HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_STATE_HOME=
-   skiman init "$HOME/skills" --session-hooks none
-   skiman doctor
+   (
+     export HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_STATE_HOME=
+     mkdir "$HOME/.claude"
+     skiman init "$HOME/skills" --session-hooks none
+     skiman doctor
+     ls -l "$HOME/.claude/skills"
+   )
    ```
+
+   `doctor` reports the skill repo and Claude Code as installed, and
+   `~/.claude/skills/managing-skills` is a link into the skill repo.
 
    Or run `skiman init <path> --session-hooks none` on a real skill repo path,
    then `skiman doctor`.

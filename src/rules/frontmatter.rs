@@ -151,7 +151,7 @@ fn is_delimiter(line: &str) -> bool {
 }
 
 /// The YAML between the `---` on line 1 and the next `---` line.
-fn split(text: &str) -> Option<&str> {
+pub(crate) fn split(text: &str) -> Option<&str> {
     let mut lines = text.split_inclusive('\n');
     if !is_delimiter(lines.next()?.trim_end_matches('\n')) {
         return None;

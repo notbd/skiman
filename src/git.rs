@@ -1,0 +1,122 @@
+//! Running git safely (spec Source fetching): never through a shell, with
+//! `--` before URLs and paths, with protocols that run commands and hooks
+//! switched off, and without the git environment of a calling git process
+//! (a hook may set `GIT_DIR` or `GIT_INDEX_FILE`).
+//!
+//! [`fetch_command`] is the FETCH profile: the user's config stays in effect
+//! (credentials, SSH config, `insteadOf`). A profile for merging in a
+//! temporary repo (#14) drops the user's config as well.
+
+use std::path::Path;
+use std::process::{Command, Output};
+
+use crate::failure::Failure;
+
+/// `-c` settings every git call gets: no `ext::`/`fd::` transports, no hooks,
+/// no fsmonitor, and no background maintenance in the cache.
+const SAFE_CONFIG: &[&str] = &[
+    "protocol.ext.allow=never",
+    "protocol.fd.allow=never",
+    "core.hooksPath=/dev/null",
+    "core.fsmonitor=false",
+    "gc.auto=0",
+    "maintenance.auto=false",
+];
+
+/// Variables of a calling git process that would point git at another
+/// repository, index or object store (`git rev-parse --local-env-vars`,
+/// minus the command-scope config variables, which are user config).
+const LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// How git may ask for credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Prompts {
+    /// A terminal is attached: git and ssh may prompt.
+    Allowed,
+    /// No terminal: fail instead of waiting for an answer
+    /// (`GIT_TERMINAL_PROMPT=0`, ssh `BatchMode=yes`, no askpass).
+    Never,
+}
+
+/// A git command in the FETCH profile on the bare repository `git_dir`.
+pub fn fetch_command(git_dir: &Path, prompts: Prompts) -> Command {
+    let mut cmd = Command::new("git");
+    for var in LOCAL_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd.env("GIT_DIR", git_dir);
+    for setting in SAFE_CONFIG {
+        cmd.args(["-c", setting]);
+    }
+    if prompts == Prompts::Never {
+        cmd.args(["-c", "credential.interactive=false"]);
+        cmd.env("GIT_TERMINAL_PROMPT", "0");
+        cmd.env(
+            "GIT_SSH_COMMAND",
+            format!("{} -o BatchMode=yes", effective_ssh_command(git_dir)),
+        );
+    }
+    cmd
+}
+
+/// The ssh command git would use, in git's own order: `GIT_SSH_COMMAND`,
+/// `core.sshCommand`, `GIT_SSH` (a program path, quoted for the shell git
+/// runs `GIT_SSH_COMMAND` with), then `ssh`.
+fn effective_ssh_command(git_dir: &Path) -> String {
+    if let Some(command) = std::env::var_os("GIT_SSH_COMMAND").filter(|c| !c.is_empty()) {
+        return command.to_string_lossy().into_owned();
+    }
+    let mut config = Command::new("git");
+    for var in LOCAL_ENV_VARS {
+        config.env_remove(var);
+    }
+    config
+        .env("GIT_DIR", git_dir)
+        .args(["config", "--get", "core.sshCommand"]);
+    if let Ok(output) = config.output()
+        && output.status.success()
+    {
+        let command = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        if !command.is_empty() {
+            return command;
+        }
+    }
+    if let Some(program) = std::env::var_os("GIT_SSH").filter(|p| !p.is_empty()) {
+        return format!("'{}'", program.to_string_lossy().replace('\'', r"'\''"));
+    }
+    "ssh".to_owned()
+}
+
+/// Runs `cmd`; a failure to start git or a non-zero exit is an operational
+/// error (exit 4) naming `what` and quoting git's message.
+pub fn run(mut cmd: Command, what: &str) -> Result<Vec<u8>, Failure> {
+    let output = cmd
+        .output()
+        .map_err(|e| Failure::operational(format!("cannot run git (skiman requires git): {e}")))?;
+    check(&output, what)?;
+    Ok(output.stdout)
+}
+
+fn check(output: &Output, what: &str) -> Result<(), Failure> {
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(Failure::operational(format!(
+        "{what} failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
+}

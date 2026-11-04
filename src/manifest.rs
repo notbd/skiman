@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use toml_edit::{DocumentMut, Item};
+use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::failure::Failure;
 use crate::repo::SkillRepo;
@@ -68,4 +68,49 @@ impl Manifest {
 pub fn new_manifest_text(enabled_tools: &[&str]) -> String {
     let ids: Vec<String> = enabled_tools.iter().map(|id| format!("\"{id}\"")).collect();
     format!("[tools]\nenabled = [{}]\n", ids.join(", "))
+}
+
+/// The `[skills.<name>.source]` table of a third-party skill (spec Data formats).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRecord {
+    pub url: String,
+    pub path: String,
+    pub git_ref: Option<String>,
+    pub ref_kind: Option<&'static str>,
+    pub upstream_name: Option<String>,
+}
+
+/// `text` (a `skiman.toml`) with a new `[skills.<name>.source]` table added.
+/// Everything else keeps its bytes: comments, layout and key order.
+pub fn with_source(text: &str, name: &str, source: &SourceRecord) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    let mut table = Table::new();
+    table.insert("url", value(&source.url));
+    table.insert("path", value(&source.path));
+    if let Some(git_ref) = &source.git_ref {
+        table.insert("ref", value(git_ref));
+    }
+    if let Some(kind) = source.ref_kind {
+        table.insert("ref_kind", value(kind));
+    }
+    if let Some(upstream_name) = &source.upstream_name {
+        table.insert("upstream_name", value(upstream_name));
+    }
+    table.decor_mut().set_prefix("\n");
+    let skill = subtable(doc.as_table_mut(), "skills")
+        .and_then(|skills| subtable(skills, name))
+        .ok_or_else(|| format!("[skills.{name}] is not a table"))?;
+    skill.insert("source", Item::Table(table));
+    Ok(doc.to_string())
+}
+
+/// The table `key` of `parent`, created as an implicit table (no header of
+/// its own) when missing; `None` when `key` holds something else.
+pub(crate) fn subtable<'a>(parent: &'a mut Table, key: &str) -> Option<&'a mut Table> {
+    let item = parent.entry(key).or_insert_with(|| {
+        let mut table = Table::new();
+        table.set_implicit(true);
+        Item::Table(table)
+    });
+    item.as_table_mut()
 }

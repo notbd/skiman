@@ -73,6 +73,11 @@ impl SkillRepo {
         self.local_dir().join("lock")
     }
 
+    /// `.skiman/tmp/`: staging for write commands (`crate::staging`).
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.local_dir().join("tmp")
+    }
+
     /// `.skiman/managing-skills`: the materialised `managing-skills` skill.
     pub fn managing_skills_dir(&self) -> PathBuf {
         self.local_dir().join("managing-skills")

@@ -18,6 +18,7 @@ pub mod managing_skills;
 pub mod manifest;
 pub mod names;
 pub mod ownership;
+pub mod path_safety;
 pub mod paths;
 pub mod repo;
 pub mod repo_lock;

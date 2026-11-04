@@ -1,0 +1,15 @@
+[package]
+name = "skiman"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+description = "Keeps agent skills and global instruction files in one git repo and distributes them to every agent tool"
+publish = false
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+
+[dev-dependencies]
+rexpect = "0.7"
+snapbox = { version = "1.2", features = ["cmd"] }
+tempfile = "3.27"

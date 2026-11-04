@@ -68,6 +68,9 @@ pub enum Command {
     Update {
         /// Skills to update; without names, every third-party skill
         names: Vec<String>,
+        /// Move the skill to this branch, tag or full 40-hex commit (single skill only)
+        #[arg(long = "ref", value_name = "REF")]
+        git_ref: Option<String>,
     },
     /// Remove a skill: its folders go to a backup, its records and links are removed
     Remove {
@@ -194,7 +197,7 @@ where
             yes,
         }),
         Command::Diff { name } => commands::diff::run(&name),
-        Command::Update { names } => commands::update::run(names),
+        Command::Update { names, git_ref } => commands::update::run(names, git_ref),
         Command::Remove { name, yes } => commands::remove::run(&name, yes),
         Command::Mv { old, new } => commands::mv::run(&old, &new),
         Command::Adopt { name, from, yes } => commands::adopt::run(&name, &from, yes),

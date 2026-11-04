@@ -7,6 +7,7 @@ pub mod config;
 pub mod exit;
 pub mod failure;
 pub mod fsutil;
+pub mod import_guide;
 pub mod lockfile;
 pub mod managing_skills;
 pub mod manifest;

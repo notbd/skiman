@@ -8,13 +8,14 @@
 //! where marked:
 //!
 //! 1. [`Current::read`]: the skill's records; refusals before anything is
-//!    fetched (#15: unresolved conflicts, snapshot hash).
+//!    fetched (unresolved conflicts, a snapshot that differs from the lock).
 //! 2. [`fetch`]: the version to move to (spec Version semantics) and its
 //!    snapshot; a local folder is re-read.
 //! 3. Same snapshot: up to date, or [`advance_records`] (fragments to a fresh
 //!    backup, then `source.ref` and `ref_kind`, then the lock entry).
-//! 4. Otherwise [`merge`] in `tmp/<timestamp>/merge/<name>/` (#15: conflicts),
-//!    [`validate`] the candidate output, stage it in `tmp/<timestamp>/new/`,
+//! 4. Otherwise [`merge`] in `tmp/<timestamp>/merge/<name>/` (conflicts are
+//!    written into the result, exit 3), [`validate`] the candidate output
+//!    (path safety, rules), stage it in `tmp/<timestamp>/new/`,
 //!    then [`swap`]: re-hash, fragments, re-hash, renames through
 //!    `tmp/<timestamp>/old/`, `source.ref` and `ref_kind`, lock entry (last
 //!    write), old folders to the backup; a failure before the lock entry
@@ -33,11 +34,12 @@ use crate::fsutil::write_atomic;
 use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::manifest::{self, Manifest, SourceRecord};
-use crate::merge::{MergeRepo, Outcome};
+use crate::merge::{Conflict, ConflictKind, MergeRepo, Outcome};
+use crate::path_safety::{self, Content};
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
-use crate::rules::{self, Scope};
+use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
@@ -110,7 +112,10 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
     let mut any_done = names.is_empty();
     for name in &names {
         match update_skill(&mut context, name, git_ref.as_deref()) {
-            Ok(()) => any_done = true,
+            Ok(result) => {
+                any_done = true;
+                exit = exit.combine(result);
+            }
             Err(failure) => {
                 eprintln!("error: skill {name}: {}", failure.message);
                 exit = exit.combine(failure.exit);
@@ -174,7 +179,7 @@ impl Current {
                 "skills/{name} is not a folder; run `skiman check`"
             )));
         }
-        // #15: refuse unresolved conflicts and a snapshot that differs from the lock.
+        refuse_unresolved(repo, name)?;
         let lock_text = read_text(&repo.lockfile())?.unwrap_or_default();
         Ok(Current {
             source,
@@ -183,6 +188,36 @@ impl Current {
             lock_text,
         })
     }
+}
+
+/// Refuses (exit 1) a skill with unresolved conflicts, and one whose
+/// `upstream/<name>` does not match its lock entry, printing the
+/// `skiman check` lines.
+fn refuse_unresolved(repo: &SkillRepo, name: &str) -> Result<(), Failure> {
+    let io = |e: std::io::Error| Failure::operational(format!("cannot read the skill repo: {e}"));
+    let tree = WorkingTree::new(repo.root());
+    let lines = |violations: Vec<Violation>| -> String {
+        violations.iter().map(|v| format!("\n  {v}")).collect()
+    };
+    let conflicts = rules::unresolved_conflicts(&tree, name).map_err(io)?;
+    if !conflicts.is_empty() {
+        return Err(Failure::refused(format!(
+            "skills/{name} has unresolved conflicts; resolve them before updating:{}",
+            lines(conflicts)
+        )));
+    }
+    let scope = Scope {
+        consistency: BTreeSet::from([name.to_owned()]),
+        ..Scope::default()
+    };
+    let snapshot = rules::check(&tree, &scope).map_err(io)?;
+    if !snapshot.is_empty() {
+        return Err(Failure::refused(format!(
+            "upstream/{name} does not match skiman.lock; restore the snapshot before updating:{}",
+            lines(snapshot)
+        )));
+    }
+    Ok(())
 }
 
 fn read_text(path: &Path) -> Result<Option<String>, Failure> {
@@ -210,14 +245,15 @@ struct Target {
     notes: Vec<String>,
 }
 
-fn update_skill(context: &mut Context, name: &str, git_ref: Option<&str>) -> Result<(), Failure> {
+/// Updates one skill; `NeedsAttention` when conflicts were written.
+fn update_skill(context: &mut Context, name: &str, git_ref: Option<&str>) -> Result<Exit, Failure> {
     let current = Current::read(&context.repo, name)?;
     let target = fetch(context, name, &current, git_ref)?;
-    update_to(context, name, &current, &target)?;
+    let result = update_to(context, name, &current, &target)?;
     for note in &target.notes {
         println!("  note: {note}");
     }
-    Ok(())
+    Ok(result)
 }
 
 /// Moves the skill to `target`: records only when its snapshot is the same,
@@ -227,11 +263,11 @@ fn update_to(
     name: &str,
     current: &Current,
     target: &Target,
-) -> Result<(), Failure> {
+) -> Result<Exit, Failure> {
     if target.entry.snapshot == current.entry.snapshot {
         if target.entry == current.entry && target.manifest_text.is_none() {
             println!("skill {name}: up to date at {}", target.version);
-            return Ok(());
+            return Ok(Exit::Success);
         }
         let backup = advance_records(context, name, current, target)?;
         println!(
@@ -239,22 +275,16 @@ fn update_to(
             target.version,
             backup.dir().display()
         );
-        return Ok(());
+        return Ok(Exit::Success);
     }
 
     let ours = Snapshot::from_folder(&context.repo.skill_dir(name))?;
     let base = Snapshot::from_folder(&context.repo.upstream_dir(name))?;
     let staging = context.staging()?;
     let work = Workspace::new(staging, name);
-    let merged = match merge(&work, &base, &ours, &target.snapshot)? {
-        Outcome::Clean(merged) => merged,
-        // #15: write the conflicts instead.
-        Outcome::Conflicts(paths) => {
-            return Err(Failure::refused(format!(
-                "the upstream changes conflict with local modifications in {}; skiman cannot write conflicts yet, so nothing of {name} changed",
-                paths.join(", ")
-            )));
-        }
+    let (merged, conflicts) = match merge(&work, &base, &ours, &target.snapshot)? {
+        Outcome::Clean(merged) => (merged, Vec::new()),
+        Outcome::Conflicts { merged, conflicts } => (merged, conflicts),
     };
     let changes = changes(&ours, &merged);
     let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
@@ -270,13 +300,19 @@ fn update_to(
         &target.snapshot,
         &records,
         &changes,
+        &conflicts,
     )?;
     work.stage(&merged, &target.snapshot)?;
     let (backup, old_folders_saved) =
         swap(context, &work, name, current, &ours.tree_hash(), &records)?;
 
+    let with_conflicts = if conflicts.is_empty() {
+        ""
+    } else {
+        " with conflicts"
+    };
     println!(
-        "skill {name}: updated to {}; changed files:",
+        "skill {name}: updated to {}{with_conflicts}; changed files:",
         target.version
     );
     for (change, path) in &changes {
@@ -288,7 +324,30 @@ fn update_to(
         "the records"
     };
     println!("saved {saved} of {name} to {}", backup.display());
-    Ok(())
+    if conflicts.is_empty() {
+        return Ok(Exit::Success);
+    }
+    println!(
+        "skill {name}: resolve these conflicts in skills/{name}, then delete the conflict records:"
+    );
+    for conflict in &conflicts {
+        println!("  {}", describe(conflict));
+    }
+    Ok(Exit::NeedsAttention)
+}
+
+/// One line of the conflict list, naming the file and its record.
+fn describe(conflict: &Conflict) -> String {
+    let path = &conflict.path;
+    match &conflict.kind {
+        ConflictKind::Markers => format!("{path}: conflict markers"),
+        ConflictKind::UpstreamVersion { record } => {
+            format!("{path}: upstream's version is in {record}")
+        }
+        ConflictKind::DeletedUpstream { record } => {
+            format!("{path}: deleted upstream; {record} marks it")
+        }
+    }
 }
 
 /// Picks the version to move to (spec Version semantics), fetches it and
@@ -680,11 +739,14 @@ fn changes(ours: &Snapshot, merged: &Snapshot) -> Vec<(Change, String)> {
     out
 }
 
-/// The rules on the candidate output before anything is staged: the files
-/// the merge created or changed get every rule; every file of the merged
-/// skill and of the new snapshot gets the secret, symlink and size rules;
-/// the lock entry and Consistency for the skill. Violations elsewhere,
-/// including the other rules on files the merge did not change, are warnings.
+/// The checks on the candidate output before anything is staged: path
+/// safety on the merged skill folder; the files the merge created or changed
+/// get every rule; every file of the merged skill and of the new snapshot
+/// gets the secret, symlink and size rules; the lock entry and Consistency
+/// for the skill. Violations elsewhere, including the other rules on files
+/// the merge did not change, are warnings. The conflict representation is
+/// excused: unresolved-conflict violations in the skill, and the frontmatter
+/// rules on a `SKILL.md` whose markers start inside its frontmatter.
 fn validate(
     repo: &SkillRepo,
     name: &str,
@@ -692,6 +754,7 @@ fn validate(
     snapshot: &Snapshot,
     records: &Records,
     changes: &[(Change, String)],
+    conflicts: &[Conflict],
 ) -> Result<(), Failure> {
     let skill = format!("skills/{name}");
     let upstream = format!("upstream/{name}");
@@ -714,6 +777,7 @@ fn validate(
     let candidate = Overlay::new(&working_tree, files)
         .with_executable(executable)
         .replacing(vec![skill.clone(), upstream]);
+    path_safety::check(&candidate, &skill, "the merge result", Content::Output)?;
     let names = BTreeSet::from([name.to_owned()]);
     let scope = Scope {
         files: changes
@@ -727,7 +791,48 @@ fn validate(
         consistency: names,
         ..Scope::default()
     };
-    rules::validate_write(&candidate, &scope)
+    let skill_md = format!("{skill}/SKILL.md");
+    let frontmatter_markers = conflicts.iter().any(|c| {
+        c.kind == ConflictKind::Markers
+            && c.path == "SKILL.md"
+            && merged
+                .file("SKILL.md")
+                .is_some_and(|f| markers_in_frontmatter(&f.content))
+    });
+    let inside = format!("{skill}/");
+    let excused = |v: &Violation| {
+        v.path.starts_with(&inside)
+            && (v.rule == rule::UNRESOLVED_CONFLICT
+                || (frontmatter_markers
+                    && v.path == skill_md
+                    && FRONTMATTER_RULES.contains(&v.rule)))
+    };
+    rules::validate_write_except(&candidate, &scope, &excused)
+}
+
+/// `true` when the first conflict marker line of `content` comes before the
+/// line that closes the frontmatter (or there is no closing line), so the
+/// markers are what makes the frontmatter invalid.
+fn markers_in_frontmatter(content: &[u8]) -> bool {
+    let is_delimiter = |line: &[u8]| line.strip_suffix(b"\r").unwrap_or(line) == b"---";
+    let lines: Vec<&[u8]> = content.split(|b| *b == b'\n').collect();
+    let Some(first_marker) = lines.iter().position(|line| {
+        CONFLICT_MARKERS
+            .iter()
+            .any(|m| line.starts_with(m.as_bytes()))
+    }) else {
+        return false;
+    };
+    let end = if lines.first().is_some_and(|l| is_delimiter(l)) {
+        lines
+            .iter()
+            .skip(1)
+            .position(|l| is_delimiter(l))
+            .map_or(usize::MAX, |i| i + 1)
+    } else {
+        0
+    };
+    first_marker <= end
 }
 
 /// Swaps the staged merge result and snapshot in (spec Merge semantics):

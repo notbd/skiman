@@ -66,6 +66,17 @@ pub mod rule {
     pub const LEFTOVER_RECORD: &str = "leftover-record";
 }
 
+/// The frontmatter rules on a skill's `SKILL.md`.
+pub const FRONTMATTER_RULES: &[&str] = &[
+    rule::FRONTMATTER,
+    rule::DUPLICATE_KEY,
+    rule::REQUIRED_FIELD,
+    rule::NAME_FORMAT,
+    rule::NAME_RESERVED,
+    rule::NAME_FOLDER,
+    rule::DESCRIPTION_LENGTH,
+];
+
 /// Size limits per skill (spec Rules defaults).
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -392,8 +403,19 @@ fn readable(kind: Kind) -> bool {
 /// stderr as a warning and never blocks. `tree` shows the content as it
 /// will be after the write (for example an [`crate::tree::Overlay`]).
 pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
+    validate_write_except(tree, scope, &|_| false)
+}
+
+/// [`validate_write`] without the violations `excused` accepts: neither
+/// blocking nor printed (update's conflict markers and records).
+pub fn validate_write_except(
+    tree: &dyn Tree,
+    scope: &Scope,
+    excused: &dyn Fn(&Violation) -> bool,
+) -> Result<(), Failure> {
     let io = |e: io::Error| Failure::operational(format!("cannot read the skill repo: {e}"));
-    let blocking = check(tree, scope).map_err(io)?;
+    let mut blocking = check(tree, scope).map_err(io)?;
+    blocking.retain(|v| !excused(v));
     if !blocking.is_empty() {
         let lines: Vec<String> = blocking.iter().map(|v| format!("  {v}")).collect();
         let mut message = format!(
@@ -407,7 +429,9 @@ pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
         return Err(Failure::refused(message));
     }
     for violation in check_all(tree).map_err(io)? {
-        eprintln!("warning: {violation}");
+        if !excused(&violation) {
+            eprintln!("warning: {violation}");
+        }
     }
     for warning in warnings_all(tree).map_err(io)? {
         eprintln!("warning: {warning}");

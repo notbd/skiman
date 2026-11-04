@@ -1,6 +1,7 @@
 //! One module per command. Each command module exposes `run(..) -> Exit`,
 //! called from `cli::run`.
 
+pub mod check;
 pub mod import;
 pub mod init;
 pub mod new;

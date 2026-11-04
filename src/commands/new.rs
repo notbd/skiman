@@ -1,5 +1,6 @@
 //! `skiman new <name> -d <description>`: create an own skill, then sync.
 
+use std::collections::BTreeSet;
 use std::io::Write;
 
 use crate::Exit;
@@ -9,7 +10,9 @@ use crate::names;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
+use crate::rules::{self, Scope};
 use crate::sync::{self, Output};
+use crate::tree::{Overlay, WorkingTree};
 
 pub const MAX_DESCRIPTION: usize = 1024;
 
@@ -39,11 +42,23 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
 
     let lock = RepoLock::wait(&repo)?;
     names::check_not_taken(&repo, name)?;
+    let content = skill_md(name, &description);
+    let rel = format!("skills/{name}/SKILL.md");
+    let working_tree = WorkingTree::new(repo.root());
+    let candidate = Overlay::new(&working_tree, vec![(rel, content.clone().into_bytes())]);
+    // The whole skill folder is new content.
+    let scope = Scope {
+        skills: BTreeSet::from([name.to_owned()]),
+        consistency: BTreeSet::from([name.to_owned()]),
+        ..Scope::default()
+    };
+    rules::validate_write(&candidate, &scope)?;
+
     let dir = repo.skill_dir(name);
     let file = dir.join("SKILL.md");
     let write = || -> std::io::Result<()> {
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(&file, skill_md(name, &description))
+        std::fs::write(&file, &content)
     };
     write().map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
     println!("created {}", file.display());

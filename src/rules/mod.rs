@@ -150,6 +150,14 @@ pub fn exit_of(violations: &[Violation]) -> Exit {
         .fold(Exit::Success, Exit::combine)
 }
 
+/// The rules [`Scope::content_only_skills`] applies besides the secret rule.
+const CONTENT_RULES: &[&str] = &[
+    rule::SYMLINK,
+    rule::FILE_SIZE,
+    rule::FILE_COUNT,
+    rule::SKILL_SIZE,
+];
+
 /// What a write command writes, and so what [`check`] validates.
 #[derive(Debug, Clone, Default)]
 pub struct Scope {
@@ -161,6 +169,10 @@ pub struct Scope {
     /// Skill folders (by name) checked as a whole: every file in them plus
     /// the folder rules (name, `SKILL.md` present, file count, total size).
     pub skills: BTreeSet<String>,
+    /// Skill folders written as a whole whose files are otherwise unchanged
+    /// (`update`: the files the merge changed go in `files`): only the
+    /// secret, symlink and size rules on every file and on the folder.
+    pub content_only_skills: BTreeSet<String>,
     /// Upstream snapshots `upstream/<name>` written as a whole: the secret
     /// rule on every file in them.
     pub upstreams: BTreeSet<String>,
@@ -195,6 +207,7 @@ impl Scope {
         Ok(Scope {
             files,
             skills,
+            content_only_skills: BTreeSet::new(),
             upstreams,
             manifest_tables: records.manifest_skills(),
             manifest: true,
@@ -284,6 +297,11 @@ fn run(
     let records = config::Records::read(tree)?;
     for name in &scope.skills {
         skill::check_skill(tree, name, &mut out, &mut found)?;
+    }
+    for name in &scope.content_only_skills {
+        let mut all = BTreeSet::new();
+        skill::check_skill(tree, name, &mut all, &mut found)?;
+        out.extend(all.into_iter().filter(|v| CONTENT_RULES.contains(&v.rule)));
     }
     for path in &scope.files {
         if path == shared_body::PATH {

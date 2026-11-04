@@ -5,7 +5,8 @@
 //! Anything in `tmp/` that no running command staged is a **tmp leftover**
 //! (distinct from "leftover records", exit 3). [`Staging::begin`] moves tmp
 //! leftovers to a fresh backup, then creates the command's own
-//! `tmp/<timestamp>/`, which is removed when the [`Staging`] is dropped.
+//! `tmp/<timestamp>/`, which is removed when the [`Staging`] is dropped,
+//! except for old folders `update` swapped out that are still in `old/`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -42,9 +43,40 @@ impl Staging {
     }
 }
 
+impl Staging {
+    /// `tmp/<timestamp>/old/`: where `update` swaps out the old
+    /// `skills/<name>` and `upstream/<name>` folders before they go to the
+    /// backup. Never disposable.
+    pub fn old_dir(&self) -> PathBuf {
+        self.dir.join("old")
+    }
+}
+
+/// Removes the disposable staging. Swapped-out old folders still in `old/`
+/// stay (with the folders above them) as tmp leftovers; they are never removed.
 impl Drop for Staging {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
+        let old = self.old_dir();
+        if let Ok(entries) = std::fs::read_dir(&self.dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path == old {
+                    continue;
+                }
+                let _ = match entry.file_type() {
+                    Ok(t) if t.is_dir() => std::fs::remove_dir_all(&path),
+                    _ => std::fs::remove_file(&path),
+                };
+            }
+        }
+        for empty in [
+            old.join("skills"),
+            old.join("upstream"),
+            old,
+            self.dir.clone(),
+        ] {
+            let _ = std::fs::remove_dir(empty);
+        }
     }
 }
 

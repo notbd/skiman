@@ -64,6 +64,11 @@ pub enum Command {
         /// Name of the third-party skill
         name: String,
     },
+    /// Update third-party skills, merging upstream changes with local modifications
+    Update {
+        /// Skills to update; without names, every third-party skill
+        names: Vec<String>,
+    },
     /// Import a prepared folder
     Import {
         /// Print the instructions an agent follows to prepare an import folder
@@ -151,6 +156,7 @@ where
             yes,
         }),
         Command::Diff { name } => commands::diff::run(&name),
+        Command::Update { names } => commands::update::run(names),
         Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),

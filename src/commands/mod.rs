@@ -10,6 +10,7 @@ pub mod init;
 pub mod list;
 pub mod new;
 pub mod sync;
+pub mod update;
 
 use std::io::IsTerminal;
 

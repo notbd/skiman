@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
 
 use crate::failure::Failure;
 use crate::fetch::Cache;
@@ -37,29 +37,85 @@ impl Snapshot {
         self.files.iter().find(|f| f.path == path)
     }
 
+    /// The spec's tree hash of these files (`sha256:<hex>`).
+    pub fn tree_hash(&self) -> String {
+        tree::files_hash(
+            self.files
+                .iter()
+                .map(|f| (f.path.as_str(), f.executable, f.content.as_slice())),
+        )
+    }
+
+    /// The regular files of the folder `dir` on disk, read once (a missing
+    /// folder has none). `.DS_Store` and `Thumbs.db` are left out; a symlink
+    /// or a special file is refused (exit 1).
+    pub fn from_folder(dir: &Path) -> Result<Snapshot, Failure> {
+        let io =
+            |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", dir.display()));
+        let working_tree = WorkingTree::new(dir);
+        let mut snapshot = Snapshot::default();
+        for entry in working_tree.walk("").map_err(io)? {
+            let path = dir.join(&entry.path);
+            match entry.kind {
+                Kind::Dir => {}
+                _ if is_ignored(&entry.path) => {}
+                Kind::File { executable, .. } => {
+                    snapshot.files.push(SnapshotFile {
+                        content: working_tree.read(&entry.path).map_err(io)?,
+                        path: entry.path,
+                        executable,
+                    });
+                }
+                Kind::Symlink | Kind::Special => {
+                    return Err(Failure::refused(format!(
+                        "{} is not a regular file or folder (symlinks and special files are not allowed in skills); remove it",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        snapshot.files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(snapshot)
+    }
+
     /// Reads folder `path` (`""` = the root) of `commit`, which must be in
-    /// the cache. The listing passes [`path_safety::check`] before any file
-    /// content is read.
+    /// the cache, as upstream content.
     pub fn read(cache: &Cache, commit: &str, path: &str) -> Result<Snapshot, Failure> {
-        let treeish = treeish(commit, path);
         let origin = if path.is_empty() {
             cache.url().to_owned()
         } else {
             format!("{} ({path})", cache.url())
         };
-        let mut ls = cache.git();
-        ls.args(["ls-tree", "-r", "-t", "-z", "-l", "--full-tree", &treeish]);
-        let output = git::run(ls, &format!("listing {treeish} of {}", cache.url()))?;
+        Snapshot::read_tree(
+            || cache.git(),
+            &treeish(commit, path),
+            &origin,
+            Content::Upstream,
+        )
+    }
+
+    /// Reads `treeish` from the repository `git` commands run on; `origin`
+    /// names where it comes from in messages. The listing passes
+    /// [`path_safety::check`] as `content` before any file content is read.
+    pub fn read_tree(
+        git: impl Fn() -> Command,
+        treeish: &str,
+        origin: &str,
+        content: Content,
+    ) -> Result<Snapshot, Failure> {
+        let mut ls = git();
+        ls.args(["ls-tree", "-r", "-t", "-z", "-l", "--full-tree", treeish]);
+        let output = git::run(ls, &format!("listing {treeish} of {origin}"))?;
 
         let mut snapshot = Snapshot::default();
         let mut listing = Listing {
-            cache,
+            git: &git,
             entries: Vec::new(),
             oids: BTreeMap::new(),
             contents: RefCell::new(None),
         };
         for record in output.split(|b| *b == 0).filter(|r| !r.is_empty()) {
-            let entry = Entry::parse(record, &origin)?;
+            let entry = Entry::parse(record, origin)?;
             let kind = match entry.mode.as_str() {
                 "040000" => Kind::Dir,
                 "100644" | "100755" => Kind::File {
@@ -87,7 +143,7 @@ impl Snapshot {
             });
         }
         listing.entries.sort_by(|a, b| a.path.cmp(&b.path));
-        path_safety::check(&listing, "", &origin, Content::Upstream)?;
+        path_safety::check(&listing, "", origin, content)?;
 
         let io = |e: std::io::Error| Failure::operational(e.to_string());
         for entry in &listing.entries {
@@ -108,7 +164,7 @@ impl Snapshot {
 /// A git listing seen as a [`Tree`]: the regular files are read in one
 /// `cat-file --batch` on the first [`Tree::read`].
 struct Listing<'a> {
-    cache: &'a Cache,
+    git: &'a dyn Fn() -> Command,
     /// Sorted by path bytes.
     entries: Vec<tree::Entry>,
     /// Path to blob id of every regular file that is not ignored.
@@ -135,7 +191,7 @@ impl Tree for Listing<'_> {
     fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
         let mut contents = self.contents.borrow_mut();
         if contents.is_none() {
-            let blobs = cat_blobs(self.cache, self.oids.values().map(String::as_str))
+            let blobs = cat_blobs((self.git)(), self.oids.values().map(String::as_str))
                 .map_err(|f| std::io::Error::other(f.message))?;
             *contents = Some(self.oids.keys().cloned().zip(blobs).collect());
         }
@@ -179,7 +235,7 @@ pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<String>, Fail
 /// The contents of the files at `paths` (relative to the root of `commit`).
 pub fn read_files(cache: &Cache, commit: &str, paths: &[String]) -> Result<Vec<Vec<u8>>, Failure> {
     let names: Vec<String> = paths.iter().map(|p| format!("{commit}:{p}")).collect();
-    cat_blobs(cache, names.iter().map(String::as_str))
+    cat_blobs(cache.git(), names.iter().map(String::as_str))
 }
 
 /// The paths of every non-folder entry below the local folder `dir`,
@@ -313,15 +369,12 @@ impl Entry {
 
 /// The contents of `oids`, in order, through one `git cat-file --batch`.
 fn cat_blobs<'a>(
-    cache: &Cache,
+    mut cmd: Command,
     oids: impl Iterator<Item = &'a str>,
 ) -> Result<Vec<Vec<u8>>, Failure> {
     let request: String = oids.map(|oid| format!("{oid}\n")).collect();
     let count = request.lines().count();
-    let io = |e: std::io::Error| {
-        Failure::operational(format!("cannot read objects from the git cache: {e}"))
-    };
-    let mut cmd = cache.git();
+    let io = |e: std::io::Error| Failure::operational(format!("cannot read git objects: {e}"));
     cmd.args(["cat-file", "--batch"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -342,10 +395,7 @@ fn cat_blobs<'a>(
             .nth(2)
             .and_then(|s| s.parse::<usize>().ok())
             .ok_or_else(|| {
-                Failure::operational(format!(
-                    "cannot read an object from the git cache: {}",
-                    header.trim_end()
-                ))
+                Failure::operational(format!("cannot read a git object: {}", header.trim_end()))
             })?;
         let mut content = vec![0; size + 1];
         stdout.read_exact(&mut content).map_err(io)?;
@@ -356,7 +406,7 @@ fn cat_blobs<'a>(
     let output = child.wait_with_output().map_err(io)?;
     if !output.status.success() {
         return Err(Failure::operational(format!(
-            "reading objects from the git cache failed: {}",
+            "reading git objects failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }

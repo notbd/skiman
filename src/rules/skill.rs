@@ -4,6 +4,7 @@
 use std::collections::BTreeSet;
 use std::io;
 
+use super::secrets::{self, Found};
 use super::{LIMITS, Violation, frontmatter, readable, rule};
 use crate::names;
 use crate::tree::{Kind, Tree, basename, is_ignored};
@@ -18,7 +19,12 @@ pub const CONFLICTS_DIR: &str = ".skiman-conflicts";
 const MIB: u64 = 1024 * 1024;
 
 /// Every rule on the skill folder `skills/<name>` as a whole.
-pub fn check_skill(tree: &dyn Tree, name: &str, out: &mut BTreeSet<Violation>) -> io::Result<()> {
+pub fn check_skill(
+    tree: &dyn Tree,
+    name: &str,
+    out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
+) -> io::Result<()> {
     let dir = format!("skills/{name}");
     match tree.kind(&dir)? {
         None => return Ok(()),
@@ -78,7 +84,7 @@ pub fn check_skill(tree: &dyn Tree, name: &str, out: &mut BTreeSet<Violation>) -
             files += 1;
             bytes += size;
         }
-        check_entry(tree, &entry.path, entry.kind, out)?;
+        check_entry(tree, &entry.path, entry.kind, out, found)?;
     }
     if files > LIMITS.files {
         out.insert(Violation::new(
@@ -108,6 +114,7 @@ pub fn check_written_file(
     tree: &dyn Tree,
     path: &str,
     out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
 ) -> io::Result<()> {
     let Some(rest) = path.strip_prefix("skills/") else {
         return Ok(());
@@ -118,7 +125,7 @@ pub fn check_written_file(
         check_conflict_name(&ancestor, true, out);
     }
     if let Some(kind) = tree.kind(path)? {
-        check_entry(tree, path, kind, out)?;
+        check_entry(tree, path, kind, out, found)?;
     }
     Ok(())
 }
@@ -129,6 +136,7 @@ fn check_entry(
     path: &str,
     kind: Kind,
     out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
 ) -> io::Result<()> {
     if is_ignored(path) {
         return Ok(());
@@ -157,6 +165,7 @@ fn check_entry(
         kind if readable(kind) => {
             let content = tree.read(path)?;
             check_markers(path, &content, out);
+            secrets::scan(path, &content, found);
             if is_top_skill_md(path) {
                 frontmatter::check(path, &content, out);
             }

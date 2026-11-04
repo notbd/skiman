@@ -6,6 +6,7 @@ use std::io;
 
 use toml_edit::{Document, Item, TableLike};
 
+use super::secrets::AllowEntry;
 use super::{Scope, Violation, rule};
 use crate::tree::Tree;
 
@@ -243,6 +244,32 @@ impl Records {
     /// The lock entry's `snapshot`, when it is a string.
     pub fn locked_snapshot(&self, name: &str) -> Option<&str> {
         self.lock.skill(name)?.get("snapshot")?.as_str()
+    }
+
+    /// The well-formed `[[secrets.allow]]` entries of `skiman.toml`, with
+    /// their lines. Malformed entries are left to the format rules.
+    pub fn secret_allows(&self) -> Vec<(AllowEntry, Option<usize>)> {
+        let m = &self.manifest;
+        let Some(Item::ArrayOfTables(allow)) = m
+            .doc
+            .as_ref()
+            .and_then(|d| d.as_table().get("secrets"))
+            .and_then(|s| s.get("allow"))
+        else {
+            return Vec::new();
+        };
+        allow
+            .iter()
+            .filter_map(|t| {
+                let field = |key| t.get(key).and_then(Item::as_str).map(str::to_owned);
+                let entry = AllowEntry {
+                    path: field("path")?,
+                    rule: field("rule")?,
+                    fingerprint: field("fingerprint")?,
+                };
+                Some((entry, t.span().map(|s| line_of(&m.text, s.start))))
+            })
+            .collect()
     }
 
     /// Format rules on the parts of both files `scope` names.

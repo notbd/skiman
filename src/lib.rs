@@ -33,6 +33,7 @@ pub mod source;
 pub mod staged;
 pub mod staging;
 pub mod sync;
+pub mod test_hook;
 pub mod tools;
 pub mod tree;
 

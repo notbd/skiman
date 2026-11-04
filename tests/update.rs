@@ -1,5 +1,6 @@
 //! `skiman update`: three-way merge of a new upstream version with the
-//! user's local modifications (clean merges; conflicts are #15).
+//! user's local modifications (clean merges; conflicts are in
+//! `update_conflicts.rs`).
 
 mod support;
 
@@ -565,29 +566,6 @@ fn only_third_party_skills_are_updated() {
             "error: skill mine: skills/mine has no [skills.mine.source] table in skiman.toml, so it is an own skill; only third-party skills are updated\n\
              error: skill nope: there is no skill named nope\n",
         );
-}
-
-/// Conflicts are written by #15; until then a conflicting update changes nothing.
-#[test]
-fn a_conflicting_update_changes_nothing() {
-    let sandbox = Sandbox::new();
-    let up = installed(&sandbox);
-    write(
-        sandbox.skill_repo().join("skills/pdf/reference.md"),
-        &lines(&[(5, "mine")]),
-    );
-    up.write("reference.md", lines(&[(5, "theirs")]));
-    up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
-
-    sandbox
-        .skiman()
-        .args(["update", "pdf"])
-        .assert()
-        .code(1)
-        .stderr_eq("error: skill pdf: the upstream changes conflict with local modifications in reference.md; [..]\n");
-
-    assert_eq!(skill_repo_tree(&sandbox), before);
 }
 
 /// Both records are read leniently since #21 (`list` shows a damaged table);

@@ -86,3 +86,11 @@ pub fn with_entry(text: &str, name: &str, entry: &LockEntry) -> Result<String, S
     skills.insert(name, Item::Table(table));
     Ok(doc.to_string())
 }
+
+/// `text` (a `skiman.lock`) with the entry of `old` renamed to `new`, its
+/// values unchanged. Everything else keeps its bytes.
+pub fn with_entry_renamed(text: &str, old: &str, new: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    crate::manifest::rename_skill_table(&mut doc, old, new);
+    Ok(doc.to_string())
+}

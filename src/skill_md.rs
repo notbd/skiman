@@ -29,6 +29,16 @@ impl SkillMd {
     /// Refuses (exit 1, naming the file) a `SKILL.md` without frontmatter,
     /// without `description`, or whose `name` is not a string.
     pub fn parse(label: &str, content: &[u8]) -> Result<SkillMd, Failure> {
+        SkillMd::read(label, content, true)
+    }
+
+    /// [`SkillMd::parse`] without the `description` requirement: `mv`
+    /// rewrites only the `name` line and leaves the rest to the rules.
+    pub fn parse_for_rename(label: &str, content: &[u8]) -> Result<SkillMd, Failure> {
+        SkillMd::read(label, content, false)
+    }
+
+    fn read(label: &str, content: &[u8], require_description: bool) -> Result<SkillMd, Failure> {
         let refuse = |why: &str| Failure::refused(format!("{label} {why}"));
         let text = std::str::from_utf8(content).map_err(|_| refuse("is not valid UTF-8"))?;
         let yaml = split(text).ok_or_else(|| {
@@ -51,7 +61,7 @@ impl SkillMd {
                 .iter()
                 .find(|(k, _)| matches!(&k.data, YamlData::Value(Scalar::String(s)) if s == key))
         };
-        if field("description").is_none() {
+        if require_description && field("description").is_none() {
             return Err(refuse("has no `description` in its frontmatter"));
         }
         let name = match field("name") {

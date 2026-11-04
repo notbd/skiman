@@ -368,7 +368,7 @@ impl Entry {
 }
 
 /// The contents of `oids`, in order, through one `git cat-file --batch`.
-fn cat_blobs<'a>(
+pub(crate) fn cat_blobs<'a>(
     mut cmd: Command,
     oids: impl Iterator<Item = &'a str>,
 ) -> Result<Vec<Vec<u8>>, Failure> {

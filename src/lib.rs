@@ -19,6 +19,7 @@ pub mod repo;
 pub mod repo_lock;
 pub mod reported;
 pub mod rules;
+pub mod session_hooks;
 pub mod staged;
 pub mod sync;
 pub mod tools;

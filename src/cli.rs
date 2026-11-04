@@ -48,7 +48,11 @@ pub enum Command {
         hook: bool,
     },
     /// Report every rule violation in the skill repo's working tree
-    Check,
+    Check {
+        /// Check the staged snapshot (the git index) instead of the working tree
+        #[arg(long)]
+        staged: bool,
+    },
 }
 
 /// `none`, or a comma-separated list of tool ids that have a session-start hook.
@@ -98,6 +102,6 @@ where
         Command::New { name, description } => commands::new::run(&name, description),
         Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
-        Command::Check => commands::check::run(),
+        Command::Check { staged } => commands::check::run(staged),
     }
 }

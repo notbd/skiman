@@ -473,6 +473,7 @@ fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_
     sandbox.skiman().arg("sync").assert().code(0);
     let second = sandbox.skill_repo();
     std::fs::create_dir_all(second.join("skills")).unwrap();
+    sandbox.git(&second, ["init", "--quiet"]);
     std::fs::write(
         second.join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n",
@@ -487,6 +488,11 @@ fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
+installed git hook [..]/skill-repo/.git/hooks/pre-commit
+installed git hook [..]/skill-repo/.git/hooks/post-commit
+installed git hook [..]/skill-repo/.git/hooks/post-merge
+installed git hook [..]/skill-repo/.git/hooks/post-checkout
+installed git hook [..]/skill-repo/.git/hooks/post-rewrite
 retargeted [..]/home/.claude/skills/managing-skills
 removed [..]/home/.claude/skills/notes
 retargeted [..]/home/.claude/skills/pdf
@@ -535,6 +541,7 @@ fn init_with_a_foreign_skill_points_to_adopt_when_the_skill_repo_has_skills() {
     write_skill(&sandbox.tool_dir(Tool::ClaudeCode), "theirs");
     let repo = sandbox.skill_repo();
     std::fs::create_dir_all(repo.join("skills")).unwrap();
+    sandbox.git(&repo, ["init", "--quiet"]);
     std::fs::write(
         repo.join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\"]\n",

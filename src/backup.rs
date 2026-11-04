@@ -158,9 +158,20 @@ fn refuse_special_files(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Where `entry` (at or below `from`) goes below `to`; `from` itself goes to
+/// `to` (`to.join("")` would add a trailing slash).
+fn copy_path(from: &Path, to: &Path, entry: &Path) -> PathBuf {
+    let rel = entry.strip_prefix(from).expect("entry is below from");
+    if rel.as_os_str().is_empty() {
+        to.to_path_buf()
+    } else {
+        to.join(rel)
+    }
+}
+
 fn copy_all(from: &Path, to: &Path) -> io::Result<()> {
     for (entry, meta) in entries(from)? {
-        let target = to.join(entry.strip_prefix(from).expect("entry is below from"));
+        let target = copy_path(from, to, &entry);
         if meta.is_symlink() {
             std::os::unix::fs::symlink(std::fs::read_link(&entry)?, &target)?;
         } else if meta.is_dir() {
@@ -176,8 +187,9 @@ fn copy_all(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// The tree hash (for a single file, its sha256), every `.DS_Store` and
-/// `Thumbs.db`, and every symlink's path and target are the same at `to`.
+/// The tree hash (for a single file, its sha256; for a symlink, its target),
+/// every `.DS_Store` and `Thumbs.db`, and every symlink's path and target are
+/// the same at `to`.
 fn verify(from: &Path, to: &Path) -> io::Result<()> {
     let mismatch = |what: &str| {
         io::Error::other(format!(
@@ -186,7 +198,16 @@ fn verify(from: &Path, to: &Path) -> io::Result<()> {
             from.display()
         ))
     };
-    if std::fs::symlink_metadata(from)?.is_file() {
+    let top = std::fs::symlink_metadata(from)?;
+    if top.is_symlink() {
+        let same = std::fs::symlink_metadata(to)?.is_symlink()
+            && std::fs::read_link(to)? == std::fs::read_link(from)?;
+        if !same {
+            return Err(mismatch("symlink target"));
+        }
+        return Ok(());
+    }
+    if top.is_file() {
         if Sha256::digest(std::fs::read(from)?) != Sha256::digest(std::fs::read(to)?) {
             return Err(mismatch("content"));
         }
@@ -196,7 +217,7 @@ fn verify(from: &Path, to: &Path) -> io::Result<()> {
         return Err(mismatch("tree hash"));
     }
     for (entry, meta) in entries(from)? {
-        let target = to.join(entry.strip_prefix(from).expect("entry is below from"));
+        let target = copy_path(from, to, &entry);
         let name = entry.file_name().unwrap_or_default().to_string_lossy();
         if meta.is_symlink() {
             let same = std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_symlink())

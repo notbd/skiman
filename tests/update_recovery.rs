@@ -115,6 +115,10 @@ const NEWER: &str = "edit made during the update\n";
 /// Each re-hash mismatch (clarification 7): exit 4, nothing swapped, the
 /// newer edit kept, no recovery printed.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn an_edit_before_the_first_re_hash_stops_the_skill_with_nothing_swapped_or_saved() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox);
@@ -143,6 +147,10 @@ fn an_edit_before_the_first_re_hash_stops_the_skill_with_nothing_swapped_or_save
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn an_edit_between_the_two_re_hashes_stops_the_skill_with_only_the_records_saved() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox);
@@ -275,6 +283,10 @@ fn file_skill(text: &str) -> String {
 /// folder and the recovery; following it restores the pre-update state with
 /// the uncommitted edit, and the other skill is never touched.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn following_the_recovery_after_a_failed_lock_write_restores_the_skill_as_it_was() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox);
@@ -364,6 +376,10 @@ fn moved_leftovers(stdout: &str) -> PathBuf {
 /// on stderr, listed by `doctor`, and moved to a backup by the next write
 /// command, with every edit kept.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_failed_old_folder_backup_after_the_lock_entry_leaves_tmp_leftovers_and_keeps_the_exit_code() {
     let sandbox = Sandbox::new();
     let up = pdf_with_an_update(&sandbox);
@@ -452,6 +468,10 @@ fn section(text: &str, name: &str) -> String {
 /// second skill is recovered per the printed instructions without losing its
 /// uncommitted edits or the first skill's update.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_skill_that_failed_part_way_is_recovered_after_a_later_command_moved_the_tmp_leftovers() {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -574,6 +594,10 @@ fn an_unwritable_backups_directory_stops_the_skill_before_anything_is_swapped() 
 /// Same snapshot, new commit: only the records advance; a failed lock write
 /// prints the fragment recovery.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_failed_lock_write_when_only_the_records_advance_prints_the_fragment_recovery() {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -614,6 +638,10 @@ fn a_failed_lock_write_when_only_the_records_advance_prints_the_fragment_recover
 /// With `--ref`, `skiman.toml` is written before the lock entry; a failed
 /// lock write lists it as done and the recovery pastes its fragment back.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn following_the_recovery_after_a_ref_change_restores_skiman_toml_too() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox).branch("stable");

@@ -38,15 +38,8 @@ pub enum SourceKind {
 impl Source {
     /// `home` expands `~`; `cwd` makes a `.`-relative folder absolute.
     pub fn parse(spec: &str, home: &Path, cwd: &Path) -> Result<Source, Failure> {
-        if spec.starts_with('-') {
-            return Err(Failure::refused(format!(
-                "the source `{spec}` starts with `-`; sources never do"
-            )));
-        }
-        if spec.contains("::") {
-            return Err(Failure::refused(format!(
-                "the source `{spec}` uses a git remote helper (`::`), which skiman never runs"
-            )));
+        if let Some(why) = dangerous(spec) {
+            return Err(Failure::refused(format!("the source `{spec}` {why}")));
         }
         if spec.starts_with('/') || spec.starts_with('~') || spec.starts_with('.') {
             return local(spec, home, cwd);
@@ -62,13 +55,7 @@ impl Source {
         {
             return Ok(git(spec, rest.split_once('/').map_or("", |(_, path)| path)));
         }
-        if let Some((user_host, path)) = spec.split_once(':')
-            && let Some((user, host)) = user_host.split_once('@')
-            && !user.is_empty()
-            && !host.is_empty()
-            && !user_host.contains('/')
-            && !path.is_empty()
-        {
+        if let Some(path) = scp_path(spec) {
             return Ok(git(spec, path));
         }
         if let Some((owner, repo)) = spec.split_once('/')
@@ -103,6 +90,54 @@ impl Source {
             _ => self.root_name.clone(),
         }
     }
+}
+
+/// What a recorded `source.url` names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UrlKind {
+    /// An absolute or `~` path.
+    Local,
+    /// An https:// or ssh:// URL, or `user@host:path`.
+    Git,
+}
+
+/// Checks a recorded `source.url` against the spec's Source fetching rules
+/// before anything runs git on it (`import` and `update`; `add` records only
+/// what [`Source::parse`] accepted). The error says why it is refused.
+pub fn check_url(url: &str) -> Result<UrlKind, String> {
+    if let Some(why) = dangerous(url) {
+        return Err(why.to_owned());
+    }
+    if url.starts_with('/') || url.starts_with('~') {
+        return Ok(UrlKind::Local);
+    }
+    if url.starts_with("https://") || url.starts_with("ssh://") || scp_path(url).is_some() {
+        return Ok(UrlKind::Git);
+    }
+    Err(
+        "is not an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path"
+            .to_owned(),
+    )
+}
+
+/// Why a source that git would read as an option or a remote helper is
+/// refused, whatever its form.
+fn dangerous(spec: &str) -> Option<&'static str> {
+    if spec.starts_with('-') {
+        Some("starts with `-`; sources never do")
+    } else if spec.contains("::") {
+        Some("uses a git remote helper (`::`), which skiman never runs")
+    } else {
+        None
+    }
+}
+
+/// The repository path of a `user@host:path` URL.
+fn scp_path(spec: &str) -> Option<&str> {
+    let (user_host, path) = spec.split_once(':')?;
+    let (user, host) = user_host.split_once('@')?;
+    (!user.is_empty() && !host.is_empty() && !user_host.contains('/') && !path.is_empty())
+        .then_some(path)
 }
 
 /// The non-empty `/`-separated parts of `path`.

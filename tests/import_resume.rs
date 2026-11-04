@@ -224,6 +224,10 @@ fn assert_same(point: &str, expected: &BTreeMap<String, String>) {
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_stop_before_each_skill_then_resume_ends_like_an_uninterrupted_import() {
     let expected = uninterrupted();
     for point in ["rename:skills/notes", "rename:skills/pdf"] {
@@ -232,6 +236,10 @@ fn a_stop_before_each_skill_then_resume_ends_like_an_uninterrupted_import() {
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_stop_before_upstream_lock_shared_body_or_manifest_then_resume_ends_like_an_uninterrupted_import()
  {
     let expected = uninterrupted();
@@ -255,6 +263,10 @@ const LOCATIONS: [&str; 5] = [
 ];
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_stop_around_each_location_takeover_then_resume_ends_like_an_uninterrupted_import() {
     let expected = uninterrupted();
     for location in LOCATIONS {
@@ -293,6 +305,10 @@ fn assert_resume_refused(sandbox: &Sandbox, folder: &Path, stderr_has: &[&str]) 
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_changed_import_folder_refuses_the_resume_naming_the_difference() {
     let sandbox = Sandbox::new();
     let folder = setup(&sandbox);
@@ -334,6 +350,10 @@ fn a_changed_import_folder_refuses_the_resume_naming_the_difference() {
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn repo_content_changed_by_hand_after_the_stop_refuses_the_resume_naming_it() {
     let sandbox = Sandbox::new();
     let folder = setup(&sandbox);
@@ -379,6 +399,10 @@ fn repo_content_changed_by_hand_after_the_stop_refuses_the_resume_naming_it() {
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn originals_backed_up_before_the_stop_are_still_in_the_backup_after_the_resume() {
     let sandbox = Sandbox::new();
     let folder = setup(&sandbox);
@@ -422,6 +446,10 @@ fn originals_backed_up_before_the_stop_are_still_in_the_backup_after_the_resume(
 }
 
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn while_an_import_is_unfinished_importing_another_folder_is_refused() {
     let sandbox = Sandbox::new();
     let folder = setup(&sandbox);

@@ -438,3 +438,34 @@ error: cannot read the staged snapshot of [..]/skill-repo: git ls-files failed: 
 
 "#]]);
 }
+
+/// After `init` switches to another skill repo, the previous repo keeps
+/// skiman's hooks; its commits are not checked against the new skill repo.
+/// (git sends a hook's stdout to stderr.)
+#[test]
+fn a_commit_in_a_previous_skill_repo_is_not_blocked_by_its_leftover_hook() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let second = sandbox.root().join("second-repo");
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&second)
+        .assert()
+        .code(0);
+    write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
+    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+
+    git(&sandbox)
+        .args(["commit", "--quiet", "-m", "in the old repo"])
+        .assert()
+        .success()
+        .stderr_eq(str![[r#"
+skiman: [..]/skill-repo is not the skill repo ([..]/second-repo), so its skiman pre-commit hook checks nothing
+...
+"#]]);
+    assert_eq!(
+        sandbox.git(sandbox.skill_repo(), ["log", "--format=%s"]),
+        "in the old repo"
+    );
+}

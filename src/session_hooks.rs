@@ -10,12 +10,12 @@
 //! the folder that holds it exists; when that folder is missing the tool is not
 //! installed and nothing is written.
 
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 
 use crate::Exit;
+use crate::commands;
 use crate::tools::{AgentTool, TOOLS};
 
 /// Marks a hook command as skiman's.
@@ -361,7 +361,11 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value) -> Exit {
     } else {
         "Add these entries? [y/N] "
     };
-    if confirm(question) {
+    let agreed = match commands::confirm(question) {
+        Ok(agreed) => agreed,
+        Err(failure) => return exit.combine(failure.report()),
+    };
+    if agreed {
         for (_, settings) in &planned {
             exit = exit.combine(write_addition(settings, group));
         }
@@ -373,17 +377,6 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value) -> Exit {
         );
     }
     exit
-}
-
-/// Asks on stderr; only an answer of "y" or "yes" (any case) agrees.
-fn confirm(question: &str) -> bool {
-    eprint!("{question}");
-    let _ = std::io::stderr().flush();
-    let mut line = String::new();
-    if std::io::stdin().read_line(&mut line).is_err() {
-        return false;
-    }
-    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 /// The `hooks.SessionStart` groups (`None` when absent), or what is wrong

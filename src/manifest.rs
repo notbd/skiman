@@ -244,6 +244,24 @@ pub fn with_source_ref(
     Ok(doc.to_string())
 }
 
+/// `text` (a `skiman.toml`) with the skill's `source.upstream_name` set to
+/// `upstream_name`, or removed when it equals `name`.
+pub fn with_upstream_name(text: &str, name: &str, upstream_name: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    let source = doc
+        .get_mut("skills")
+        .and_then(|skills| skills.get_mut(name))
+        .and_then(|skill| skill.get_mut("source"))
+        .and_then(Item::as_table_like_mut)
+        .ok_or_else(|| format!("[skills.{name}.source] is not a table"))?;
+    if upstream_name == name {
+        source.remove("upstream_name");
+    } else if source.get("upstream_name").and_then(Item::as_str) != Some(upstream_name) {
+        source.insert("upstream_name", value(upstream_name));
+    }
+    Ok(doc.to_string())
+}
+
 /// The table `key` of `parent`, created as an implicit table (no header of
 /// its own) when missing; `None` when `key` holds something else.
 pub(crate) fn subtable<'a>(parent: &'a mut Table, key: &str) -> Option<&'a mut Table> {

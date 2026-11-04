@@ -6,15 +6,14 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::commands::has_terminal;
+use crate::commands::{confirm, has_terminal};
 use crate::discovery;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
-use crate::fsutil::write_atomic;
+use crate::fsutil::{self, write_atomic};
 use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry};
 use crate::manifest::{self, SourceRecord};
@@ -24,7 +23,7 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
-use crate::snapshot::{self, Snapshot};
+use crate::snapshot::{self, Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
@@ -563,10 +562,6 @@ fn is_script(path: &str, content: &[u8]) -> bool {
             .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
-fn confirm(question: &str) -> Result<bool, Failure> {
-    Ok(matches!(ask(question)?.trim(), "y" | "Y" | "yes" | "Yes"))
-}
-
 /// Asks `question` on stderr and reads one line of answer.
 fn ask(question: &str) -> Result<String, Failure> {
     let io = |e: std::io::Error| Failure::operational(format!("cannot read the answer: {e}"));
@@ -589,7 +584,7 @@ impl Records {
         repo: &SkillRepo,
         installs: &[Install],
         upstream: &Upstream,
-        files: &[(String, bool, Vec<u8>)],
+        files: &[SnapshotFile],
     ) -> Result<Records, Failure> {
         let read = |path: &Path| match std::fs::read_to_string(path) {
             Ok(text) => Ok(Some(text)),
@@ -639,24 +634,24 @@ impl Records {
 /// Every file `add` writes laid over the skill repo's working tree, plus `extra`.
 fn overlay<'a>(
     working_tree: &'a WorkingTree,
-    files: &[(String, bool, Vec<u8>)],
+    files: &[SnapshotFile],
     extra: Vec<(String, Vec<u8>)>,
 ) -> Overlay<'a> {
     let executable = files
         .iter()
-        .filter(|(_, executable, _)| *executable)
-        .map(|(path, _, _)| path.clone())
+        .filter(|file| file.executable)
+        .map(|file| file.path.clone())
         .collect();
     let mut contents: Vec<(String, Vec<u8>)> = files
         .iter()
-        .map(|(path, _, content)| (path.clone(), content.clone()))
+        .map(|file| (file.path.clone(), file.content.clone()))
         .collect();
     contents.extend(extra);
     Overlay::new(working_tree, contents).with_executable(executable)
 }
 
-/// Every file `add` writes, repo-relative: `(path, executable, content)`.
-fn candidate_files(installs: &[Install]) -> Vec<(String, bool, Vec<u8>)> {
+/// Every file `add` writes, with repo-relative paths.
+fn candidate_files(installs: &[Install]) -> Vec<SnapshotFile> {
     let mut out = Vec::new();
     for install in installs {
         for file in &install.snapshot.files {
@@ -664,16 +659,16 @@ fn candidate_files(installs: &[Install]) -> Vec<(String, bool, Vec<u8>)> {
                 (Some(renamed), "SKILL.md") => renamed.clone().into_bytes(),
                 _ => file.content.clone(),
             };
-            out.push((
-                format!("skills/{}/{}", install.name, file.path),
-                file.executable,
-                skill_content,
-            ));
-            out.push((
-                format!("upstream/{}/{}", install.name, file.path),
-                file.executable,
-                file.content.clone(),
-            ));
+            out.push(SnapshotFile {
+                path: format!("skills/{}/{}", install.name, file.path),
+                executable: file.executable,
+                content: skill_content,
+            });
+            out.push(SnapshotFile {
+                path: format!("upstream/{}/{}", install.name, file.path),
+                executable: file.executable,
+                content: file.content.clone(),
+            });
         }
     }
     out
@@ -687,7 +682,7 @@ fn candidate_files(installs: &[Install]) -> Vec<(String, bool, Vec<u8>)> {
 fn validate(
     repo: &SkillRepo,
     installs: &[Install],
-    files: &[(String, bool, Vec<u8>)],
+    files: &[SnapshotFile],
     records: &Records,
 ) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
@@ -704,7 +699,7 @@ fn validate(
     let candidate = overlay(&working_tree, files, texts);
     let names: BTreeSet<String> = installs.iter().map(|i| i.name.clone()).collect();
     let scope = Scope {
-        files: files.iter().map(|(path, _, _)| path.clone()).collect(),
+        files: files.iter().map(|file| file.path.clone()).collect(),
         skills: names.clone(),
         upstreams: names.clone(),
         manifest_tables: names.clone(),
@@ -721,20 +716,11 @@ fn validate(
 fn write(
     repo: &SkillRepo,
     installs: &[Install],
-    files: &[(String, bool, Vec<u8>)],
+    files: &[SnapshotFile],
     records: &Records,
     staging: &Staging,
 ) -> Result<(), Failure> {
-    for (path, executable, content) in files {
-        let file = staging.dir().join(path);
-        let io = |e: std::io::Error| {
-            Failure::operational(format!("cannot write {}: {e}", file.display()))
-        };
-        std::fs::create_dir_all(file.parent().expect("staged file has a parent")).map_err(io)?;
-        std::fs::write(&file, content).map_err(io)?;
-        let mode = if *executable { 0o755 } else { 0o644 };
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(mode)).map_err(io)?;
-    }
+    fsutil::write_files(staging.dir(), files)?;
     for install in installs {
         for root in ["upstream", "skills"] {
             let rel = format!("{root}/{}", install.name);

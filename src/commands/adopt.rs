@@ -7,13 +7,13 @@
 //! in its place. A link's target is never moved, edited or deleted.
 
 use std::collections::BTreeSet;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::Backup;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
+use crate::fsutil;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -168,15 +168,6 @@ fn validate(repo: &SkillRepo, name: &str, files: &[SnapshotFile]) -> Result<(), 
 /// Writes the copy to `tmp/<timestamp>/skills/<name>` and returns that path.
 fn stage(staging: &Staging, name: &str, files: &[SnapshotFile]) -> Result<PathBuf, Failure> {
     let dir = staging.dir().join("skills").join(name);
-    for file in files {
-        let path = dir.join(&file.path);
-        let io = |e: std::io::Error| {
-            Failure::operational(format!("cannot write {}: {e}", path.display()))
-        };
-        std::fs::create_dir_all(path.parent().expect("staged file has a parent")).map_err(io)?;
-        std::fs::write(&path, &file.content).map_err(io)?;
-        let mode = if file.executable { 0o755 } else { 0o644 };
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).map_err(io)?;
-    }
+    fsutil::write_files(&dir, files)?;
     Ok(dir)
 }

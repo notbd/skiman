@@ -8,8 +8,7 @@ description: Where the user's agent skills and global instructions live and how 
 The skill repo is `<SKILL_REPO>`. It is a git repo that holds the canonical
 copy of every skill and of the global instructions. skiman distributes it to
 every agent tool: tool directories (`~/.claude/skills`, `~/.agents/skills`, `~/.gemini/config/skills`) and global
-instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) hold links to the skill repo, or
-copies for agent tools that cannot follow links.
+instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) hold links to the skill repo.
 
 ## Skill repo layout
 
@@ -76,10 +75,9 @@ Flags for `skiman add`:
 ## Edit a skill
 
 Edit the files in `<SKILL_REPO>/skills/<name>/`, for own and third-party
-skills alike. This is the canonical copy for every agent tool, including the
-ones that receive copies: their copies refresh at the next sync (run
-`skiman sync` to refresh now). Edits to a third-party skill are local
-modifications that updates keep; `skiman diff <name>` shows them.
+skills alike. This is the canonical copy for every agent tool. Edits to a
+third-party skill are local modifications that updates keep; `skiman diff
+<name>` shows them.
 
 ## Edit the global instructions
 

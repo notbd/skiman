@@ -57,6 +57,8 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
         println!("created skill repo {}", path.display());
+    } else {
+        ignore_machine_state(&repo)?;
     }
     let previous_repo = UserConfig::load(&paths)
         .ok()
@@ -70,20 +72,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     .save(&paths)?;
     install_git_hooks(&repo, &binary)?;
     let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo);
-    let foreign = report
-        .items
-        .iter()
-        .any(|item| matches!(item.kind, ItemKind::Foreign { .. }));
-    if foreign && has_skills(&repo) {
-        eprintln!(
-            "hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`"
-        );
-    } else if foreign {
-        eprintln!(
-            "hint: the tool directories hold foreign skills and the skill repo has none yet; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
-        );
-    }
-    hint_refused_locations(&report, &repo);
+    hint_not_owned(&report, &repo);
     // Settings files are outside the skill repo: do not hold the repo lock
     // while the preview waits for an answer.
     drop(lock);
@@ -101,14 +90,31 @@ fn install_session_hooks(paths: &Paths, binary: &Path, session_hooks: Option<&st
     session_hooks::apply(paths.home(), binary, request)
 }
 
-/// Story 5: an instruction location skiman does not own is moved away by
-/// hand; skiman never replaces it.
-fn hint_refused_locations(report: &sync::Report, repo: &SkillRepo) {
-    if report
+/// Story 5: content skiman does not own in the tool directories or the
+/// instruction locations. With no skills in the skill repo yet, the way in is
+/// `skiman import`; otherwise `skiman adopt` for each foreign skill, and an
+/// instruction file is moved away by hand (skiman never replaces it).
+fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
+    let foreign = report
         .items
         .iter()
-        .any(|item| item.kind == ItemKind::RefusedLocation)
-    {
+        .any(|item| matches!(item.kind, ItemKind::Foreign { .. }));
+    let refused = report
+        .items
+        .iter()
+        .any(|item| item.kind == ItemKind::RefusedLocation);
+    if (foreign || refused) && !has_skills(repo) {
+        eprintln!(
+            "hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
+        );
+        return;
+    }
+    if foreign {
+        eprintln!(
+            "hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`"
+        );
+    }
+    if refused {
         eprintln!(
             "hint: move each instruction file listed above away by hand (copy what you want to keep into {} first), then run `skiman sync`",
             repo.shared_body().display()
@@ -217,6 +223,40 @@ fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
         .collect();
     std::fs::write(repo.manifest_file(), new_manifest_text(&present))?;
     std::fs::write(repo.root().join(".gitignore"), ".skiman/\n")
+}
+
+/// A reused skill repo gets the `.gitignore` entry for `.skiman/` when no
+/// line ignores it yet (the file is created when missing); nothing else of
+/// it changes.
+fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
+    let path = repo.root().join(".gitignore");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(Failure::operational(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    if text.lines().any(|line| {
+        matches!(
+            line.trim(),
+            ".skiman" | ".skiman/" | "/.skiman" | "/.skiman/"
+        )
+    }) {
+        return Ok(());
+    }
+    let separator = if text.is_empty() || text.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    std::fs::write(&path, format!("{text}{separator}.skiman/\n"))
+        .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
+    println!("added .skiman/ to {}", path.display());
+    Ok(())
 }
 
 /// The path skiman was invoked through: `argv[0]` made absolute, or resolved

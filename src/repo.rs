@@ -78,6 +78,11 @@ impl SkillRepo {
         self.local_dir().join("tmp")
     }
 
+    /// `.skiman/import/`: the default import folder.
+    pub fn default_import_dir(&self) -> PathBuf {
+        self.local_dir().join("import")
+    }
+
     /// `.skiman/managing-skills`: the materialised `managing-skills` skill.
     pub fn managing_skills_dir(&self) -> PathBuf {
         self.local_dir().join("managing-skills")

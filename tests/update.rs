@@ -614,3 +614,147 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
         .stderr_eq("error: skill pdf: pdf has no entry in skiman.lock; run `skiman check`\n");
     assert_eq!(skill_repo_tree(&sandbox), before);
 }
+
+/// Spec Source fetching: a `url` in skiman.toml (a cloned skill repo or a
+/// hand edit) gets the same check as `add`'s source, before git runs on it.
+#[test]
+fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
+    let sandbox = Sandbox::new();
+    installed(&sandbox);
+    let repo = sandbox.skill_repo();
+    let bin = sandbox.root().join("bin");
+    let pwned = sandbox.home().join("PWNED");
+    write(
+        bin.join("git-remote-evil"),
+        &format!("#!/bin/sh\ntouch '{}'\n", pwned.display()),
+    );
+    std::fs::set_permissions(
+        bin.join("git-remote-evil"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    for url in ["evil::whatever", "file:///tmp/repo", "git://example.test/x"] {
+        let manifest = read(repo.join("skiman.toml"));
+        let line = manifest
+            .lines()
+            .find(|l| l.starts_with("url = "))
+            .expect("a url line")
+            .to_owned();
+        write(
+            repo.join("skiman.toml"),
+            &manifest.replace(&line, &format!("url = \"{url}\"")),
+        );
+        let before = skill_repo_tree(&sandbox);
+        sandbox
+            .skiman()
+            .env("PATH", &path)
+            .args(["update", "pdf"])
+            .assert()
+            .code(1)
+            .stdout_eq("")
+            .stderr_eq(format!(
+                "error: skill pdf: [skills.pdf.source] in skiman.toml: the `url` `{url}` [..]; nothing was fetched\n"
+            ));
+        assert_eq!(skill_repo_tree(&sandbox), before);
+        assert!(!pwned.exists(), "the remote helper ran for {url}");
+    }
+}
+
+/// Story 19: the install name stays when upstream renames its frontmatter
+/// `name`; the `name` line is a local modification and the new upstream
+/// name is recorded.
+#[test]
+fn an_upstream_rename_of_the_frontmatter_name_keeps_the_install_name() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    let repo = sandbox.skill_repo();
+    up.write(
+        "SKILL.md",
+        PDF_SKILL_MD.replace("name: pdf\n", "name: pdf-tools\n"),
+    )
+    .write("forms.md", lines(&[(5, "theirs")]));
+    let commit = up.commit("v2");
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: updated to {commit}; changed files:\n  modified forms.md\n\
+             saved the old folders and records of pdf to [..]\n"
+        ))
+        .stderr_eq("");
+
+    assert_eq!(read(repo.join("skills/pdf/SKILL.md")), PDF_SKILL_MD);
+    assert!(read(repo.join("skiman.toml")).contains("upstream_name = \"pdf-tools\"\n"));
+    sandbox.skiman().args(["check"]).assert().code(0);
+
+    up.write("SKILL.md", PDF_SKILL_MD);
+    up.commit("v3");
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    assert_eq!(read(repo.join("skills/pdf/SKILL.md")), PDF_SKILL_MD);
+    assert!(!read(repo.join("skiman.toml")).contains("upstream_name"));
+}
+
+/// Clarification 3: tmp leftovers move before the command's first write,
+/// even when that write only advances a skill's records.
+#[test]
+fn tmp_leftovers_move_before_a_records_only_advance() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    let tmp = sandbox.skill_repo().join(".skiman/tmp");
+    write(tmp.join("20260101T000000Z/stray.md"), "left behind\n");
+    let commit = up.commit("an empty commit");
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "moved tmp leftovers to [..]/repo/.skiman/tmp\n\
+             skill pdf: now at {commit}; no file of the skill changed\n\
+             saved the records of pdf to [..]\n"
+        ))
+        .stderr_eq("");
+    assert!(!tmp.join("20260101T000000Z").exists());
+}
+
+/// Spec Source fetching: submodules are not fetched and are listed in the
+/// summary, by `update` as by `add`.
+#[test]
+fn update_lists_the_submodules_it_does_not_fetch() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    let head = up.head();
+    up.write("forms.md", lines(&[(5, "theirs")]));
+    up.git(["add", "--all"]);
+    up.git([
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("160000,{head},vendor/lib"),
+    ]);
+    up.git(["commit", "--quiet", "-m", "v2"]);
+    let commit = up.head();
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: updated to {commit}; changed files:\n  modified forms.md\n\
+             \x20 vendor/lib  [submodule, not fetched]\n\
+             saved the old folders and records of pdf to [..]\n"
+        ))
+        .stderr_eq("");
+    assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
+}

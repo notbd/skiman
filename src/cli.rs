@@ -35,6 +35,12 @@ pub enum Command {
         #[arg(short = 'd', long)]
         description: Option<String>,
     },
+    /// Import a prepared folder
+    Import {
+        /// Print the instructions an agent follows to prepare an import folder
+        #[arg(long, required = true)]
+        guide: bool,
+    },
     /// Make every tool directory match the skill repo
     Sync {
         /// Run from a git or session-start hook: print only new findings, always exit 0
@@ -88,6 +94,7 @@ where
             session_hooks,
         } => commands::init::run(&path, session_hooks.as_deref()),
         Command::New { name, description } => commands::new::run(&name, description),
+        Command::Import { guide: _ } => commands::import::guide(),
         Command::Sync { hook } => commands::sync::run(hook),
     }
 }

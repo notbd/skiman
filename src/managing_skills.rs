@@ -5,6 +5,7 @@ use std::io;
 
 use crate::fsutil;
 use crate::repo::SkillRepo;
+use crate::tools::TOOLS;
 
 pub const NAME: &str = "managing-skills";
 
@@ -13,7 +14,17 @@ const REPO_PLACEHOLDER: &str = "{{SKILL_REPO}}";
 
 /// The `SKILL.md` content for this skill repo.
 pub fn content(repo: &SkillRepo) -> String {
-    TEMPLATE.replace(REPO_PLACEHOLDER, &repo.root().display().to_string())
+    let home_paths = |path: fn(&crate::tools::AgentTool) -> &'static str| {
+        TOOLS
+            .iter()
+            .map(|tool| format!("`~/{}`", path(tool)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    TEMPLATE
+        .replace(REPO_PLACEHOLDER, &repo.root().display().to_string())
+        .replace("{{TOOL_DIRECTORIES}}", &home_paths(|t| t.tool_dir))
+        .replace("{{INSTRUCTION_FILES}}", &home_paths(|t| t.instruction_file))
 }
 
 /// Writes `.skiman/managing-skills/SKILL.md` only when its content differs.

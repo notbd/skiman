@@ -1,6 +1,6 @@
 # Project scope: project instruction files and project skills
 
-Status: plan, council round 5. Branch `feat/local-scope`.
+Status: plan approved by the council (round 5: 9.7, 9.7, 9.7). Branch `feat/local-scope`.
 
 ## Goal
 
@@ -124,11 +124,12 @@ skill_dirs = ["fivec-core/skills"]
   their own and linked into the tools by other means (such as the company
   skills in `fivec-core/skills/`, linked by the user's `harness-sync`). Same
   item kind, gates and protocol; skiman never touches the tool directories
-  for them, and a tool-directory link whose realpath is such an item counts
-  as managed elsewhere, so global sync stops reporting it as foreign.
-  Anchor: the configured folder's parent. `check` refuses an entry that is
-  absolute, contains `..`, or ends with a tool's skill-dir pattern (that
-  skill would have two anchors).
+  for them, and a tool-directory link whose realpath lies under a configured
+  `skill_dirs` folder counts as managed elsewhere, so global sync never
+  reports it as foreign. Anchor: the configured folder's parent. `check`
+  refuses an entry that is absolute, contains `..` or a tool's skill-dir
+  pattern anywhere, or lies inside another entry (a skill would have two
+  anchors).
 - One function validates a root wherever it is used (`project add`, `adopt`,
   `restore`, `sync`, `doctor`; `eject` maps a path to its root lexically,
   after expanding `~`, so a root that is gone can still be ejected), because
@@ -242,9 +243,11 @@ tree.
 
 Used by sync row 13, `adopt` and `restore` (`eject` only moves the mirror to a
 backup and drops the synced hash). Every temporary entry lives in a swap
-folder on the destination's filesystem: `<repo>/.skiman/swap/<ts>/` for the
-mirror, `<anchor>/.skiman-swap-<ts>/` for the project (created with a
-`.gitignore` holding `*`, so a project repo never picks it up).
+folder, one per replaced item, on the destination's filesystem:
+`<repo>/.skiman/swap/<ts>/` for the mirror, `<anchor>/.skiman-swap-<ts>/` for
+the project (created with a `.gitignore` holding `*`, so a project repo never
+picks it up). Inside it, `new/` holds the snapshot (step 2), `old/` the
+set-aside copy (step 3), and `target` the destination path.
 
 1. Read the source into an in-memory snapshot and run the safety rules on it.
    Its hash becomes the new synced hash; the live source is not re-read.
@@ -276,8 +279,10 @@ handle. Failure handling, so an error never deletes the only copy:
 - A swap folder that outlives its command (a failure above, a killed
   process) is never cleaned up automatically: `doctor` lists it with what it
   holds, and the next `restore` in that project (or the next mirror write,
-  for `.skiman/swap/`) renames its set-aside copies into a backup first, or
-  leaves them and reports them when that rename crosses filesystems.
+  for `.skiman/swap/`) renames what is in `old/` into a backup first, or
+  leaves it and reports it when that rename crosses filesystems. `new/` is
+  deleted, never backed up: it is a copy of a source that still exists, or a
+  second link to an entry already in place.
 
 ### Commands
 
@@ -285,7 +290,7 @@ handle. Failure handling, so an error never deletes the only copy:
 |---|---|
 | `skiman project add <path> [--id <id>]` | Register a project root. |
 | `skiman project adopt [<path>...] [--dry-run] [--yes]` | Discover under the roots (or `<path>`), print the plan, confirm, copy each new candidate into the mirror and record its synced hash. Named exactly, an item in row 11, 14 or 15 takes the project's version into the mirror. Warns when git ignores a new mirror path (`git check-ignore -v`, naming the rule), since an ignored mirror never gets history. Ends with `sync`. |
-| `skiman project restore <path>... [--dry-run] [--yes]` | Write mirror items to the project: under a folder, items this machine has never had (row 9); named exactly, also rows 10, 14 and 15. Reruns gate 1 first: a path a project repo now tracks is not written. |
+| `skiman project restore <path>... [--dry-run] [--yes]` | Write mirror items to the project: under a folder, items this machine has never had (row 9); named exactly, also rows 10, 13 (blocked: the mirror holds the last good version), 14 and 15. Reruns gate 1 first: a path a project repo now tracks is not written. |
 | `skiman project eject <path>... [--yes]` | Stop managing the items under `<path>`: mirrors to the backup, synced hashes dropped, the project untouched. Works when the mirror or the project is already gone. A root's own path also removes `[projects.<id>]`, after every item is out. |
 
 One rule for all three: **a command given a folder never replaces existing

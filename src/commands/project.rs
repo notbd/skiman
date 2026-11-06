@@ -9,7 +9,7 @@ use crate::Exit;
 use crate::backup::Backup;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
-use crate::fsutil::{absolute_lexical, write_atomic};
+use crate::fsutil::{absolute_lexical, realpath_as_far_as_exists, write_atomic};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::command;
@@ -366,7 +366,6 @@ impl<'a> Plan<'a> {
         }
     }
 
-    /// Drops every write whose new content breaks the safety rules.
     /// Drops every write whose new content (the `source`: "the project's
     /// version", "its mirror") cannot be read or breaks the safety rules.
     fn drop_breaking(&mut self, repo: &SkillRepo, source: &str) {
@@ -923,6 +922,13 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         let file = ctx.repo.manifest_file();
         let mut text = read_text(&file)?;
         for id in &unregister {
+            // The same no-link rule as for every mirror item.
+            if let Some(why) = swap::broken_chain(ctx.repo.root(), &projects_dir.join(id).join("_"))
+            {
+                return Err(Failure::refused(format!(
+                    "[projects.{id}] is not removed: {why}"
+                )));
+            }
             text = manifest::without_project(&text, id)
                 .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
             synced.remove_root(id);
@@ -1003,24 +1009,6 @@ fn realpath_of_parent(path: &Path) -> PathBuf {
     match (path.parent(), path.file_name()) {
         (Some(parent), Some(name)) => realpath_as_far_as_exists(parent).join(name),
         _ => realpath_as_far_as_exists(path),
-    }
-}
-
-/// The realpath of the deepest existing ancestor of `path`, joined with the rest.
-fn realpath_as_far_as_exists(path: &Path) -> PathBuf {
-    let mut rest = Vec::new();
-    let mut current = path.to_path_buf();
-    loop {
-        if let Ok(real) = current.canonicalize() {
-            return rest.iter().rev().fold(real, |p: PathBuf, c| p.join(c));
-        }
-        match (current.file_name().map(|n| n.to_owned()), current.parent()) {
-            (Some(name), Some(parent)) => {
-                rest.push(name);
-                current = parent.to_path_buf();
-            }
-            _ => return path.to_path_buf(),
-        }
     }
 }
 

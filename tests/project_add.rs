@@ -599,3 +599,20 @@ fn add_refuses_a_folder_that_holds_a_root_missing_on_this_machine() {
         "it overlaps project root `sub`",
     );
 }
+
+#[test]
+fn add_refuses_a_folder_that_holds_a_missing_root_also_under_a_linked_home() {
+    let sandbox = initialised();
+    // HOME seen through a link: the folder is given by realpath.
+    let linked_home = sandbox.root().join("linked-home");
+    std::os::unix::fs::symlink(sandbox.home(), &linked_home).unwrap();
+    append_manifest(&sandbox, "\n[projects.sub]\npath = \"~/x/sub\"\n");
+    let dir = folder(sandbox.home().join("x"));
+    assert_refused(
+        &sandbox,
+        add_cmd(&sandbox, &dir)
+            .args(["--id", "x"])
+            .env("HOME", &linked_home),
+        "it overlaps project root `sub`",
+    );
+}

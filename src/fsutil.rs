@@ -95,3 +95,21 @@ pub fn absolute_lexical(base: &Path, path: &Path) -> PathBuf {
     }
     out
 }
+
+/// The realpath of the deepest existing ancestor of `path`, joined with the rest.
+pub fn realpath_as_far_as_exists(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut current = path.to_path_buf();
+    loop {
+        if let Ok(real) = current.canonicalize() {
+            return rest.iter().rev().fold(real, |p: PathBuf, c| p.join(c));
+        }
+        match (current.file_name().map(|n| n.to_owned()), current.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                current = parent.to_path_buf();
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
+}

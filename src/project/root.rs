@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::fsutil::absolute_lexical;
+use crate::fsutil::{absolute_lexical, realpath_as_far_as_exists};
 use crate::manifest::{Manifest, ProjectEntry};
 use crate::names;
 use crate::repo::SkillRepo;
@@ -80,7 +80,13 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
         .zip(&entries)
         .map(|(c, entry)| match c {
             Ok(root) => Some(root.dir.clone()),
-            Err(problem) if problem.absent => entry.path.as_deref().and_then(|p| expand(home, p)),
+            // Resolved as far as it exists, so a link on the way (a linked
+            // HOME, a synced folder) compares like the usable roots' realpaths.
+            Err(problem) if problem.absent => entry
+                .path
+                .as_deref()
+                .and_then(|p| expand(home, p))
+                .map(|p| realpath_as_far_as_exists(&p)),
             Err(_) => None,
         })
         .collect();

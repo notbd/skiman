@@ -64,6 +64,36 @@ _Avoid_: publish, deploy, link
 Content in a tool directory that another manager owns (a plugin system, claude.ai sync, a tool's bundled skills); skiman never touches it.
 _Avoid_: system skill, protected entry
 
+### Project scope
+
+**Project root** (项目根目录):
+A folder registered in `skiman.toml` as `[projects.<id>]`; skiman discovers project items under it.
+_Avoid_: local root, workspace, scan folder
+
+**Project instruction file** (项目 instruction file):
+A file an agent tool loads when it works inside a project folder, such as that folder's `AGENTS.md`, or a `.md` file under its `.claude/rules/`.
+_Avoid_: local instruction file, project rules file
+
+**Project skill** (项目 skill):
+A skill folder in a project-level skill directory, such as `<project>/.claude/skills/<name>`, or in a folder a project root lists in `skill_dirs`.
+_Avoid_: local skill, workspace skill
+
+**Project item** (项目条目):
+One project instruction file or one project skill: the unit skiman copies and syncs.
+_Avoid_: local item, entry
+
+**Mirror** (镜像):
+`projects/<root id>/<path relative to the root>` in the skill repo: the recorded copy of a project item. It follows the project; the project is written only by `skiman project restore`.
+_Avoid_: copy, backup, shadow
+
+**Anchor** (所属项目文件夹):
+The project folder a project item belongs to: the item's path without its pattern (`proj` for `proj/AGENTS.md` and `proj/.claude/skills/x`).
+_Avoid_: project dir, parent
+
+**Synced hash** (同步 hash):
+Per machine, the content hash a project item's two sides had when skiman last saw them equal; it tells which side changed.
+_Avoid_: base, baseline, last hash
+
 ### Bringing an existing setup in
 
 **Foreign skill** (外来 skill):

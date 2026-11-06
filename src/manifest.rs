@@ -88,6 +88,76 @@ impl Manifest {
     }
 }
 
+/// One `[projects.<id>]` table, as far as the project scope needs it.
+/// Values of the wrong type read as absent; `skiman check` reports them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectEntry {
+    pub id: String,
+    /// `path`, as written: absolute or starting with `~/`.
+    pub path: Option<String>,
+    pub exclude: Vec<String>,
+    pub skill_dirs: Vec<String>,
+}
+
+impl Manifest {
+    /// Every `[projects.<id>]` table, in file order.
+    pub fn projects(&self) -> Vec<ProjectEntry> {
+        project_entries(self.doc.as_table())
+    }
+}
+
+/// The `[projects.<id>]` tables of a parsed `skiman.toml` (`root` is its top
+/// table), in file order. Used by [`Manifest`] and by the rules.
+pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
+    let Some(projects) = root.get("projects").and_then(Item::as_table_like) else {
+        return Vec::new();
+    };
+    let strings = |item: &Item, key: &str| -> Vec<String> {
+        item.get(key)
+            .and_then(Item::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    projects
+        .iter()
+        .map(|(id, item)| ProjectEntry {
+            id: id.to_owned(),
+            path: item.get("path").and_then(Item::as_str).map(str::to_owned),
+            exclude: strings(item, "exclude"),
+            skill_dirs: strings(item, "skill_dirs"),
+        })
+        .collect()
+}
+
+/// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.
+/// Everything else keeps its bytes.
+pub fn with_project(text: &str, id: &str, path: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    let mut table = Table::new();
+    table.insert("path", value(path));
+    table.decor_mut().set_prefix("\n");
+    let projects = subtable(doc.as_table_mut(), "projects").ok_or("`projects` is not a table")?;
+    projects.insert(id, Item::Table(table));
+    Ok(doc.to_string())
+}
+
+/// `text` (a `skiman.toml`) without the `[projects.<id>]` table; the
+/// `[projects]` table goes too when it is left empty and implicit.
+pub fn without_project(text: &str, id: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    if let Some(projects) = doc.get_mut("projects").and_then(Item::as_table_like_mut) {
+        projects.remove(id);
+        if projects.is_empty() {
+            doc.remove("projects");
+        }
+    }
+    Ok(doc.to_string())
+}
+
 /// The TOML text of the `[skills.<name>]` table of `text` (a `skiman.toml`
 /// or `skiman.lock`) with its subtables, as a backup fragment: what the user
 /// pastes back in place of that skill's entry. Empty when there is none.

@@ -61,6 +61,7 @@ fn doctor() -> Result<Exit, Failure> {
     report_instruction_locations(home, &repo, &installed);
     report_skill_repo(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
+    report_projects(&paths, &repo, &manifest);
     Ok(Exit::Success)
 }
 
@@ -380,4 +381,132 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The project scope: every root, every item that is not in step with
+/// its fix, managed items a project repo now tracks, candidates not adopted
+/// yet, items only the mirror holds, swap folders left by an interrupted
+/// write, mirror paths git ignores, and uncommitted mirror changes.
+fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
+    use crate::project::state::{State, classify};
+    use crate::project::{command, discover, git as pgit, item, root, swap, synced::Synced};
+    if manifest.projects().is_empty() {
+        return;
+    }
+    if let Some(operation) = pgit::operation_in_progress(repo.root()) {
+        println!("project items: not synced while the skill repo {operation}");
+    }
+    let synced = Synced::load(paths);
+    let tree = WorkingTree::new(repo.root());
+    let skip = [
+        repo.root().to_path_buf(),
+        paths
+            .state_dir()
+            .canonicalize()
+            .unwrap_or(paths.state_dir()),
+    ];
+    let mut mirror_paths = Vec::new();
+    for resolved in root::resolve(paths.home(), repo, manifest) {
+        let root = match resolved {
+            Ok(root) => root,
+            Err(problem) => {
+                println!("project root {}: skipped: {}", problem.id, problem.message);
+                continue;
+            }
+        };
+        let items = match item::managed(&tree, &root, &synced) {
+            Ok(items) => items,
+            Err(e) => {
+                println!("project root {}: cannot read its mirror: {e}", root.id);
+                continue;
+            }
+        };
+        let in_mirror = item::read_mirror(&tree, &root)
+            .map(|m| m.items)
+            .unwrap_or_default();
+        mirror_paths.extend(in_mirror.iter().map(item::Item::mirror_rel));
+        println!(
+            "project root {}: {} ({} item(s) in the mirror)",
+            root.id,
+            root.dir.display(),
+            in_mirror.len()
+        );
+        let (mut not_here, mut on_disk) = (0, Vec::new());
+        for item in &items {
+            let recorded = synced.get(&root, &item.rel).map(|(_, h)| h.clone());
+            let Ok(evaluated) = classify(repo, &root, item, recorded.as_deref()) else {
+                println!("{}: cannot read it", item.disk(&root).display());
+                continue;
+            };
+            if evaluated.disk_hash.is_some() {
+                on_disk.push(item.disk(&root));
+            }
+            match evaluated.state {
+                State::InSync | State::ProjectChanged => {}
+                State::NotHere => not_here += 1,
+                State::Forgotten | State::Nothing | State::New => {}
+                _ => println!("{}", evaluated.message(&root, item)),
+            }
+        }
+        if not_here > 0 {
+            println!(
+                "project root {}: {not_here} item(s) are only in the mirror: their project folders are not on this machine",
+                root.id
+            );
+        }
+        for (disk, tracking) in pgit::tracking_repos(&on_disk) {
+            if let Ok(Some(top)) = tracking {
+                println!(
+                    "{}: now tracked by the git repo {}; leave it to that repo with: {}",
+                    disk.display(),
+                    top.display(),
+                    command("eject", std::slice::from_ref(&disk))
+                );
+            }
+        }
+        let found = discover::discover(&root, &skip);
+        let candidates: Vec<std::path::PathBuf> = found
+            .items
+            .iter()
+            .filter(|i| !items.iter().any(|m| m.rel == i.rel))
+            .map(|i| i.disk(&root))
+            .collect();
+        let new = pgit::tracking_repos(&candidates)
+            .values()
+            .filter(|t| matches!(t, Ok(None)))
+            .count();
+        if new > 0 {
+            println!(
+                "project root {}: {new} project item(s) are not adopted yet; see them with: {} --dry-run",
+                root.id,
+                command("adopt", std::slice::from_ref(&root.dir))
+            );
+        }
+        for leftover in found.swap_leftovers {
+            println!(
+                "{} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
+                leftover.display()
+            );
+        }
+    }
+    let swap_dir = crate::project::sync::swap_parent(repo);
+    for leftover in swap::leftovers(swap::Place::Mirror {
+        swap_dir: &swap_dir,
+    }) {
+        println!(
+            "{} is left from an interrupted mirror write ({}); the next mirror write moves what it holds to a backup",
+            leftover.dir.display(),
+            leftover.target.as_deref().unwrap_or("unknown item")
+        );
+    }
+    for (path, rule) in pgit::ignored(repo.root(), &mirror_paths) {
+        println!("{path}: ignored by git ({rule}), so it never gets history; change that rule");
+    }
+    match pgit::uncommitted_mirror_changes(repo.root()) {
+        Some(0) | None => {}
+        Some(n) => println!(
+            "{}: {n} uncommitted change(s); skiman never commits, so commit them to keep their history",
+            item::MIRROR_DIR
+        ),
+    }
 }

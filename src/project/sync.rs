@@ -1,0 +1,333 @@
+//! The project part of `skiman sync` (plan "Sync: the state table"): per
+//! mirror item and per synced-hash entry, never by walking the roots. Sync
+//! writes only the mirror (row 13) and machine state; it never writes a
+//! project folder and never spawns git.
+
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use super::command;
+use super::content::Content;
+use super::git::operation_in_progress;
+use super::item::{Item, MIRROR_DIR, managed};
+use super::root::{self, Root};
+use super::state::{State, classify};
+use super::swap::{self, Backups, Expect, Outcome, Place, Previous, Replace};
+use super::synced::Synced;
+use crate::manifest::Manifest;
+use crate::paths::Paths;
+use crate::repo::SkillRepo;
+use crate::sync::{Change, Item as Report, ItemKind, Report as SyncReport};
+use crate::tree::WorkingTree;
+
+/// Reconciles every project root into `report`.
+pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &mut SyncReport) {
+    if manifest.projects().is_empty() {
+        return;
+    }
+    let scope = repo.root().join(MIRROR_DIR).display().to_string();
+    if let Some(operation) = operation_in_progress(repo.root()) {
+        report.items.push(note(
+            &scope,
+            repo.root().join(MIRROR_DIR),
+            "paused",
+            format!(
+                "the skill repo {operation}, so project items are not synced; finish that, then run `skiman sync`"
+            ),
+            false,
+        ));
+        return;
+    }
+    let mut synced = Synced::load(paths);
+    let configured: Vec<String> = manifest.projects().into_iter().map(|p| p.id).collect();
+    synced.forget_unconfigured(&configured);
+    let mut writer = Writer {
+        repo,
+        backups: Backups::under(paths.state_dir().join("backups")),
+        recovered: false,
+    };
+    for resolved in root::resolve(paths.home(), repo, manifest) {
+        match resolved {
+            Err(problem) => {
+                let fix = if problem.absent {
+                    String::new()
+                } else {
+                    format!("; fix [projects.{}] in skiman.toml", problem.id)
+                };
+                report.items.push(note(
+                    &scope,
+                    repo.root().join(MIRROR_DIR).join(&problem.id),
+                    "root",
+                    format!(
+                        "project root `{}` is skipped: {}{fix}",
+                        problem.id, problem.message
+                    ),
+                    false,
+                ));
+            }
+            Ok(root) => reconcile_root(&root, &mut synced, &mut writer, report),
+        }
+    }
+    if let Err(e) = synced.save(paths) {
+        report
+            .errors
+            .push(format!("cannot write {}: {e}", paths.state_dir().display()));
+    }
+}
+
+/// The paths of one root's items that need one command each, collected so
+/// sync can also print one line for all of them.
+#[derive(Default)]
+struct Pending {
+    not_here: usize,
+    deleted_in_project: Vec<PathBuf>,
+    deleted_in_mirror: Vec<PathBuf>,
+    changed: Vec<PathBuf>,
+}
+
+fn reconcile_root(root: &Root, synced: &mut Synced, writer: &mut Writer, report: &mut SyncReport) {
+    let repo = writer.repo;
+    let scope = root.dir.display().to_string();
+    let items = match managed(&WorkingTree::new(repo.root()), root, synced) {
+        Ok(items) => items,
+        Err(e) => {
+            report.errors.push(format!(
+                "cannot read {}/{MIRROR_DIR}/{}: {e}",
+                repo.root().display(),
+                root.id
+            ));
+            return;
+        }
+    };
+    // Row 3: a recorded path that no longer has its item's shape.
+    for (rel, _) in synced.items(root) {
+        if !items.iter().any(|i| i.rel == rel) {
+            synced.remove(root, &rel);
+        }
+    }
+    let mut gone_anchors = BTreeSet::new();
+    let mut pending = Pending::default();
+    for item in &items {
+        let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
+        let evaluated = match classify(repo, root, item, recorded.as_deref()) {
+            Ok(evaluated) => evaluated,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("cannot read {}: {e}", item.disk(root).display()));
+                continue;
+            }
+        };
+        let disk = item.disk(root);
+        let say = |report: &mut SyncReport, what: &'static str| {
+            report.items.push(note(
+                &scope,
+                disk.clone(),
+                what,
+                evaluated.message(root, item),
+                evaluated.state.needs_attention(),
+            ));
+        };
+        match &evaluated.state {
+            State::Forgotten => synced.remove(root, &item.rel),
+            State::Nothing | State::NotHere | State::New => {}
+            State::InSync => {
+                if let Some(hash) = &evaluated.disk_hash {
+                    synced.set(root, &item.rel, item.kind, hash);
+                }
+            }
+            State::NotOnMachine => pending.not_here += 1,
+            State::ProjectGone => {
+                if gone_anchors.insert(item.anchor_dir(root)) {
+                    say(report, "gone");
+                }
+            }
+            State::MirrorInvalid(_) => say(report, "mirror-invalid"),
+            State::Occupied(_) => say(report, "occupied"),
+            State::Blocked(_) => say(report, "blocked"),
+            State::DeletedInProject => {
+                say(report, "deleted-in-project");
+                pending.deleted_in_project.push(disk.clone());
+            }
+            State::DeletedInMirror => {
+                say(report, "deleted-in-mirror");
+                pending.deleted_in_mirror.push(disk.clone());
+            }
+            State::MirrorChanged => {
+                say(report, "mirror-changed");
+                pending.changed.push(disk.clone());
+            }
+            State::Conflict => {
+                say(report, "conflict");
+                pending.changed.push(disk.clone());
+            }
+            State::ProjectChanged => {
+                if let Some(content) = &evaluated.disk {
+                    writer.mirror(
+                        root,
+                        item,
+                        content,
+                        evaluated.mirror_hash.as_deref(),
+                        synced,
+                        report,
+                    );
+                }
+            }
+        }
+    }
+    let mut all = |what: &'static str, message: String| {
+        report
+            .items
+            .push(note(&scope, root.dir.clone(), what, message, false));
+    };
+    if pending.not_here > 0 {
+        all(
+            "not-on-machine",
+            format!(
+                "{} project item(s) in the mirror are not on this machine yet; write them with: {}",
+                pending.not_here,
+                command("restore", std::slice::from_ref(&root.dir))
+            ),
+        );
+    }
+    if pending.deleted_in_project.len() > 1 {
+        all(
+            "restore-all",
+            format!(
+                "to bring them all back: {}",
+                command("restore", &pending.deleted_in_project)
+            ),
+        );
+    }
+    if pending.deleted_in_mirror.len() > 1 {
+        all(
+            "adopt-all",
+            format!(
+                "to take every item deleted in the mirror back in: {}",
+                command("adopt", &pending.deleted_in_mirror)
+            ),
+        );
+    }
+    if pending.changed.len() > 1 {
+        all(
+            "choose-all",
+            format!(
+                "to keep the project's version of each changed item: {}; or the mirror's: {}",
+                command("adopt", &pending.changed),
+                command("restore", &pending.changed)
+            ),
+        );
+    }
+}
+
+/// Writes project changes into the mirror (row 13).
+struct Writer<'a> {
+    repo: &'a SkillRepo,
+    backups: Backups,
+    /// Whether the mirror's swap leftovers were handled this run.
+    recovered: bool,
+}
+
+impl Writer<'_> {
+    fn mirror(
+        &mut self,
+        root: &Root,
+        item: &Item,
+        content: &Content,
+        expected: Option<&str>,
+        synced: &mut Synced,
+        report: &mut SyncReport,
+    ) {
+        let scope = root.dir.display().to_string();
+        let swap_dir = swap_parent(self.repo);
+        if !self.recovered {
+            for message in swap::recover(
+                Place::Mirror {
+                    swap_dir: &swap_dir,
+                },
+                &mut self.backups,
+            ) {
+                report
+                    .items
+                    .push(note(&scope, swap_dir.clone(), "swap", message, false));
+            }
+            self.recovered = true;
+        }
+        let disk = item.disk(root);
+        let dest = self.repo.root().join(item.mirror_rel());
+        let outcome = Replace {
+            dest: &dest,
+            kind: item.kind,
+            expected: &Expect::from_hash(expected),
+            new: content,
+            place: Place::Mirror {
+                swap_dir: &swap_dir,
+            },
+            inside: self.repo.root(),
+            backup_rel: &Path::new("repo").join(item.mirror_rel()),
+        }
+        .run(&mut self.backups);
+        match outcome {
+            Ok(Outcome::Replaced {
+                previous,
+                late_write,
+            }) => {
+                synced.set(root, &item.rel, item.kind, &content.hash());
+                report.changes.push((Change::Mirrored, disk.clone()));
+                match previous {
+                    Previous::At(backup) if late_write => report.items.push(note(
+                        &scope,
+                        disk,
+                        "late-write",
+                        format!(
+                            "a write to the mirror of {} landed while it was replaced; that version is in {}",
+                            item.disk(root).display(),
+                            backup.display()
+                        ),
+                        true,
+                    )),
+                    Previous::LeftInSwap { at, error } => report.errors.push(format!(
+                        "{} is mirrored, but its previous mirror cannot be moved to the backup ({error}); it is kept at {}",
+                        disk.display(),
+                        at.display()
+                    )),
+                    _ => {}
+                }
+            }
+            Ok(Outcome::Conflict(why)) => report.items.push(note(
+                &scope,
+                disk,
+                "conflict",
+                format!("{why}; run `skiman sync` again"),
+                true,
+            )),
+            Ok(Outcome::Failed(why)) => report.errors.push(why),
+            Err(e) => report
+                .errors
+                .push(format!("cannot write {}: {e}", dest.display())),
+        }
+    }
+}
+
+/// `<repo>/.skiman/swap`: where mirror-side swap folders go.
+pub fn swap_parent(repo: &SkillRepo) -> PathBuf {
+    repo.local_dir().join("swap")
+}
+
+fn note(
+    scope: &str,
+    path: PathBuf,
+    what: &'static str,
+    message: String,
+    attention: bool,
+) -> Report {
+    Report {
+        scope: scope.to_owned(),
+        path,
+        kind: ItemKind::Project {
+            what,
+            message,
+            attention,
+        },
+    }
+}

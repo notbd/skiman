@@ -51,6 +51,12 @@ pub struct AgentTool {
     pub session_hook_file: Option<&'static str>,
     /// Why skiman writes no session-start hook entry for this tool yet; `None` when it does.
     pub session_hook_unavailable: Option<&'static str>,
+    /// Instruction files the tool loads inside a project folder, as patterns
+    /// relative to that folder (`/`-separated; `**` matches any number of
+    /// folders, `*` any part of one name). See `crate::project::pattern`.
+    pub project_instruction_files: &'static [&'static str],
+    /// Folders inside a project folder whose child folders the tool loads as skills.
+    pub project_skill_dirs: &'static [&'static str],
 }
 
 impl AgentTool {
@@ -88,6 +94,16 @@ pub const TOOLS: &[AgentTool] = &[
         reserved_names: &["synced"],
         session_hook_file: Some(".claude/settings.json"),
         session_hook_unavailable: None,
+        // `docs/project-scope-evidence.md`: Claude Code also loads `AGENTS.md`,
+        // and every `.md` under `.claude/rules/` at any depth.
+        project_instruction_files: &[
+            "CLAUDE.md",
+            "CLAUDE.local.md",
+            ".claude/CLAUDE.md",
+            ".claude/rules/**/*.md",
+            "AGENTS.md",
+        ],
+        project_skill_dirs: &[".claude/skills"],
     },
     AgentTool {
         id: "codex",
@@ -109,6 +125,9 @@ pub const TOOLS: &[AgentTool] = &[
         session_hook_unavailable: Some(
             "session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4)",
         ),
+        // Codex reads `AGENTS.override.md` instead of `AGENTS.md` at each level.
+        project_instruction_files: &["AGENTS.md", "AGENTS.override.md"],
+        project_skill_dirs: &[".agents/skills"],
     },
     AgentTool {
         id: "antigravity",
@@ -125,5 +144,7 @@ pub const TOOLS: &[AgentTool] = &[
         reserved_names: &[],
         session_hook_file: None,
         session_hook_unavailable: None,
+        project_instruction_files: &["GEMINI.md", "AGENTS.md"],
+        project_skill_dirs: &[".agent/skills", ".agents/skills"],
     },
 ];

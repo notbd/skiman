@@ -236,6 +236,15 @@ impl Records {
         self.lock.skill_names()
     }
 
+    /// Every `[projects.<id>]` table.
+    pub fn projects(&self) -> Vec<crate::manifest::ProjectEntry> {
+        self.manifest
+            .doc
+            .as_ref()
+            .map(|d| crate::manifest::project_entries(d.as_table()))
+            .unwrap_or_default()
+    }
+
     /// The `[skills.<name>.source]` table, when there is one.
     pub fn source(&self, name: &str) -> Option<&dyn TableLike> {
         self.manifest.skill(name)?.get("source")?.as_table_like()
@@ -320,8 +329,8 @@ impl Records {
         let m = &self.manifest;
         let root = doc.as_table();
         m.section(root, "skiman.toml", Some(1))
-            .unknown_keys(&["tools", "skills", "secrets"], out);
-        for key in ["tools", "skills", "secrets"] {
+            .unknown_keys(&["tools", "skills", "secrets", "projects"], out);
+        for key in ["tools", "skills", "secrets", "projects"] {
             if root.get(key).is_some_and(|i| i.as_table_like().is_none()) {
                 out.insert(m.violation(
                     m.key_line(root, key, Some(1)),
@@ -338,6 +347,10 @@ impl Records {
                     .is_some_and(|a| a.iter().all(|v| v.as_str().is_some()))
             };
             tools.value("enabled", false, "an array of tool ids", strings, out);
+        }
+        if let Some(projects) = root.get("projects").and_then(Item::as_table_like) {
+            let line = m.key_line(root, "projects", Some(1));
+            self.check_projects(projects, line, out);
         }
         if let Some(secrets) = root.get("secrets").and_then(Item::as_table_like) {
             let line = m.key_line(root, "secrets", Some(1));
@@ -363,6 +376,89 @@ impl Records {
                     ));
                 }
                 None => {}
+            }
+        }
+    }
+
+    /// The `[projects.<id>]` tables (plan "Configuration"): the id follows
+    /// the skill name rule; `path` is absolute or starts with `~/`; `exclude`
+    /// and `skill_dirs` are arrays of strings, and each `skill_dirs` entry is
+    /// a root-relative folder that holds no tool skill-dir pattern and lies
+    /// inside no other entry.
+    fn check_projects(
+        &self,
+        projects: &dyn TableLike,
+        line: Option<usize>,
+        out: &mut BTreeSet<Violation>,
+    ) {
+        let m = &self.manifest;
+        for (id, item) in projects.iter() {
+            let line = m.key_line(projects, id, line);
+            let Some(table) = item.as_table_like() else {
+                out.insert(m.violation(
+                    line,
+                    rule::TOML_VALUE,
+                    format!("[projects.{id}] must be a table"),
+                ));
+                continue;
+            };
+            if !crate::names::is_valid(id) {
+                out.insert(m.violation(
+                    line,
+                    rule::TOML_VALUE,
+                    format!("`{id}` is not a valid project root id: use lowercase letters, digits and single hyphens"),
+                ));
+            }
+            let section = m.section(table, format!("[projects.{id}]"), line);
+            section.unknown_keys(&["path", "exclude", "skill_dirs"], out);
+            let path: fn(&Item) -> bool = |i| {
+                i.as_str()
+                    .is_some_and(|p| p.starts_with("~/") || p.starts_with('/'))
+            };
+            section.value(
+                "path",
+                true,
+                "a string: an absolute path or one starting with `~/`",
+                path,
+                out,
+            );
+            let strings: fn(&Item) -> bool = |i| {
+                i.as_array()
+                    .is_some_and(|a| a.iter().all(|v| v.as_str().is_some()))
+            };
+            section.value("exclude", false, "an array of strings", strings, out);
+            section.value("skill_dirs", false, "an array of strings", strings, out);
+            let strings_of = |key: &str| -> Vec<String> {
+                table
+                    .get(key)
+                    .and_then(Item::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let exclude_line = m.key_line(table, "exclude", line);
+            for entry in strings_of("exclude") {
+                if let Some(why) = crate::project::root::invalid_exclude(&entry) {
+                    out.insert(m.violation(
+                        exclude_line,
+                        rule::TOML_VALUE,
+                        format!("`exclude` entry \"{entry}\" in [projects.{id}] {why}"),
+                    ));
+                }
+            }
+            let dirs = strings_of("skill_dirs");
+            let dirs_line = m.key_line(table, "skill_dirs", line);
+            for dir in &dirs {
+                if let Some(why) = crate::project::root::invalid_skill_dir(dir, &dirs) {
+                    out.insert(m.violation(
+                        dirs_line,
+                        rule::TOML_VALUE,
+                        format!("`skill_dirs` entry \"{dir}\" in [projects.{id}] {why}"),
+                    ));
+                }
             }
         }
     }

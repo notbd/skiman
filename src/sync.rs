@@ -55,6 +55,13 @@ pub enum ItemKind {
     InvalidSkillFolder { reason: &'static str },
     /// An instruction location skiman does not own, so the shared body is not linked there (exit 3).
     RefusedLocation,
+    /// A report on a project item or root (`crate::project::sync`): `what`
+    /// names the report in the recorded set; `attention` makes it exit 3.
+    Project {
+        what: &'static str,
+        message: String,
+        attention: bool,
+    },
 }
 
 impl Item {
@@ -65,6 +72,9 @@ impl Item {
             ItemKind::Occupied { .. } => "occupied",
             ItemKind::InvalidSkillFolder { .. } => "invalid-skill-folder",
             ItemKind::RefusedLocation => "refused-location",
+            ItemKind::Project { what, .. } => {
+                return format!("project-{what} {}", self.path.display());
+            }
         };
         format!("{kind} {}", self.path.display())
     }
@@ -84,6 +94,7 @@ impl Item {
             ItemKind::RefusedLocation => format!(
                 "instruction file {path} is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`"
             ),
+            ItemKind::Project { message, .. } => message.clone(),
         }
     }
 }
@@ -94,6 +105,8 @@ pub enum Change {
     Linked,
     Retargeted,
     Removed,
+    /// A project item's change was copied into its mirror.
+    Mirrored,
 }
 
 /// What one reconcile did and found.
@@ -114,7 +127,12 @@ impl Report {
         } else if self.items.iter().any(|item| {
             matches!(
                 item.kind,
-                ItemKind::Occupied { .. } | ItemKind::RefusedLocation
+                ItemKind::Occupied { .. }
+                    | ItemKind::RefusedLocation
+                    | ItemKind::Project {
+                        attention: true,
+                        ..
+                    }
             )
         }) {
             Exit::NeedsAttention
@@ -139,7 +157,11 @@ pub fn run_with(
     previous_repo: Option<PathBuf>,
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
-        Ok(manifest) => reconcile(paths.home(), repo, &manifest, previous_repo),
+        Ok(manifest) => {
+            let mut report = reconcile(paths.home(), repo, &manifest, previous_repo);
+            crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
+            report
+        }
         Err(failure) => return (report_failure(failure, output), Report::default()),
     };
     if output == Output::Normal {
@@ -148,6 +170,7 @@ pub fn run_with(
                 Change::Linked => "linked",
                 Change::Retargeted => "retargeted",
                 Change::Removed => "removed",
+                Change::Mirrored => "mirrored",
             };
             println!("{verb} {}", entry.display());
         }

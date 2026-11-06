@@ -18,6 +18,7 @@
 mod config;
 mod consistency;
 pub(crate) mod frontmatter;
+mod project;
 mod secrets;
 mod shared_body;
 mod skill;
@@ -61,6 +62,9 @@ pub mod rule {
     pub const SHARED_BODY_SIZE: &str = "shared-body-size";
     /// A token in the shared body that Claude Code reads as a file import.
     pub const AT_IMPORT: &str = "at-import";
+    /// Something under `projects/` that is not inside a configured project
+    /// root or not part of a project item.
+    pub const PROJECT_PATH: &str = "project-path";
     /// The only rule that exits 3: a source table, lock entry or upstream
     /// snapshot whose skill folder is gone.
     pub const LEFTOVER_RECORD: &str = "leftover-record";
@@ -199,6 +203,11 @@ pub struct Scope {
     pub lock: bool,
     /// Skill names whose Consistency is checked.
     pub consistency: BTreeSet<String>,
+    /// Project item mirrors (`projects/<id>/<rel>`) checked with the project
+    /// safety rules.
+    pub projects: BTreeSet<String>,
+    /// The layout of `projects/` (`project-path`).
+    pub project_layout: bool,
 }
 
 impl Scope {
@@ -227,6 +236,8 @@ impl Scope {
             lock_entries: records.lock_skills(),
             lock: true,
             consistency,
+            projects: project::item_paths(tree, &records)?,
+            project_layout: true,
         })
     }
 }
@@ -339,6 +350,12 @@ fn run(
                 secrets::scan(&entry.path, &tree.read(&entry.path)?, &mut found);
             }
         }
+    }
+    if scope.project_layout {
+        project::check_layout(tree, &records, &mut out, &mut found)?;
+    }
+    for path in &scope.projects {
+        project::check_item(tree, path, &mut out, &mut found)?;
     }
     records.check(scope, &mut out);
     consistency::check(tree, &records, &scope.consistency, &mut out)?;

@@ -105,6 +105,8 @@ exclude = ["_archive", "00_个人事务_me/五洲工作系统_work-system/05_wor
 skill_dirs = ["fivec-core/skills"]
 ```
 
+(An example: this change configures nothing on the user's machine.)
+
 - `<id>` follows the skill name rule; `path` is absolute or starts with `~/`
   (`project add` writes `~/` when under `HOME`). The path is shared by every
   machine (no per-machine override in v1); a machine without it gets one
@@ -192,8 +194,9 @@ and is not reported.
    limits), path safety (Unicode collisions, UTF-8 names), conflict markers
    (skiman's and git's: a line starting with `<<<<<<< ` or `>>>>>>> `), and
    the secret rule with the `[[secrets.allow]]` hint. The skill frontmatter
-   rules do not apply: the mirror records what the tools load, and Claude
-   Code loads a skill without `name` or `description`.
+   rules and the skill name rule do not apply: the mirror records what the
+   tools load, and Claude Code loads a skill without `name` or
+   `description`, in a folder of any name.
 
 ### Sync: the state table
 
@@ -204,9 +207,9 @@ roots.
 |---|---|---|---|
 | 1 | The skill repo is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned; a `.git` file is followed to the worktree's git dir) | skip every project item; one notice | 0 |
 | 2 | Root fails validation or its folder is absent | skip the root; one warning | 0 |
-| 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path matches no item pattern (a `skill_dirs` entry removed, say) | skip, drop its S (`check` reports the path) | 0 |
+| 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path has no item shape (a `skill_dirs` entry removed, say; shape only: a skill folder that lost its `SKILL.md` still has the shape and falls to row 5) | skip, drop its S (`check` reports the path) | 0 |
 | 4 | M absent, S set, D is not a regular item of its kind | drop S | 0 |
-| 5 | M exists but is not a regular file / folder of the item's kind | report "mirror invalid" | 3 |
+| 5 | M exists but is not a regular file / folder of the item's kind, or is a skill folder without `SKILL.md` | report "mirror invalid" | 3 |
 | 6 | Anchor absent, S set | report "project gone", once per anchor | 0 |
 | 7 | Anchor absent, S none | silent (not on this machine; `doctor` counts) | 0 |
 | 8 | A path component between root and item exists but is not a real folder, or D exists but is a link or the wrong kind | report "occupied" | 3 |

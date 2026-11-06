@@ -677,3 +677,37 @@ fn eject_never_moves_or_cleans_up_through_a_linked_mirror_folder() {
         "the root stays registered"
     );
 }
+
+#[test]
+fn eject_of_two_roots_finishes_the_first_when_the_second_has_a_linked_mirror() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    let other = sandbox.home().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "other"])
+        .arg(&other)
+        .assert()
+        .code(0);
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, sandbox.skill_repo().join("projects/other")).unwrap();
+
+    let assert = sandbox
+        .skiman()
+        .args(["project", "eject", "--yes"])
+        .arg(root(&sandbox))
+        .arg(&other)
+        .assert()
+        .code(3);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("[projects.other] is not removed"),
+        "{stderr}"
+    );
+    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    assert!(!manifest.contains("[projects.work]"), "{manifest}");
+    assert!(manifest.contains("[projects.other]"), "{manifest}");
+    assert!(!exists(synced_file(&sandbox)) || !read(synced_file(&sandbox)).contains("a/AGENTS.md"));
+    assert!(elsewhere.exists(), "nothing cleaned up through the link");
+}

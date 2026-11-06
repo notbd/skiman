@@ -72,9 +72,9 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
         .iter()
         .map(|entry| check_one(home, repo, entry))
         .collect();
-    // A root that is only absent from this machine takes part by its
-    // lexical path: an overlap is a configuration error wherever it shows.
-    // A root that is invalid anyway (`path = "~"`) does not.
+    // A root that is only absent from this machine takes part too, by its
+    // path resolved as far as it exists: an overlap is a configuration error
+    // wherever it shows. A root that is invalid anyway (`path = "~"`) does not.
     let dirs: Vec<Option<PathBuf>> = candidates
         .iter()
         .zip(&entries)

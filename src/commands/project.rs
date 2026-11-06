@@ -915,20 +915,21 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             synced.remove_under(&ejection.root.id, rel);
         }
         if ejection.rel.is_empty() && all_out {
-            unregister.push(ejection.root.id.clone());
+            let id = &ejection.root.id;
+            // The same no-link rule as for every mirror item.
+            match swap::broken_chain(ctx.repo.root(), &projects_dir.join(id).join("_")) {
+                Some(why) => {
+                    eprintln!("error: [projects.{id}] is not removed: {why}");
+                    exit = exit.combine(Exit::NeedsAttention);
+                }
+                None => unregister.push(id.clone()),
+            }
         }
     }
     if !unregister.is_empty() {
         let file = ctx.repo.manifest_file();
         let mut text = read_text(&file)?;
         for id in &unregister {
-            // The same no-link rule as for every mirror item.
-            if let Some(why) = swap::broken_chain(ctx.repo.root(), &projects_dir.join(id).join("_"))
-            {
-                return Err(Failure::refused(format!(
-                    "[projects.{id}] is not removed: {why}"
-                )));
-            }
             text = manifest::without_project(&text, id)
                 .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
             synced.remove_root(id);

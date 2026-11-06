@@ -2,7 +2,10 @@
 
 skiman keeps one person's agent skills and global instruction files in a
 single git repo, the skill repo, and distributes them to every agent tool that
-reads them (Claude Code, Codex, Antigravity). The skill repo holds own skills,
+reads them (Claude Code, Codex, Antigravity). It also keeps a versioned copy
+of the project instruction files and project skills under the folders you
+register (`AGENTS.md`, `CLAUDE.md`, `.claude/skills/<n>` in each project).
+The skill repo holds own skills,
 which you write by hand, and third-party skills, which are tracked against
 their upstream with your local modifications kept on update. skiman links each
 skill into the agent tools' tool directories and the shared body of the global
@@ -35,6 +38,24 @@ cargo install --path .
 | `skiman check` | Report every rule violation in the skill repo (`--staged` for the git index). |
 | `skiman list` | Show every skill with its kind, source, version and state. |
 | `skiman doctor` | Diagnose the setup. |
+| `skiman project add <path>` | Register a project root (`--id`). |
+| `skiman project adopt [paths]` | Copy project items into the mirror under `projects/` (`--dry-run`, `--yes`). |
+| `skiman project restore <paths>` | Write mirror items to the project (`--dry-run`, `--yes`). |
+| `skiman project eject <paths>` | Stop managing project items; the project files stay (`--yes`). |
+
+### Project instruction files and project skills
+
+Project items stay real files in the project, where people and agents edit
+them. `skiman sync` (also run at session start and by the git hooks) copies
+every change into the mirror `projects/<id>/<path>`, so the skill repo
+records their history once you commit. The project is written only by
+`skiman project restore`, and whatever skiman replaces on either side goes to
+a backup. An item edited on both sides is reported as a conflict, never
+overwritten; settle it per item with `adopt <item>` (project wins) or
+`restore <item>` (mirror wins). A folder given to any of these commands never
+replaces existing content. Files a project's own git repo tracks are left to
+that repo. Design and evidence: [docs/project-scope.md](docs/project-scope.md),
+[docs/adr/0006-project-items-in-copy-mode.md](docs/adr/0006-project-items-in-copy-mode.md).
 
 Without a terminal, every flag that would otherwise be asked for is required
 (exit 2). Exit codes: 0 success, 1 rule violation or refused input, 2 usage

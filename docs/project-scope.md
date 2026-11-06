@@ -1,6 +1,6 @@
 # Project scope: project instruction files and project skills
 
-Status: plan approved by the council (round 5: 9.7, 9.7, 9.7). Branch `feat/local-scope`.
+Status: implemented on branch `feat/local-scope`; plan approved by the council (round 5: 9.7, 9.7, 9.7). Branch `feat/local-scope`.
 
 ## Goal
 

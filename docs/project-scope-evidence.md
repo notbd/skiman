@@ -69,3 +69,11 @@ lists it and `git check-ignore` exits 1.
 
 The symlink findings are why project items are kept as real files (copy
 mode) rather than replaced by links; see ADR 0006.
+
+## End to end through skiman
+
+A throwaway root held `proj/AGENTS.md` (token `E2E-ORIG-4411`). After
+`skiman project adopt --yes`, `claude -p --permission-mode acceptEdits` in
+`proj/` appended `Edited token: E2E-EDIT-7722` with its Edit tool (the file
+stayed a regular file); the next `skiman sync` printed `mirrored
+…/proj/AGENTS.md`, and the mirror held both lines.

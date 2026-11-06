@@ -638,3 +638,42 @@ forget a/AGENTS.md in project root work (its mirror is already gone)
     assert!(!read(synced_file(&sandbox)).contains("a/AGENTS.md"));
     assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), AGENTS);
 }
+
+#[test]
+fn restore_writes_the_mirror_version_it_checked_not_a_later_edit() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    write(mirror(&sandbox, "a/AGENTS.md"), "checked\n");
+    let item = disk(&sandbox, "a/AGENTS.md").display().to_string();
+
+    let mut pty = sandbox.skiman_pty(["project", "restore", item.as_str()]);
+    pty.expect("Restore 1 item(s)? [y/N] ");
+    // An edit to the mirror while the user reads the plan.
+    write(mirror(&sandbox, "a/AGENTS.md"), "<<<<<<< HEAD\nlater\n");
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 3, "{rest}");
+    assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), "checked\n");
+}
+
+#[test]
+fn eject_never_moves_or_cleans_up_through_a_linked_mirror_folder() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    let outside = sandbox.root().join("outside");
+    std::fs::rename(sandbox.skill_repo().join("projects"), &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, sandbox.skill_repo().join("projects")).unwrap();
+
+    let assert = sandbox
+        .skiman()
+        .args(["project", "eject", "--yes"])
+        .arg(root(&sandbox))
+        .assert()
+        .code(3);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(stderr.contains("its mirror cannot be used"), "{stderr}");
+    assert_eq!(read(outside.join("work/a/AGENTS.md")), AGENTS);
+    assert!(
+        read(sandbox.skill_repo().join("skiman.toml")).contains("[projects.work]"),
+        "the root stays registered"
+    );
+}

@@ -423,7 +423,10 @@ fn a_secret_blocks_the_item_with_the_allow_hint_and_the_pasted_entry_lets_it_in(
         "{stdout}"
     );
     assert!(
-        stderr.contains(&format!("skip {}: it breaks the rules:", file.display())),
+        stderr.contains(&format!(
+            "skip {}: the project's version breaks the rules:",
+            file.display()
+        )),
         "{stderr}"
     );
     assert!(stderr.contains("aws-access-key"), "{stderr}");
@@ -499,7 +502,10 @@ fn git_conflict_markers_block_a_file_and_a_skill() {
     assert_eq!(stdout, "nothing to adopt\n");
     for path in [&file, &skill_dir] {
         assert!(
-            stderr.contains(&format!("skip {}: it breaks the rules:", path.display())),
+            stderr.contains(&format!(
+                "skip {}: the project's version breaks the rules:",
+                path.display()
+            )),
             "{stderr}"
         );
     }

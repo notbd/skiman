@@ -438,8 +438,11 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
                 println!("{}: cannot read it", item.disk(&root).display());
                 continue;
             };
+            if evaluated.disk_hash.is_some() {
+                on_disk.push(item.disk(&root));
+            }
             match evaluated.state {
-                State::InSync | State::ProjectChanged => on_disk.push(item.disk(&root)),
+                State::InSync | State::ProjectChanged => {}
                 State::NotHere => not_here += 1,
                 State::Forgotten | State::Nothing | State::New => {}
                 _ => println!("{}", evaluated.message(&root, item)),

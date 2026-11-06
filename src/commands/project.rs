@@ -296,6 +296,9 @@ struct Planned<'a> {
     root: &'a Root,
     item: Item,
     eval: Evaluated,
+    /// The content to write, read once when the plan is made: the rules
+    /// check exactly what is written, and the live source is not re-read.
+    new: Option<Content>,
     /// What the plan line says is done to the item.
     what: &'static str,
 }
@@ -364,21 +367,26 @@ impl<'a> Plan<'a> {
     }
 
     /// Drops every write whose new content breaks the safety rules.
-    fn drop_breaking(&mut self, repo: &SkillRepo, content: impl Fn(&Planned) -> Option<Content>) {
+    /// Drops every write whose new content (the `source`: "the project's
+    /// version", "its mirror") cannot be read or breaks the safety rules.
+    fn drop_breaking(&mut self, repo: &SkillRepo, source: &str) {
         let mut skipped = Vec::new();
         self.writes.retain(|p| {
             let disk = p.item.disk(p.root);
-            let Some(new) = content(p) else {
+            let Some(new) = &p.new else {
                 skipped.push((
                     disk.clone(),
-                    vec![format!("skip {}: it cannot be read", disk.display())],
+                    vec![format!("skip {}: {source} cannot be read", disk.display())],
                 ));
                 return false;
             };
-            match check_rules(repo, &p.item, &new) {
+            match check_rules(repo, &p.item, new) {
                 Ok(()) => true,
                 Err(violations) => {
-                    let mut lines = vec![format!("skip {}: it breaks the rules:", disk.display())];
+                    let mut lines = vec![format!(
+                        "skip {}: {source} breaks the rules:",
+                        disk.display()
+                    )];
                     lines.extend(violations.iter().map(|v| format!("  {v}")));
                     lines.extend(rules::allow_hint(&violations));
                     skipped.push((disk, lines));
@@ -560,16 +568,18 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                     continue;
                 }
             };
+            let new = eval.disk.clone();
             plan.writes.push(Planned {
                 root: target.root,
                 item,
                 eval,
+                new,
                 what,
             });
         }
     }
     plan.drop_tracked();
-    plan.drop_breaking(&ctx.repo, |p| p.eval.disk.clone());
+    plan.drop_breaking(&ctx.repo, "the project's version");
     let own = plan.own_exit();
     if !plan.confirm(Verb::Adopt, yes, dry_run)? {
         return Ok(if dry_run {
@@ -592,10 +602,9 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     let mut written = Vec::new();
     for p in &plan.writes {
         let content = p
-            .eval
-            .disk
+            .new
             .as_ref()
-            .expect("a planned adopt has read the project side");
+            .expect("drop_breaking keeps only readable writes");
         let dest = ctx.repo.root().join(p.item.mirror_rel());
         let outcome = Replace {
             dest: &dest,
@@ -695,23 +704,21 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     continue;
                 }
             };
+            let new = match content::read(&ctx.repo.root().join(item.mirror_rel()), item.kind) {
+                Ok(Side::Present(content)) => Some(content),
+                _ => None,
+            };
             plan.writes.push(Planned {
                 root: target.root,
                 item,
                 eval,
+                new,
                 what,
             });
         }
     }
     plan.drop_tracked();
-    let mirror_of = |p: &Planned| match content::read(
-        &ctx.repo.root().join(p.item.mirror_rel()),
-        p.item.kind,
-    ) {
-        Ok(Side::Present(content)) => Some(content),
-        _ => None,
-    };
-    plan.drop_breaking(&ctx.repo, mirror_of);
+    plan.drop_breaking(&ctx.repo, "its mirror");
     let own = plan.own_exit();
     if !plan.confirm(Verb::Restore, yes, dry_run)? {
         return Ok(own);
@@ -727,11 +734,10 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                 println!("{message}");
             }
         }
-        let Some(content) = mirror_of(p) else {
-            eprintln!("error: the mirror of {} cannot be read", disk.display());
-            exit = exit.combine(Exit::OperationalError);
-            continue;
-        };
+        let content = p
+            .new
+            .as_ref()
+            .expect("drop_breaking keeps only readable writes");
         let expected = match (&p.eval.state, &p.eval.disk_hash) {
             (State::Blocked(_), None) => Expect::Present,
             (_, hash) => Expect::from_hash(hash.as_deref()),
@@ -740,7 +746,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             dest: &disk,
             kind: p.item.kind,
             expected: &expected,
-            new: &content,
+            new: content,
             place: Place::Project { anchor: &anchor },
             inside: &p.root.dir,
             backup_rel: &Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.rel),
@@ -873,6 +879,16 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         let mut all_out = true;
         for item in &ejection.items {
             let mirror = ctx.repo.root().join(item.mirror_rel());
+            // Never move or clean up through a link: it could lead out of the repo.
+            if let Some(why) = swap::broken_chain(ctx.repo.root(), &mirror) {
+                eprintln!(
+                    "error: {} is not ejected: its mirror cannot be used: {why}",
+                    item.mirror_rel()
+                );
+                exit = exit.combine(Exit::NeedsAttention);
+                all_out = false;
+                continue;
+            }
             let backup = match &mut backup {
                 Some(b) => b,
                 None => backup.insert(Backup::create(&ctx.paths).map_err(|e| {
@@ -884,6 +900,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             match backup.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {
                     println!("moved {} to {}", item.mirror_rel(), to.display());
+                    synced.remove_under(&ejection.root.id, &item.rel);
                     remove_empty_parents(&mirror, &projects_dir);
                 }
                 Err(e) => {
@@ -893,7 +910,11 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 }
             }
         }
-        synced.remove_under(&ejection.root.id, &ejection.rel);
+        // Only what is out of the mirror is forgotten: an item that stayed
+        // keeps its synced hash, so its next project change is no conflict.
+        for rel in &ejection.forgotten {
+            synced.remove_under(&ejection.root.id, rel);
+        }
         if ejection.rel.is_empty() && all_out {
             unregister.push(ejection.root.id.clone());
         }
@@ -923,6 +944,10 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
 /// Removes `dir` when it holds nothing but empty folders and files every
 /// tool ignores (`.DS_Store`, `Thumbs.db`).
 fn remove_if_empty(dir: &Path) {
+    // A link is never followed: what it points to is not the repo's.
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        return;
+    }
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };

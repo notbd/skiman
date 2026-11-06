@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::content::{self, Content};
 use super::pattern::Kind;
-use crate::backup::{fresh_dir, timestamp};
+use crate::backup::{fresh_dir, fresh_named_dir};
 use crate::fsutil;
 
 /// Prefix of a project-side swap folder; discovery never enters one.
@@ -230,7 +230,12 @@ impl Replace<'_> {
         });
         let outcome = match moved {
             Ok(to) => {
-                let late_write = baseline.is_none() || fingerprint(&to).ok() != baseline;
+                // Reported only when both fingerprints are known and differ:
+                // an unreadable set-aside copy (a blocked side) is no late write.
+                let late_write = matches!(
+                    (&baseline, fingerprint(&to).ok()),
+                    (Some(before), Some(after)) if *before != after
+                );
                 remove_swap(&swap);
                 Outcome::Replaced {
                     previous: Previous::At(to),
@@ -317,24 +322,11 @@ fn place_without_replacing(from: &Path, to: &Path, kind: Kind) -> io::Result<()>
 
 /// Creates a fresh swap folder for `dest`.
 fn create(place: Place, dest: &Path) -> io::Result<PathBuf> {
-    let parent = place.parent();
-    std::fs::create_dir_all(parent)?;
     let prefix = match place {
         Place::Mirror { .. } => "",
         Place::Project { .. } => PROJECT_PREFIX,
     };
-    let stamp = timestamp();
-    let dir = (1..)
-        .map(|n| match n {
-            1 => parent.join(format!("{prefix}{stamp}")),
-            n => parent.join(format!("{prefix}{stamp}-{n}")),
-        })
-        .find_map(|dir| match std::fs::create_dir(&dir) {
-            Ok(()) => Some(Ok(dir)),
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,
-            Err(e) => Some(Err(e)),
-        })
-        .expect("the suffixes never run out")?;
+    let dir = fresh_named_dir(place.parent(), prefix)?;
     let filled = (|| {
         if let Place::Project { .. } = place {
             std::fs::write(dir.join(".gitignore"), "*\n")?;
@@ -561,6 +553,36 @@ mod tests {
         assert_eq!(std::fs::read_to_string(world.dest()).unwrap(), "new\n");
         assert_eq!(std::fs::read_to_string(at).unwrap(), "old\n");
         assert_eq!(world.swap_folders().len(), 1);
+    }
+
+    #[test]
+    fn a_new_entry_that_cannot_be_placed_fails_and_leaves_nothing_behind() {
+        let world = World::new();
+        let project = world.root.join("project");
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let dest = project.join("AGENTS.md");
+        let outcome = Replace {
+            dest: &dest,
+            kind: Kind::File,
+            expected: &Expect::Absent,
+            new: &Content::File(b"x".to_vec()),
+            place: Place::Mirror {
+                swap_dir: &world.root.join("swap"),
+            },
+            inside: &world.root,
+            backup_rel: Path::new("x"),
+        }
+        .run(&mut world.backups())
+        .unwrap();
+        std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        assert!(!dest.exists());
+        assert!(
+            leftovers(Place::Mirror {
+                swap_dir: &world.root.join("swap")
+            })
+            .is_empty()
+        );
     }
 
     #[test]

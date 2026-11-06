@@ -4,7 +4,7 @@
 //!
 //! The mirror follows the project: sync copies project changes into the
 //! mirror (`sync`); the project is written only by `skiman project restore`.
-//! Every replace goes through [`swap::replace`], and whatever it replaces
+//! Every replace goes through [`swap::Replace`], and whatever it replaces
 //! goes to a backup.
 
 pub mod content;

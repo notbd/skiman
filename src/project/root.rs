@@ -72,9 +72,17 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
         .iter()
         .map(|entry| check_one(home, repo, entry))
         .collect();
+    // A root that is only absent from this machine takes part by its
+    // lexical path: an overlap is a configuration error wherever it shows.
+    // A root that is invalid anyway (`path = "~"`) does not.
     let dirs: Vec<Option<PathBuf>> = candidates
         .iter()
-        .map(|c| c.as_ref().ok().map(|r| r.dir.clone()))
+        .zip(&entries)
+        .map(|(c, entry)| match c {
+            Ok(root) => Some(root.dir.clone()),
+            Err(problem) if problem.absent => entry.path.as_deref().and_then(|p| expand(home, p)),
+            Err(_) => None,
+        })
         .collect();
     candidates
         .into_iter()

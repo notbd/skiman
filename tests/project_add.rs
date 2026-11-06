@@ -587,3 +587,15 @@ fn add_explains_a_folder_name_without_letters_or_digits() {
         "has no letters or digits to make a root id from; give one with --id",
     );
 }
+
+#[test]
+fn add_refuses_a_folder_that_holds_a_root_missing_on_this_machine() {
+    let sandbox = initialised();
+    append_manifest(&sandbox, "\n[projects.sub]\npath = \"~/x/sub\"\n");
+    let dir = folder(sandbox.home().join("x"));
+    assert_refused(
+        &sandbox,
+        add_cmd(&sandbox, &dir).args(["--id", "x"]),
+        "it overlaps project root `sub`",
+    );
+}

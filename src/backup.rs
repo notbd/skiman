@@ -47,13 +47,18 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Creates a new folder `<parent>/<timestamp>`, or `<timestamp>-2`, `-3`, ...
 /// when that name exists. Never reuses an existing folder.
 pub fn fresh_dir(parent: &Path) -> io::Result<PathBuf> {
+    fresh_named_dir(parent, "")
+}
+
+/// [`fresh_dir`] with `prefix` before the timestamp.
+pub fn fresh_named_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
     std::fs::create_dir_all(parent)?;
     let stamp = timestamp();
     for n in 1.. {
         let dir = if n == 1 {
-            parent.join(&stamp)
+            parent.join(format!("{prefix}{stamp}"))
         } else {
-            parent.join(format!("{stamp}-{n}"))
+            parent.join(format!("{prefix}{stamp}-{n}"))
         };
         match std::fs::create_dir(&dir) {
             Ok(()) => return Ok(dir),

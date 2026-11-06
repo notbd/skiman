@@ -23,6 +23,13 @@ at least as hard to load as a regular file, so a pass also covers copies).
 | `.agent/skills/p1l-agent` | no | no | `SKG-33cc` |
 | `.gemini/skills/p1l-gemini` | no | no | no |
 
+## Project rules folders
+
+A second project held `.claude/rules/style.md`, `.claude/rules/sub/deep.md`,
+`.agent/rules/r.md`, `.agent/workflows/w.md` and `.agents/rules/r.md`, each
+with a token. Claude Code loaded both `.claude/rules` files, including the
+one in the subfolder. Codex and Antigravity loaded none of them.
+
 ## Claude Code `@` imports through a symlink
 
 | Setup | Loaded |
@@ -45,5 +52,5 @@ In a scratch repo, `.gitignore` holding `.claude/skills/x/` (a folder
 pattern) does not ignore a symlink at `.claude/skills/x`: `git status`
 lists it and `git check-ignore` exits 1.
 
-These three findings are why project items are kept as real files (copy
+The symlink findings are why project items are kept as real files (copy
 mode) rather than replaced by links; see ADR 0006.

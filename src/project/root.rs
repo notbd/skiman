@@ -45,12 +45,20 @@ pub fn expand(home: &Path, written: &str) -> Option<PathBuf> {
     Some(absolute_lexical(Path::new("/"), &path))
 }
 
-/// `path` written the way `skiman project add` stores it: `~/...` under `HOME`.
+/// `path` written the way `skiman project add` stores it: `~/...` under
+/// `HOME` (as given or as its realpath), absolute otherwise.
 pub fn written_form(home: &Path, path: &Path) -> String {
-    match path.strip_prefix(home) {
-        Ok(rest) if !rest.as_os_str().is_empty() => format!("~/{}", rest.display()),
-        _ => path.display().to_string(),
-    }
+    let real_home = home.canonicalize().ok();
+    [Some(home), real_home.as_deref()]
+        .into_iter()
+        .flatten()
+        .find_map(|h| {
+            path.strip_prefix(h)
+                .ok()
+                .filter(|r| !r.as_os_str().is_empty())
+        })
+        .map(|rest| format!("~/{}", rest.display()))
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 /// Every configured root, validated: `Ok` for the usable ones, `Err` with the

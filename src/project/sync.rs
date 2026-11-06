@@ -32,7 +32,7 @@ pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &
             repo.root().join(MIRROR_DIR),
             "paused",
             format!(
-                "the skill repo is in the middle of {operation}, so project items are not synced; finish it, then run `skiman sync`"
+                "the skill repo {operation}, so project items are not synced; finish that, then run `skiman sync`"
             ),
             false,
         ));

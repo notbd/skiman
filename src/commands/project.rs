@@ -121,7 +121,7 @@ impl Context {
         let lock = RepoLock::wait(&repo)?;
         if let Some(operation) = operation_in_progress(repo.root()) {
             return Err(Failure::operational(format!(
-                "the skill repo is in the middle of {operation}; finish it first, so nothing is written into an old checkout or a half-merged tree"
+                "the skill repo {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
             )));
         }
         let manifest = Manifest::load(&repo)?;
@@ -557,8 +557,9 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     finish_write(&ctx, &mut synced, &backups, exit)
 }
 
-/// Why an item is not adopted or restored, in a few words.
-fn describe(state: &State) -> String {
+/// An item's state in a few words: why it is not adopted or restored, and
+/// what `doctor` says about it.
+pub(crate) fn describe(state: &State) -> String {
     match state {
         State::MirrorInvalid(why) => format!("its mirror cannot be used: {why}"),
         State::ProjectGone => "its project folder is gone".to_owned(),

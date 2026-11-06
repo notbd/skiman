@@ -8,22 +8,23 @@ use std::path::{Path, PathBuf};
 
 use crate::git::query_command;
 
-/// The git operation the repo at `root` is in the middle of, as a phrase
-/// ("a merge", "a detached HEAD"), or `None`. Read from the git dir only; a
+/// What the repo at `root` is in the middle of, as the end of a sentence
+/// about it ("is in the middle of a merge", "has a detached HEAD …"), or
+/// `None`. Read from the git dir only; a
 /// `.git` file is followed to the worktree's git dir.
 pub fn operation_in_progress(root: &Path) -> Option<&'static str> {
     let dir = git_dir(root)?;
     let head = std::fs::read_to_string(dir.join("HEAD")).ok()?;
     if !head.starts_with("ref:") {
-        return Some("a detached HEAD (a `git checkout` of a commit, or a bisect)");
+        return Some("has a detached HEAD (a `git checkout` of a commit, or a bisect)");
     }
     let states = [
-        ("MERGE_HEAD", "a merge"),
-        ("CHERRY_PICK_HEAD", "a cherry-pick"),
-        ("REVERT_HEAD", "a revert"),
-        ("BISECT_LOG", "a bisect"),
-        ("rebase-merge", "a rebase"),
-        ("rebase-apply", "a rebase"),
+        ("MERGE_HEAD", "is in the middle of a merge"),
+        ("CHERRY_PICK_HEAD", "is in the middle of a cherry-pick"),
+        ("REVERT_HEAD", "is in the middle of a revert"),
+        ("BISECT_LOG", "is in the middle of a bisect"),
+        ("rebase-merge", "is in the middle of a rebase"),
+        ("rebase-apply", "is in the middle of a rebase"),
     ];
     states
         .into_iter()

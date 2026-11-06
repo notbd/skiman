@@ -1,6 +1,6 @@
 # Project scope: project instruction files and project skills
 
-Status: plan, council round 3. Branch `feat/local-scope`.
+Status: plan, council round 4. Branch `feat/local-scope`.
 
 ## Goal
 
@@ -8,14 +8,15 @@ skiman manages global content only: `skills/<name>` linked into every tool
 directory, and `instructions/shared.md` linked into every global instruction
 file. Most of a real setup is per project: 76 `AGENTS.md` files under
 `~/Work/Five-Continents`, project skills such as
-`<project>/.claude/skills/fcusa-weekly-po`, a `CLAUDE.md` per code project.
-They have no history and no backup.
+`<project>/.claude/skills/fcusa-weekly-po`, company skills kept in
+`~/Work/Five-Continents/fivec-core/skills/`, the `AGENTS.md` of code projects
+that their own git repo does not track. They have no history and no backup.
 
 The user registers one or more folders (project roots). skiman finds every
 project instruction file and project skill under them and keeps a copy of
 each in the skill repo (the mirror). The project files stay real files and
 stay where they are; the mirror follows them automatically, so the skill repo
-holds their history. The project is written only when the user asks, and
+holds their history once the user commits it. The project is written only when the user asks, and
 whatever skiman replaces on either side goes to a backup first.
 
 | Requirement | Where |
@@ -68,8 +69,11 @@ Claude Code uses "local" for personal uncommitted files (`CLAUDE.local.md`).
   folder, or one project skill folder.
 - **Mirror** (镜像): `projects/<root id>/<path relative to the root>` in the
   skill repo: the recorded copy of a project item.
-- **Base**: per machine, the content hash both sides had when skiman last saw
-  them equal; it tells which side changed.
+- **Anchor**: the project folder an item belongs to: the item's path without
+  its pattern (`proj` for `proj/AGENTS.md` and `proj/.claude/skills/x`).
+- **Synced hash** (同步 hash): per machine, the content hash both sides had
+  when skiman last saw them equal; it tells which side changed. (Not "base":
+  the glossary reserves that word's meaning for the upstream snapshot.)
 
 ## Design
 
@@ -87,9 +91,8 @@ A project item is a root-relative path ending with one of the union of these
 patterns: a file pattern (a file item), an instruction-dir pattern (the whole
 folder is one item, `.claude/rules` loads recursively), or a skill-dir
 pattern plus one child folder holding `SKILL.md` (a skill item). The longest
-matching pattern decides the item's anchor, the project folder
-(`proj/.claude/CLAUDE.md`, `proj/.claude/rules` and `proj/.claude/skills/x`
-all have anchor `proj`). Adding a tool, or a location such as
+matching pattern decides the item's anchor (`proj/.claude/CLAUDE.md`,
+`proj/.claude/rules` and `proj/.claude/skills/x` all have anchor `proj`). Adding a tool, or a location such as
 `.claude/agents`, is data only. Project items are not per tool, so
 `[tools].enabled` does not apply.
 
@@ -99,6 +102,7 @@ all have anchor `proj`). Adding a tool, or a location such as
 [projects.work]
 path = "~/Work/Five-Continents"
 exclude = ["_archive", "00_个人事务_me/五洲工作系统_work-system/05_working"]
+skill_dirs = ["fivec-core/skills"]
 ```
 
 - `<id>` follows the skill name rule; `path` is absolute or starts with `~/`
@@ -111,9 +115,18 @@ exclude = ["_archive", "00_个人事务_me/五洲工作系统_work-system/05_wor
   (two of the three `fcusa-weekly-po` copies sit in backup folders;
   `~/Developer/.agents-config/agent-setup-migration/backup-pre-import/` holds
   an old `.codex/AGENTS.md`). An item adopted before its path was excluded
-  keeps syncing; eject it to stop.
+  keeps syncing; eject it to stop. An exact path given to `adopt` wins over
+  `exclude`.
+- `skill_dirs` (optional): root-relative folders whose child folders holding
+  `SKILL.md` are project skill items too, for skills the user keeps in a
+  folder of their own and links into the tools by other means (the company
+  skills in `fivec-core/skills/`, linked by the user's `harness-sync`). Same
+  item kind, gates and protocol; skiman never touches the tool directories
+  for them, so it does not compete with the existing links. Anchor: the
+  configured folder's parent.
 - One function validates a root wherever it is used (`project add`, `adopt`,
-  `restore`, `sync`, `doctor`), because `skiman.toml` is edited by hand and
+  `restore`, `sync`, `doctor`; `eject` maps a path to its root lexically,
+  after expanding `~`, so a root that is gone can still be ejected), because `skiman.toml` is edited by hand and
   shared. A root must be an existing folder, and must not be: `HOME`, `/`
   or an ancestor of `HOME`; inside the skill repo (containing it is fine,
   discovery skips it); inside or containing any tool's presence directory;
@@ -137,26 +150,29 @@ skill repo/
         .claude/skills/fcusa-weekly-po/SKILL.md
     dev/
       wec-hist/AGENTS.md
-<state dir>/projects-base.toml                  (per machine)
+<state dir>/projects-synced.toml                (per machine)
 ```
 
 `<root>/<rel>` on disk pairs with `projects/<id>/<rel>`: path arithmetic, so
 the mirror tree is the only record of what is managed, laid out as the user
 sees it on disk, and every project skill is a standard agentskills.io folder.
 
-`projects-base.toml` holds per item the content hash (a folder uses the
-existing tree hash) and a stat fingerprint of each side (for a file: size,
-modification time in ns, inode; for a folder: the same over every entry,
-from `lstat` only). It sits in machine state next to `reported.toml`, so a
-re-clone or `git clean` does not lose it. Losing it loses no content: equal
-sides re-baseline silently, differing sides show as conflicts.
+`projects-synced.toml` holds, per root id, the root's realpath and one synced
+hash per item (a folder uses the existing tree hash). It sits in machine
+state next to `reported.toml`, so a re-clone or `git clean` does not lose it.
+An entry whose recorded realpath differs from the root's current one (the
+`path` changed on another machine), or whose root id is no longer
+configured, counts as absent and is dropped. Losing the file loses no
+content: equal sides are recorded again silently, differing sides show as
+conflicts, and items missing on disk show as row 9.
 
 ### Discovery (`adopt`, `doctor`)
 
 Walks each root with `read_dir` and `lstat`, never following a directory
 symlink. It never enters `.git`, `node_modules`, a linked git worktree (a
 folder whose `.git` is a file pointing into `…/worktrees/`), an `exclude`
-entry, the skill repo or skiman's state directory. Item folders (skills,
+entry, a `.skiman-restore-*` folder, the skill repo or skiman's state
+directory. Item folders (skills,
 rules folders) are not entered. A symlink at an item location (an alias such
 as `CLAUDE.md -> AGENTS.md`, a link to a global skill) is not a candidate
 and is not reported.
@@ -168,79 +184,104 @@ and is not reported.
    for roots inside a repo); one `git ls-files` per repo; a folder item with
    any tracked file is skipped. That repo is already the item's source of
    truth. If git fails for a repo, its candidates are skipped with the error.
-2. **The rules** on the snapshot as it would sit in the mirror: path safety
-   (no symlinks or special files inside a folder item, size limits, Unicode
-   collisions, UTF-8 names), the skill rules (frontmatter, name equals folder
-   name), conflict markers (skiman's and git's: a line starting with
-   `<<<<<<< ` or `>>>>>>> `), the secret rule with the `[[secrets.allow]]`
-   hint.
+2. **The safety rules** on the snapshot as it would sit in the mirror: path
+   safety (no symlinks or special files inside a folder item, so a rules
+   folder holding a link is refused with "replace the link with a file, or
+   leave this folder unmanaged"; size limits; Unicode collisions; UTF-8
+   names), conflict markers (skiman's and git's: a line starting with
+   `<<<<<<< ` or `>>>>>>> `), and the secret rule with the
+   `[[secrets.allow]]` hint. The skill frontmatter rules do not apply: the
+   mirror records what the tools load, and Claude Code loads a skill without
+   `name` or `description`.
 
 ### Sync: the state table
 
-Evaluated per mirror item and per base entry (never by walking the roots),
-first matching row wins. `D` = disk, `M` = mirror, `B` = base.
+Evaluated per mirror item and per synced-hash entry, never by walking the
+roots.
 
 | # | Condition | Sync does | Exit |
 |---|---|---|---|
 | 1 | The skill repo is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned) | skip every project item; one notice | 0 |
 | 2 | Root fails validation or its folder is absent | skip the root; one warning | 0 |
 | 3 | `projects/<id>` has no `[projects.<id>]` | skip (`check` reports it) | 0 |
-| 4 | M is not a regular file / folder of the item's kind | report "mirror invalid" | 3 |
-| 5 | Anchor absent, B set | report "project gone", once per anchor | 0 |
-| 6 | Anchor absent, B none | silent (not on this machine; `doctor` counts) | 0 |
-| 7 | A path component between root and item is not a real folder, or D is a link or the wrong kind | report "occupied" | 3 |
-| 8 | D absent, M exists, B set | report "deleted in the project" (`restore` or `eject`) | 3 |
-| 9 | D absent, M exists, B none | report once per root "N items not on this machine yet" (`restore <root>`) | 0 |
-| 10 | D exists, M absent, B set | report "deleted in the mirror" (`adopt <item>` or `eject`) | 3 |
-| 11 | D absent, M absent, B set | drop B | 0 |
-| 12 | D = M | set B if it differs | 0 |
-| 13 | B set, M = B, D ≠ B | copy D to M (backup of old M), B = D; if D fails the rules, report "blocked" with the violations | 0 / 3 |
-| 14 | B set, D = B, M ≠ B | report "mirror changed" (`restore <item>` writes it to the project, `adopt <item>` keeps the project's) | 3 |
-| 15 | otherwise (both differ from B, or B none and D ≠ M) | report "conflict" (`adopt <item>` or `restore <item>`) | 3 |
+| 4 | D absent, M absent, S set | drop S | 0 |
+| 5 | M exists but is not a regular file / folder of the item's kind | report "mirror invalid" | 3 |
+| 6 | Anchor absent, S set | report "project gone", once per anchor | 0 |
+| 7 | Anchor absent, S none | silent (not on this machine; `doctor` counts) | 0 |
+| 8 | A path component between root and item exists but is not a real folder, or D exists but is a link or the wrong kind | report "occupied" | 3 |
+| 9 | D absent, M exists, S none | report once per root "N items not on this machine yet" with the paste-ready `skiman project restore …` | 0 |
+| 10 | D absent, M exists, S set | report "deleted in the project" (`restore` or `eject`) | 3 |
+| 11 | D exists, M absent, S set | report "deleted in the mirror" (`adopt <item>` or `eject`) | 3 |
+| 12 | D = M | record S if it differs | 0 |
+| 13 | S set, M = S, D ≠ S | copy D to M (old M to a backup), S = D; if D fails the safety rules, report "blocked" with the violations | 0 / 3 |
+| 14 | S set, D = S, M ≠ S | report "mirror changed" (`restore <item>` writes it to the project, `adopt <item>` keeps the project's) | 3 |
+| 15 | otherwise (both differ from S, or S none and D ≠ M) | report "conflict" (`adopt <item>` or `restore <item>`) | 3 |
+
+`D` = disk, `M` = mirror, `S` = synced hash; first matching row wins. A
+missing intermediate folder (such as `.claude/skills` under an existing
+anchor) means D is absent, not occupied. Rows 10, 11, 14 and 15 end with one
+paste-ready command line naming every affected item.
 
 Sync writes only the mirror (row 13) and machine state. It never writes a
 project folder and never spawns git. `sync --hook` prints only new reports
-and always exits 0, as today. Cost at session start: an `lstat` fingerprint
-per item; content is read and hashed only for items whose fingerprint
-changed, and a file over the size limit is reported "blocked" without being
-read.
+and always exits 0, as today. Cost at session start: both sides of every item
+are read and hashed (measured on the user's two roots: 100 files, 835 KB,
+3.5 ms of hashing); a file over the size limit is reported "blocked" from
+its `lstat` size without being read.
+
+`adopt`, `restore` and `eject` refuse with exit 4 while row 1 holds, naming
+the git state, so no command writes into an old checkout or a half-merged
+tree.
 
 ### Writing: one protocol for every replace
 
-Used by sync row 13, `adopt`, `restore` and `eject`:
+Used by sync row 13, `adopt` and `restore` (`eject` only moves the mirror to a
+backup and drops the synced hash):
 
-1. Read the source into an in-memory snapshot and run the rules on it. Its
-   hash becomes the new base; the live source is not re-read.
+1. Read the source into an in-memory snapshot and run the safety rules on it.
+   Its hash becomes the new synced hash; the live source is not re-read.
 2. Write the snapshot to a temporary location on the destination's
-   filesystem: `.skiman/tmp/` for the mirror, a hidden folder in the anchor
-   for the project (`<anchor>/.skiman-restore-<ts>/`, removed at the end).
-3. If the destination exists, rename it aside into that same temporary
-   location (atomic, keeps the inode so a late write through an open handle
-   lands in the set-aside copy), and hash the set-aside copy. If it no longer
-   matches what the plan saw, rename it back and report a conflict.
+   filesystem: the command's staging folder `.skiman/tmp/<ts>/` for the
+   mirror; `<anchor>/.skiman-restore-<ts>/` for the project.
+3. If the destination exists, rename it aside on the same filesystem (the
+   mirror's into the staging folder's protected `old/`, which cleanup never
+   deletes; the project's into the restore folder), keeping its inode, and
+   hash the set-aside copy. If it no longer matches what the plan saw, put
+   it back without replacing anything, and report a conflict.
 4. Put the new entry in place without replacing anything: a hard link for a
-   file (fails if something appeared), `rename` for a folder (fails over a
-   file or a non-empty folder).
+   file (fails if something appeared; a filesystem without hard links fails
+   here too), `rename` for a folder (fails over a file or a non-empty
+   folder).
 5. Move the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
-   for mirror content, `backups/<ts>/projects/<id>/…` for project content).
-   Nothing skiman replaces is deleted.
-6. Write the new base.
+   for mirror content, `backups/<ts>/projects/<id>/…` for project content),
+   then hash it again: a different hash means a write through a handle
+   opened before the swap landed there, and is reported with the backup
+   path. Nothing skiman replaces is deleted.
+6. Write the new synced hash; then remove the temporary location.
 
-If the process stops between steps 3 and 4 the original sits in the
-temporary location under a known name: the next command that stages (any
-write command, including sync's row 13) moves mirror-side leftovers to a
-backup, as `.skiman/tmp/` leftovers are handled today; a leftover
-`.skiman-restore-*` folder in a project is reported by `sync` and `doctor`
-with its path, and the next `restore` there moves it to a backup first.
+Failure handling, so an error never deletes the only copy:
+
+- "Put back" (step 3) and every undo use the same no-replace placement as
+  step 4. If the original path is taken meanwhile, both versions stay where
+  they are and the command reports both paths.
+- A failure in step 4 puts the set-aside copy back and exits 4.
+- A failure in step 5, or a backup folder on another filesystem than the
+  set-aside copy, leaves the copy where step 3 put it (never copy-then-
+  delete) and reports its path; the temporary location is then kept.
+- If the process stops, the original is in a known place: mirror-side
+  `old/` folders are moved to a backup by the next staging command, as
+  `.skiman/tmp/` leftovers are today; a project-side `.skiman-restore-*`
+  folder is reported by `doctor` and moved to a backup by the next `restore`
+  in that project before it writes.
 
 ### Commands
 
 | Command | What it does |
 |---|---|
 | `skiman project add <path> [--id <id>]` | Register a project root. |
-| `skiman project adopt [<path>...] [--dry-run] [--yes]` | Discover under the roots (or `<path>`), print the plan, confirm, copy each new candidate into the mirror and set its base. Named exactly, an item in row 10, 14 or 15 takes the project's version into the mirror. Ends with `sync`. |
-| `skiman project restore <path>... [--dry-run] [--yes]` | Write mirror items to the project: under a folder, items missing on disk (rows 8, 9: a new machine, a deleted file); named exactly, also rows 14 and 15. |
-| `skiman project eject <path>... [--yes]` | Stop managing the items under `<path>`: mirrors to the backup, base entries dropped, the project untouched. Works when the mirror or the project is already gone. A root's own path also removes `[projects.<id>]`, after every item is out. |
+| `skiman project adopt [<path>...] [--dry-run] [--yes]` | Discover under the roots (or `<path>`), print the plan, confirm, copy each new candidate into the mirror and record its synced hash. Named exactly, an item in row 11, 14 or 15 takes the project's version into the mirror. Warns when git ignores a new mirror path (`git check-ignore -v`, naming the rule), since an ignored mirror never gets history. Ends with `sync`. |
+| `skiman project restore <path>... [--dry-run] [--yes]` | Write mirror items to the project: under a folder, items missing on disk (rows 9, 10: a new machine, a deleted file); named exactly, also rows 14 and 15. Reruns gate 1 first: a path a project repo now tracks is not written. |
+| `skiman project eject <path>... [--yes]` | Stop managing the items under `<path>`: mirrors to the backup, synced hashes dropped, the project untouched. Works when the mirror or the project is already gone. A root's own path also removes `[projects.<id>]`, after every item is out. |
 
 One rule for all three: **a command given a folder never replaces existing
 content on either side; replacing needs the item's exact path.** So an
@@ -263,7 +304,7 @@ repo lock, staging, backups under machine state.
 - **Deleted in the mirror**: reported; `adopt <item>` takes it back in,
   `eject` forgets it.
 - **Project folder moved or deleted**: the old path is "project gone" (once
-  per project folder); the moved folder holds real files, unmanaged until
+  per anchor); the moved folder holds real files, unmanaged until
   adopted. `eject <old path>` plus `adopt <new path>` in one commit keeps the
   history (`git log --follow` follows identical content across the move).
 - **The skill repo mid-merge, mid-rebase, detached for `git checkout <sha>`
@@ -289,8 +330,8 @@ repo lock, staging, backups under machine state.
 - `doctor`: per root, whether it is valid, item count, every item not in
   step with its fix, managed items now tracked by a project repo, how many
   candidates are not adopted yet, how many items exist only in the mirror
-  (row 6), leftover `.skiman-restore-*` folders, and whether `projects/` has
-  uncommitted changes (skiman never commits; mirror changes are committed by
+  (row 7), leftover `.skiman-restore-*` folders, mirror paths git ignores,
+  and whether `projects/` has uncommitted changes (skiman never commits; mirror changes are committed by
   the user like any other change).
 - `managing-skills`: project items are real files, edit them in place; after
   creating a project `AGENTS.md`, rules file or project skill under a root,
@@ -305,15 +346,16 @@ repo lock, staging, backups under machine state.
   checked by the same rules and hooks. The user already keeps work-related
   instructions there (`instructions/legacy-global-rules.md`). Registering a
   root is an explicit act, and `project add` says where content goes.
-- The three company skills in `~/Work/Five-Continents/fivec-core/skills/` are
-  not in a project skill directory (they reach agents through links in the
-  global tool directories), so they are global skills: `skiman adopt <name>
-  --from claude-code` brings them in.
+- The three company skills in `~/Work/Five-Continents/fivec-core/skills/`
+  are, by the user's rule in `fivec-core/AGENTS.md`, kept there and linked
+  into the tools by `harness-sync`, not by skiman, and wait for a backup
+  system. `skill_dirs = ["fivec-core/skills"]` gives them history without
+  changing that rule: skiman mirrors them and never touches the links.
 
 ## Not in scope
 
 - Writing the project automatically (see Model); a file-watching daemon.
-- Three-way merging of conflicts: the base stores hashes only.
+- Three-way merging of conflicts: the synced hash is a hash only.
 - Files tracked by another git repo.
 - Files a project item points to (`@` import targets, documents named in
   `AGENTS.md`): only the item itself is mirrored.
@@ -325,21 +367,25 @@ repo lock, staging, backups under machine state.
 
 1. `project add` and root validation: every refusal, also for a hand-edited
    `skiman.toml`.
-2. Discovery: every pattern kind; item folders not entered; dir symlinks not
+2. Discovery: every pattern kind, `skill_dirs`; item folders not entered; dir symlinks not
    followed; `.git`, `node_modules`, linked worktree, `exclude` (name, path),
    skill repo and state dir skipped; alias links ignored.
 3. Gates: tracked file, folder with one tracked file, git failure, secret,
-   bad frontmatter, symlink inside a skill, git conflict markers.
-4. Adopt: new file, rules folder and skill copied byte-identically with base
+   symlink inside a skill or rules folder, git conflict markers; a skill
+   without frontmatter `name` is adopted.
+4. Adopt: new file, rules folder and skill copied byte-identically with synced hash
    set; project untouched; `--dry-run` writes nothing; rerun is a no-op;
    folder adopt never replaces; exact-path adopt of rows 10, 14, 15 with the
    old mirror in a backup.
 5. Sync: every row of the state table, including the pause on each git
-   state, the fingerprint fast path, an oversized file, hook mode printing
-   each report once, and the set-aside check catching a concurrent change.
+   state, an oversized file, a `path` changed under recorded synced hashes,
+   hook mode printing each report once, the set-aside check catching a
+   concurrent change, and a failing backup step keeping the set-aside copy.
 6. Restore: missing items under a folder; exact-path replace with the old
-   project content in a backup; nothing replaced under a folder; leftover
-   `.skiman-restore-*` handling.
+   project content in a backup; nothing replaced under a folder; a path the
+   project repo tracks is not written; a failing step 4 or 5 keeps the
+   original; leftover `.skiman-restore-*` handling; every project command
+   refuses during a skill repo merge.
 7. Eject: item, folder, root (table removed), with mirror or project gone.
 8. Check: `project-path`, secret, skill rules, conflict markers.
 9. Doctor: the project section.

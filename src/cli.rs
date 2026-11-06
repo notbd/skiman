@@ -126,6 +126,56 @@ pub enum Command {
     List,
     /// Diagnose the setup: skill repo, hooks, agent tools, entries skiman does not own, leftovers
     Doctor,
+    /// Manage project instruction files and project skills under registered project roots
+    Project {
+        #[command(subcommand)]
+        command: ProjectCommand,
+    },
+}
+
+/// `skiman project <command>`; the logic lives in `commands::project`.
+#[derive(Debug, Subcommand)]
+pub enum ProjectCommand {
+    /// Register a folder as a project root
+    Add {
+        /// The folder; its project files are discovered by `skiman project adopt`
+        path: PathBuf,
+        /// Root id, used as the mirror folder name under projects/ [default: the folder name]
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Copy project items into the mirror: new ones under a folder, any one named exactly
+    Adopt {
+        /// Folders or items to adopt [default: every project root]
+        paths: Vec<PathBuf>,
+        /// Print the plan, then stop without writing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Adopt without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Write mirror items to the project: missing ones under a folder, any one named exactly
+    Restore {
+        /// Folders or items to restore
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Print the plan, then stop without writing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Restore without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Stop managing project items: their mirrors go to a backup, the project is untouched
+    Eject {
+        /// Folders or items; a project root's own path also unregisters it
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Eject without asking for confirmation
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// The id of a known agent tool.
@@ -218,5 +268,19 @@ where
         Command::Check { staged } => commands::check::run(staged),
         Command::List => commands::list::run(),
         Command::Doctor => commands::doctor::run(),
+        Command::Project { command } => match command {
+            ProjectCommand::Add { path, id } => commands::project::add(&path, id),
+            ProjectCommand::Adopt {
+                paths,
+                dry_run,
+                yes,
+            } => commands::project::adopt(paths, dry_run, yes),
+            ProjectCommand::Restore {
+                paths,
+                dry_run,
+                yes,
+            } => commands::project::restore(paths, dry_run, yes),
+            ProjectCommand::Eject { paths, yes } => commands::project::eject(paths, yes),
+        },
     }
 }

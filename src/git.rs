@@ -100,6 +100,21 @@ pub fn fetch_command(git_dir: &Path, prompts: Prompts) -> Command {
     cmd
 }
 
+/// A read-only git query in the user's repository at `dir` (`git -C <dir>`):
+/// the user's config stays in effect (ignore files, `core.excludesFile`), the
+/// calling git process's environment does not, and [`SAFE_CONFIG`] applies.
+pub fn query_command(dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    for var in LOCAL_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    for setting in SAFE_CONFIG {
+        cmd.args(["-c", setting]);
+    }
+    cmd.arg("-C").arg(dir);
+    cmd
+}
+
 /// Settings the MERGE profile adds: the user's global attributes file is not
 /// covered by `GIT_CONFIG_GLOBAL` (git-fetch-and-merge.md 1.3).
 const MERGE_CONFIG: &[&str] = &["core.attributesFile=/dev/null"];

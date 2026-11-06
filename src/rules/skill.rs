@@ -53,11 +53,23 @@ pub fn check_skill(
     } else if !names::is_valid(name) {
         out.insert(Violation::new(&dir, None, rule::SKILL_FOLDER, format!("`{name}` is not a valid skill name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
     }
+    check_folder(tree, &dir, out, found)
+}
+
+/// The rules on a skill folder's content, wherever it sits (`skills/<name>`
+/// or a project skill under `projects/`): `SKILL.md` at the top, every
+/// entry, the file count and the total size.
+pub fn check_folder(
+    tree: &dyn Tree,
+    dir: &str,
+    out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
+) -> io::Result<()> {
     let skill_md = format!("{dir}/SKILL.md");
     match tree.kind(&skill_md)? {
         None => {
             out.insert(Violation::new(
-                &dir,
+                dir,
                 None,
                 rule::SKILL_MD,
                 "no SKILL.md at the top of the skill folder",
@@ -76,7 +88,7 @@ pub fn check_skill(
     }
 
     let (mut files, mut bytes) = (0usize, 0u64);
-    for entry in tree.walk(&dir)? {
+    for entry in tree.walk(dir)? {
         if is_ignored(&entry.path) {
             continue;
         }
@@ -88,7 +100,7 @@ pub fn check_skill(
     }
     if files > LIMITS.files {
         out.insert(Violation::new(
-            &dir,
+            dir,
             None,
             rule::FILE_COUNT,
             format!("{files} files; a skill may hold at most {}", LIMITS.files),
@@ -96,7 +108,7 @@ pub fn check_skill(
     }
     if bytes > LIMITS.skill_bytes {
         out.insert(Violation::new(
-            &dir,
+            dir,
             None,
             rule::SKILL_SIZE,
             format!(

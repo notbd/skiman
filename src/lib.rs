@@ -22,6 +22,7 @@ pub mod names;
 pub mod ownership;
 pub mod path_safety;
 pub mod paths;
+pub mod project;
 pub mod repo;
 pub mod repo_lock;
 pub mod reported;

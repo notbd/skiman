@@ -30,6 +30,21 @@ A second project held `.claude/rules/style.md`, `.claude/rules/sub/deep.md`,
 with a token. Claude Code loaded both `.claude/rules` files, including the
 one in the subfolder. Codex and Antigravity loaded none of them.
 
+## Codex `AGENTS.override.md`
+
+In a scratch git repo with `AGENTS.md` and `AGENTS.override.md` at the top
+and again in `sub/`, `codex exec` started in `sub/` quoted both override
+tokens and neither plain token: Codex reads `AGENTS.override.md` at every
+level, instead of that level's `AGENTS.md`.
+
+## Claude Code and a mirror inside the skill repo
+
+Reported by a council delegate (Claude Code 2.1.311, `claude -p` at the top
+of a git repo holding `projects/w/p/AGENTS.md`, `.claude/rules/r.md` and
+`.claude/skills/<n>` below it): none of the three loaded at session start;
+after the session read one file in `projects/w/p/`, all three were in
+context. `claudeMdExcludes` stopped the instruction files but not the skill.
+
 ## Claude Code `@` imports through a symlink
 
 | Setup | Loaded |

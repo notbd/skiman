@@ -348,14 +348,14 @@ fn doctor_lists_every_item_not_in_step_with_its_fix_and_changes_nothing() {
     assert_has(
         &stdout,
         &format!(
-            "{a}: its mirror changed; keep the project's version: skiman project adopt {a}; or the mirror's: skiman project restore {a}",
+            "{a}: its mirror changed; write it to the project: skiman project restore {a}; or keep the project's version: skiman project adopt {a}",
             a = root.join("a/AGENTS.md").display()
         ),
     );
     assert_has(
         &stdout,
         &format!(
-            "{b}: it was deleted in the project; bring it back: skiman project restore {b}; or stop managing it: skiman project eject {b}",
+            "{b}: it was deleted in the project; bring it back from the mirror: skiman project restore {b}; or stop managing it: skiman project eject {b}",
             b = root.join("b/AGENTS.md").display()
         ),
     );
@@ -438,4 +438,29 @@ fn doctor_reports_a_managed_item_that_a_project_git_repo_tracks_later() {
             item.display()
         ),
     );
+}
+
+#[test]
+fn doctor_reports_a_project_change_the_rules_block() {
+    let (sandbox, root) = with_root();
+    write(root.join("a/AGENTS.md"), "a\n");
+    adopt(&sandbox);
+    write(
+        root.join("a/AGENTS.md"),
+        format!("key = AKIA{}\n", "ABCDEFGHIJKLMNOP"),
+    );
+
+    let stdout = doctor(&sandbox);
+    let line = format!(
+        "{}: it is not copied into the mirror: projects/work/a/AGENTS.md:1: aws-access-key",
+        root.join("a/AGENTS.md").display()
+    );
+    assert!(stdout.lines().any(|l| l.starts_with(&line)), "{stdout}");
+}
+
+#[test]
+fn a_mirror_folder_left_with_only_ignored_files_is_not_a_violation() {
+    let (sandbox, _root) = with_root();
+    write(sandbox.skill_repo().join("projects/gone/.DS_Store"), "x");
+    sandbox.skiman().arg("check").assert().code(0);
 }

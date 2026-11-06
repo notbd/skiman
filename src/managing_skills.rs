@@ -25,6 +25,23 @@ pub fn content(repo: &SkillRepo) -> String {
         .replace(REPO_PLACEHOLDER, &repo.root().display().to_string())
         .replace("{{TOOL_DIRECTORIES}}", &home_paths(|t| t.tool_dir))
         .replace("{{INSTRUCTION_FILES}}", &home_paths(|t| t.instruction_file))
+        .replace(
+            "{{PROJECT_INSTRUCTION_FILES}}",
+            &code_list(&crate::project::pattern::instruction_patterns()),
+        )
+        .replace(
+            "{{PROJECT_SKILL_DIRS}}",
+            &code_list(&crate::project::pattern::skill_dir_patterns()),
+        )
+}
+
+/// `a`, `b` and `c` written as inline code, joined with commas.
+fn code_list(items: &[&str]) -> String {
+    items
+        .iter()
+        .map(|i| format!("`{i}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Writes `.skiman/managing-skills/SKILL.md` only when its content differs.

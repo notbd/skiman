@@ -1,6 +1,6 @@
 # Project scope: project instruction files and project skills
 
-Status: implemented on branch `feat/local-scope`; plan approved by the council (round 5: 9.7, 9.7, 9.7). Branch `feat/local-scope`.
+Status: implemented on branch `feat/local-scope`; plan approved by the council (round 5: 9.7, 9.7, 9.7).
 
 ## Goal
 
@@ -389,7 +389,7 @@ repo lock, staging, backups under machine state.
   file there (measured; avoided by not opening mirror files, see
   `managing-skills`).
 
-## Test plan (`tests/project.rs`, sandbox harness)
+## Test plan (`tests/project_*.rs`, sandbox harness)
 
 1. `project add` and root validation: every refusal, also for a hand-edited
    `skiman.toml`.

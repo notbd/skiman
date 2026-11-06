@@ -118,10 +118,9 @@ reports the size limit of the enabled agent tools.
 ## Project instruction files and project skills
 
 The user registers project roots (`[projects.<id>]` in `skiman.toml`).
-Under them, project instruction files (`AGENTS.md`, `CLAUDE.md`,
-`CLAUDE.local.md`, `.claude/CLAUDE.md`, `.claude/rules/**/*.md`,
-`AGENTS.override.md`, `GEMINI.md`) and project skills (`.claude/skills/<n>`,
-`.agents/skills/<n>`, `.agent/skills/<n>`) stay real files in the project.
+Under them, project instruction files ({{PROJECT_INSTRUCTION_FILES}}) and
+project skills (a folder in {{PROJECT_SKILL_DIRS}}) stay real files in the
+project.
 skiman keeps a copy of each in `{{SKILL_REPO}}/projects/<id>/<same path>` and
 copies every change made in the project into it at each sync.
 

@@ -118,7 +118,7 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
     };
     if !names::is_valid(&entry.id) {
         return Err(problem(format!(
-            "`{}` is not a valid root id: use lowercase letters, digits and single hyphens",
+            "`{}` is not a valid project root id: use lowercase letters, digits and single hyphens",
             entry.id
         )));
     }
@@ -141,6 +141,16 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         }
     };
     validate_dir(home, repo, &dir).map_err(problem)?;
+    for dir in &entry.skill_dirs {
+        if let Some(why) = invalid_skill_dir(dir, &entry.skill_dirs) {
+            return Err(problem(format!("`skill_dirs` entry \"{dir}\" {why}")));
+        }
+    }
+    for exclude in &entry.exclude {
+        if let Some(why) = invalid_exclude(exclude) {
+            return Err(problem(format!("`exclude` entry \"{exclude}\" {why}")));
+        }
+    }
     Ok(Root {
         id: entry.id.clone(),
         written: written.to_owned(),
@@ -148,6 +158,39 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         exclude: entry.exclude.clone(),
         skill_dirs: entry.skill_dirs.clone(),
     })
+}
+
+/// Why the `skill_dirs` entry `dir` cannot be used, given every entry of
+/// its root; `None` when it can. Shared by `skiman check` and every command.
+pub fn invalid_skill_dir(dir: &str, all: &[String]) -> Option<&'static str> {
+    if dir.starts_with('/') || dir.starts_with('~') {
+        Some("must be relative to the root")
+    } else if dir
+        .split('/')
+        .any(|p| p.is_empty() || p == "." || p == "..")
+    {
+        Some("must be a plain relative path without empty, `.` or `..` parts")
+    } else if crate::project::pattern::contains_skill_dir_pattern(dir) {
+        Some("holds a tool's own project skill folder, which is found without it")
+    } else if all
+        .iter()
+        .any(|other| other != dir && dir.starts_with(&format!("{other}/")))
+    {
+        Some("lies inside another `skill_dirs` entry")
+    } else {
+        None
+    }
+}
+
+/// Why the `exclude` entry `entry` can match nothing; `None` when it can.
+pub fn invalid_exclude(entry: &str) -> Option<&'static str> {
+    let parts: Vec<&str> = entry.trim_end_matches('/').split('/').collect();
+    (entry.starts_with('/')
+        || entry.starts_with('~')
+        || parts
+            .iter()
+            .any(|p| p.is_empty() || *p == "." || *p == ".."))
+    .then_some("must be a name or a path relative to the root, without empty, `.` or `..` parts")
 }
 
 /// The checks on a root folder's realpath that do not depend on other roots.

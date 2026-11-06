@@ -131,6 +131,25 @@ impl Synced {
         }
     }
 
+    /// The recorded paths of root `id` at or under the root-relative
+    /// `folder` (`""` for all), whatever realpath they were recorded for.
+    pub fn rels_under(&self, id: &str, folder: &str) -> Vec<String> {
+        self.roots
+            .get(id)
+            .map(|r| {
+                r.items
+                    .keys()
+                    .filter(|rel| {
+                        folder.is_empty()
+                            || *rel == folder
+                            || rel.starts_with(&format!("{folder}/"))
+                    })
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Drops every record of root `id` at or under the root-relative `folder`
     /// (`""` for all), whatever realpath they were recorded for.
     pub fn remove_under(&mut self, id: &str, folder: &str) {

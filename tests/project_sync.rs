@@ -218,7 +218,7 @@ fn a_project_edit_with_a_secret_is_blocked_and_the_mirror_kept() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "{} is not copied into the mirror",
+            "{}: it is not copied into the mirror",
             dir.join("proj/AGENTS.md").display()
         )),
         "{stderr}"
@@ -268,7 +268,7 @@ fn a_changed_mirror_is_reported_and_the_project_left_alone() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "the mirror of {} changed; write it to the project: skiman project restore {}; or keep the project's version: skiman project adopt {}",
+            "{}: its mirror changed; write it to the project: skiman project restore {}; or keep the project's version: skiman project adopt {}",
             item.display(),
             item.display(),
             item.display()
@@ -301,7 +301,7 @@ fn both_sides_changed_is_a_conflict_and_neither_is_written() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "{} and its mirror both changed",
+            "{}: it and its mirror both changed",
             dir.join("proj/AGENTS.md").display()
         )),
         "{stderr}"
@@ -384,7 +384,7 @@ fn an_item_deleted_in_the_project_is_reported_and_not_brought_back() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "{} was deleted in the project; bring it back from the mirror: skiman project restore {}",
+            "{}: it was deleted in the project; bring it back from the mirror: skiman project restore {}",
             item.display(),
             item.display()
         )),
@@ -408,8 +408,8 @@ fn an_item_deleted_in_the_mirror_is_reported_and_not_copied_back() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "projects/work/proj/AGENTS.md was deleted in the mirror; take it back in: skiman project adopt {}",
-            dir.join("proj/AGENTS.md").display()
+            "{d}: it was deleted in the mirror; take it back in: skiman project adopt {d}",
+            d = dir.join("proj/AGENTS.md").display()
         )),
         "{stderr}"
     );
@@ -461,7 +461,10 @@ fn a_project_folder_that_is_gone_is_reported_once_and_does_not_need_attention() 
 
     assert_eq!(out.status.code(), Some(0));
     let stderr = stderr_of(&out);
-    let line = format!("project folder {} is gone", dir.join("proj").display());
+    let line = format!(
+        "its project folder is gone; if it moved, adopt the new path; to stop managing it: skiman project eject {}",
+        dir.join("proj").display()
+    );
     assert_eq!(stderr.matches(&line).count(), 1, "{stderr}");
     assert_eq!(stderr.lines().count(), 1, "{stderr}");
     assert!(exists(mirror(&sandbox, "proj/AGENTS.md")));
@@ -576,7 +579,7 @@ fn a_symlink_at_the_item_path_is_occupied_and_not_followed() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "project item {} is not synced: {} is not a regular file",
+            "{}: {} is not a regular file",
             item.display(),
             item.display()
         )),
@@ -610,7 +613,7 @@ fn a_mirror_skill_holding_a_symlink_is_invalid_and_the_project_left_alone() {
     assert_eq!(stdout_of(&out), "", "an invalid mirror is not replaced");
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("the mirror projects/work/proj/.claude/skills/x cannot be used"),
+        stderr.contains("fix projects/work/proj/.claude/skills/x in the skill repo"),
         "{stderr}"
     );
     assert_eq!(read(skill.join("SKILL.md")), "edited in the project\n");
@@ -633,7 +636,7 @@ fn a_mirror_file_that_is_a_symlink_is_invalid() {
 
     assert_eq!(out.status.code(), Some(3));
     assert!(
-        stderr_of(&out).contains("the mirror projects/work/proj/AGENTS.md cannot be used"),
+        stderr_of(&out).contains("fix projects/work/proj/AGENTS.md in the skill repo"),
         "{}",
         stderr_of(&out)
     );
@@ -757,7 +760,7 @@ fn sync_hook_prints_each_project_report_once_and_exits_0() {
     );
     let stdout = stdout_of(&first);
     let line = format!(
-        "skiman: the mirror of {} changed",
+        "skiman: {}: its mirror changed",
         dir.join("proj/AGENTS.md").display()
     );
     assert_eq!(stdout.matches(&line).count(), 1, "{stdout}");
@@ -867,7 +870,7 @@ fn a_missing_folder_between_the_anchor_and_the_item_means_deleted_not_occupied()
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "{} was deleted in the project",
+            "{}: it was deleted in the project",
             dir.join("proj/.claude/skills/x").display()
         )),
         "{stderr}"
@@ -892,7 +895,7 @@ fn a_project_skill_whose_skill_md_was_renamed_away_is_blocked() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "{} is not copied into the mirror",
+            "{}: it is not copied into the mirror",
             skill.display()
         )),
         "{stderr}"
@@ -918,7 +921,7 @@ fn a_mirror_skill_without_skill_md_is_invalid() {
 
     assert_eq!(out.status.code(), Some(3));
     assert!(
-        stderr_of(&out).contains("the mirror projects/work/proj/.claude/skills/x cannot be used"),
+        stderr_of(&out).contains("fix projects/work/proj/.claude/skills/x in the skill repo"),
         "{}",
         stderr_of(&out)
     );
@@ -987,7 +990,7 @@ fn synced_hashes_recorded_for_another_root_path_are_not_trusted() {
     let stderr = stderr_of(&out);
     assert!(
         stderr.contains(&format!(
-            "{} and its mirror both changed",
+            "{}: it and its mirror both changed",
             new.join("b/AGENTS.md").display()
         )),
         "{stderr}"
@@ -1042,4 +1045,64 @@ fn the_fix_command_for_one_item_is_paste_ready_for_a_path_with_a_space() {
         )),
         "{stderr}"
     );
+}
+
+#[test]
+fn a_symlinked_folder_in_the_mirror_is_never_written_through() {
+    let sandbox = Sandbox::new();
+    let dir = adopted_file(&sandbox);
+    // Move the mirror folder out of the repo and leave a link in its place.
+    let outside = sandbox.root().join("outside");
+    std::fs::rename(mirror(&sandbox, "proj"), &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, mirror(&sandbox, "proj")).unwrap();
+    write(dir.join("proj/AGENTS.md"), "v2\n");
+
+    let out = sync(&sandbox);
+
+    assert_eq!(out.status.code(), Some(3));
+    assert!(
+        stderr_of(&out).contains("its mirror cannot be used"),
+        "{}",
+        stderr_of(&out)
+    );
+    assert_eq!(
+        read(outside.join("AGENTS.md")),
+        "v1\n",
+        "nothing written outside the repo"
+    );
+}
+
+#[test]
+fn a_backup_that_cannot_be_written_still_records_what_was_mirrored() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let dir = adopted_file(&sandbox);
+    std::fs::create_dir_all(backups_dir(&sandbox)).unwrap();
+    let locked = std::fs::Permissions::from_mode(0o500);
+    std::fs::set_permissions(backups_dir(&sandbox), locked).unwrap();
+    write(dir.join("proj/AGENTS.md"), "v2\n");
+
+    let out = sync(&sandbox);
+    std::fs::set_permissions(
+        backups_dir(&sandbox),
+        std::fs::Permissions::from_mode(0o700),
+    )
+    .unwrap();
+
+    assert_eq!(out.status.code(), Some(4), "{}", stderr_of(&out));
+    assert!(
+        stderr_of(&out).contains("it is kept at"),
+        "{}",
+        stderr_of(&out)
+    );
+    assert_eq!(read(mirror(&sandbox, "proj/AGENTS.md")), "v2\n");
+    // The next project edit is an ordinary change, not a conflict.
+    write(dir.join("proj/AGENTS.md"), "v3\n");
+    let out = sync(&sandbox);
+    assert!(
+        !stderr_of(&out).contains("both changed"),
+        "{}",
+        stderr_of(&out)
+    );
+    assert_eq!(read(mirror(&sandbox, "proj/AGENTS.md")), "v3\n");
 }

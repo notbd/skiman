@@ -834,3 +834,74 @@ fn a_project_skill_that_is_a_git_clone_of_its_own_is_left_to_that_repo() {
     assert!(stderr.contains("tracked by the git repo"), "{stderr}");
     assert!(!exists(mirror(&sandbox, "p/.claude/skills/cloned")));
 }
+
+#[test]
+fn an_exact_path_wins_over_a_folder_named_before_it() {
+    let sandbox = setup("");
+    let item = root(&sandbox).join("p/AGENTS.md");
+    write(&item, "v1\n");
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    write(&item, "project\n");
+    write(mirror(&sandbox, "p/AGENTS.md"), "mirror\n");
+
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .arg(root(&sandbox))
+        .arg(&item)
+        .assert()
+        .code(0);
+    assert_eq!(read(mirror(&sandbox, "p/AGENTS.md")), "project\n");
+}
+
+#[test]
+fn a_root_with_an_unusable_skill_dirs_entry_is_skipped() {
+    let sandbox = setup("skill_dirs = [\"/\"]");
+    write(root(&sandbox).join("AGENTS.md"), "a\n");
+    let assert = sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("`skill_dirs` entry \"/\" must be relative to the root"),
+        "{stderr}"
+    );
+    assert!(!exists(mirror(&sandbox, "AGENTS.md")));
+}
+
+#[test]
+fn a_root_that_holds_the_skill_repo_skips_it() {
+    let sandbox = Sandbox::new();
+    let holder = sandbox.home().join("dev");
+    let skill_repo = holder.join("skills");
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&skill_repo)
+        .assert()
+        .code(0);
+    write(holder.join("proj/AGENTS.md"), "p\n");
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "dev"])
+        .arg(&holder)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    let mirrored = skill_repo.join("projects/dev");
+    assert_eq!(read(mirrored.join("proj/AGENTS.md")), "p\n");
+    assert!(
+        !mirrored.join("skills").exists(),
+        "the skill repo is never discovered"
+    );
+}

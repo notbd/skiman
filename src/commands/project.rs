@@ -12,20 +12,21 @@ use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, write_atomic};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
-use crate::project::content::{self, Side};
+use crate::project::command;
+use crate::project::content::{self, Content, Side};
 use crate::project::discover::discover;
 use crate::project::git::{ignored, operation_in_progress, tracking_repos};
-use crate::project::item::{Item, MIRROR_DIR, read_mirror, read_mirror_of};
+use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
-use crate::project::state::{Evaluated, State, evaluate};
-use crate::project::swap::{self, Backups, Expect, Outcome, Place};
-use crate::project::sync::{check_rules, swap_parent};
+use crate::project::state::{Evaluated, State, check_rules, classify};
+use crate::project::swap::{self, Backups, Expect, Outcome, Place, Previous, Replace};
+use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::sync::{self, Output};
-use crate::tree::{Overlay, WorkingTree};
+use crate::tree::{Overlay, WorkingTree, is_ignored};
 
 // ---------------------------------------------------------------- add
 
@@ -43,54 +44,47 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         .filter(|d| d.is_dir())
         .ok_or_else(|| Failure::refused(format!("{} is not an existing folder", path.display())))?;
     root::validate_dir(home, &repo, &dir).map_err(Failure::refused)?;
-    let id = match id {
-        Some(id) => id,
-        None => root::default_id(&dir),
-    };
+    let id = id.unwrap_or_else(|| root::default_id(&dir));
     if id.is_empty() {
         return Err(Failure::refused(format!(
             "the name of {} has no letters or digits to make a root id from; give one with --id",
             dir.display()
         )));
     }
-    if !crate::names::is_valid(&id) {
-        return Err(Failure::refused(format!(
-            "`{id}` is not a valid project root id (lowercase letters, digits and single hyphens); give one with --id"
-        )));
-    }
     let _lock = RepoLock::wait(&repo)?;
     let manifest = Manifest::load(&repo)?;
-    for entry in manifest.projects() {
-        if entry.id == id {
-            return Err(Failure::refused(format!(
-                "skiman.toml already has [projects.{id}]; pick another id with --id"
-            )));
-        }
-        let other = entry.path.as_deref().and_then(|p| root::expand(home, p));
-        let other = other.map(|p| p.canonicalize().unwrap_or(p));
-        if let Some(other) = other
-            && (other.starts_with(&dir) || dir.starts_with(&other))
-        {
-            return Err(Failure::refused(format!(
-                "{} overlaps project root `{}` ({}); roots must not contain each other",
-                dir.display(),
-                entry.id,
-                other.display()
-            )));
-        }
+    if manifest.projects().iter().any(|entry| entry.id == id) {
+        return Err(Failure::refused(format!(
+            "skiman.toml already has [projects.{id}]; pick another id with --id"
+        )));
     }
     let file = repo.manifest_file();
-    let text = read_text(&file)?;
-    let written = root::written_form(home, &dir);
-    let text = manifest::with_project(&text, &id, &written)
+    let text = manifest::with_project(&read_text(&file)?, &id, &root::written_form(home, &dir))
         .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    // The same validation every command applies to a root, on the new text.
+    let candidate =
+        Manifest::parse(&text).map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    if let Some(Err(problem)) = root::resolve(home, &repo, &candidate)
+        .into_iter()
+        .find(|r| match r {
+            Ok(root) => root.id == id,
+            Err(problem) => problem.id == id,
+        })
+    {
+        let message = if crate::names::is_valid(&id) {
+            problem.message
+        } else {
+            format!("{}; give one with --id", problem.message)
+        };
+        return Err(Failure::refused(message));
+    }
     let tree = WorkingTree::new(repo.root());
-    let candidate = Overlay::new(
+    let overlay = Overlay::new(
         &tree,
         vec![(rules::MANIFEST.to_owned(), text.clone().into_bytes())],
     );
     rules::validate_write(
-        &candidate,
+        &overlay,
         &Scope {
             manifest: true,
             ..Scope::default()
@@ -102,7 +96,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     println!(
         "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the skill repo is pushed; see what it holds with: {} --dry-run",
         repo.root().display(),
-        crate::project::sync::command("adopt", std::slice::from_ref(&dir))
+        command("adopt", std::slice::from_ref(&dir))
     );
     Ok(Exit::Success)
 }
@@ -150,12 +144,15 @@ impl Context {
         })
     }
 
+    fn backups(&self) -> Backups {
+        Backups::under(self.paths.state_dir().join("backups"))
+    }
+
     /// The root a path given on the command line is in, and the path
-    /// relative to it (`""` for the root itself). The path is compared by
-    /// realpath, as far as it exists.
+    /// relative to it (`""` for the root itself). The parents are resolved
+    /// as far as they exist; the last component is not, so a path that is an
+    /// alias link names the link, not what it points to.
     fn locate(&self, path: &Path) -> Result<(&Root, String), Failure> {
-        // The parents are resolved, the last component is not: a path that is
-        // an alias link names the link, not what it points to.
         let absolute = cwd_absolute(path)?;
         let real = realpath_of_parent(&absolute);
         let whole = realpath_as_far_as_exists(&absolute);
@@ -175,6 +172,32 @@ impl Context {
                 ))
             })
     }
+
+    fn classify(&self, synced: &Synced, root: &Root, item: &Item) -> Result<Evaluated, Failure> {
+        let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
+        classify(&self.repo, root, item, recorded.as_deref()).map_err(|e| {
+            Failure::operational(format!("cannot read {}: {e}", item.disk(root).display()))
+        })
+    }
+
+    /// Saves the synced hashes, reports the backup, and syncs. `own` is the
+    /// exit status of the command's own work.
+    fn finish(&self, synced: &mut Synced, backups: &Backups, own: Exit) -> Result<Exit, Failure> {
+        synced.save(&self.paths).map_err(|e| {
+            Failure::operational(format!(
+                "cannot write {}: {e}",
+                self.paths.state_dir().display()
+            ))
+        })?;
+        if let Some(dir) = backups.created() {
+            println!("replaced versions are in {}", dir.display());
+        }
+        Ok(own.combine(self.sync()))
+    }
+
+    fn sync(&self) -> Exit {
+        sync::run(&self.paths, &self.repo, &self.lock, Output::Normal)
+    }
 }
 
 /// One path the user named, resolved.
@@ -185,6 +208,8 @@ struct Target<'a> {
     exact: Option<Item>,
 }
 
+/// The targets of `given`, items named exactly first, so an exact path is
+/// never shadowed by a folder that holds it; every root when `given` is empty.
 fn targets<'a>(ctx: &'a Context, given: &[PathBuf]) -> Result<Vec<Target<'a>>, Failure> {
     if given.is_empty() {
         return Ok(ctx
@@ -197,7 +222,7 @@ fn targets<'a>(ctx: &'a Context, given: &[PathBuf]) -> Result<Vec<Target<'a>>, F
             })
             .collect());
     }
-    given
+    let mut targets = given
         .iter()
         .map(|path| {
             let (root, rel) = ctx.locate(path)?;
@@ -207,52 +232,25 @@ fn targets<'a>(ctx: &'a Context, given: &[PathBuf]) -> Result<Vec<Target<'a>>, F
                 .flatten();
             Ok(Target { root, rel, exact })
         })
-        .collect()
+        .collect::<Result<Vec<_>, Failure>>()?;
+    targets.sort_by_key(|t| t.exact.is_none());
+    Ok(targets)
 }
 
 fn under(rel: &str, folder: &str) -> bool {
     folder.is_empty() || rel == folder || rel.starts_with(&format!("{folder}/"))
 }
 
-/// Every item the mirror or the synced hashes know under `target`.
-fn known_items(ctx: &Context, synced: &Synced, target: &Target) -> Result<Vec<Item>, Failure> {
-    let tree = WorkingTree::new(ctx.repo.root());
-    let mirror = read_mirror(&tree, target.root).map_err(|e| {
-        Failure::operational(format!("cannot read {}: {e}", ctx.repo.root().display()))
-    })?;
-    let mut items: BTreeMap<String, Item> = mirror
-        .items
-        .into_iter()
-        .map(|i| (i.rel.clone(), i))
-        .collect();
-    for (rel, kind) in synced.items(target.root) {
-        if let Some(item) = Item::at(
-            target.root,
-            &rel,
-            kind == crate::project::pattern::Kind::Skill,
-        ) {
-            items.entry(rel).or_insert(item);
-        }
+/// Refuses a folder target that holds nothing and does not exist (a typo).
+fn refuse_missing(target: &Target, found_nothing: bool) -> Result<(), Failure> {
+    let path = target.root.dir.join(&target.rel);
+    if target.exact.is_none() && !target.rel.is_empty() && found_nothing && !path.is_dir() {
+        return Err(Failure::refused(format!(
+            "{} is neither a project item nor a folder holding one",
+            path.display()
+        )));
     }
-    Ok(items
-        .into_values()
-        .filter(|i| match &target.exact {
-            Some(exact) => i.rel == exact.rel,
-            None => under(&i.rel, &target.rel),
-        })
-        .collect())
-}
-
-fn evaluated(
-    ctx: &Context,
-    synced: &Synced,
-    root: &Root,
-    item: &Item,
-) -> Result<Evaluated, Failure> {
-    let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
-    evaluate(root, item, ctx.repo.root(), recorded.as_deref()).map_err(|e| {
-        Failure::operational(format!("cannot read {}: {e}", item.disk(root).display()))
-    })
+    Ok(())
 }
 
 /// Refuses (exit 2) a command that would ask without a terminal.
@@ -263,165 +261,211 @@ fn need_yes(yes: bool, dry_run: bool) -> Result<(), Failure> {
     Ok(())
 }
 
+/// The two write commands, for their plan and messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Verb {
+    Adopt,
+    Restore,
+}
+
+impl Verb {
+    fn word(self) -> &'static str {
+        match self {
+            Verb::Adopt => "adopt",
+            Verb::Restore => "restore",
+        }
+    }
+
+    fn done(self) -> &'static str {
+        match self {
+            Verb::Adopt => "adopted",
+            Verb::Restore => "restored",
+        }
+    }
+
+    fn question(self, count: usize) -> String {
+        match self {
+            Verb::Adopt => format!("Adopt {count} item(s)? [y/N] "),
+            Verb::Restore => format!("Restore {count} item(s)? [y/N] "),
+        }
+    }
+}
+
 /// One planned write.
 struct Planned<'a> {
     root: &'a Root,
     item: Item,
     eval: Evaluated,
-    /// The verb printed in the plan.
+    /// What the plan line says is done to the item.
     what: &'static str,
 }
 
-/// Skipped candidates, printed after the plan.
+/// The plan of a write command: the writes, and what is skipped and why.
 #[derive(Default)]
-struct Skips {
-    lines: Vec<String>,
-    /// A path the user named exactly was skipped (exit 1).
-    named: bool,
+struct Plan<'a> {
+    writes: Vec<Planned<'a>>,
+    skips: Vec<String>,
+    /// Paths the user named exactly.
+    named: BTreeSet<PathBuf>,
+    /// An item named exactly was skipped (exit 1).
+    named_skipped: bool,
 }
 
-impl Skips {
-    fn add(&mut self, named: bool, line: String) {
-        self.named |= named;
-        self.lines.push(line);
+impl<'a> Plan<'a> {
+    fn skip(&mut self, disk: &Path, line: String) {
+        self.named_skipped |= self.named.contains(disk);
+        self.skips.push(line);
     }
-}
 
-/// Gate 1 on `planned`: drops every item a project's own git repo tracks,
-/// or whose repo git cannot read.
-fn drop_tracked(planned: &mut Vec<Planned>, named: &BTreeSet<PathBuf>, skips: &mut Skips) {
-    let disks: Vec<PathBuf> = planned.iter().map(|p| p.item.disk(p.root)).collect();
-    let tracking = tracking_repos(&disks);
-    let mut by_repo: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
-    planned.retain(|p| {
-        let disk = p.item.disk(p.root);
-        match tracking.get(&disk) {
-            Some(Ok(Some(top))) => {
-                by_repo.entry(top.clone()).or_default().push(disk.clone());
-                skips.named |= named.contains(&disk);
-                false
-            }
-            Some(Err(e)) => {
-                skips.add(
-                    named.contains(&disk),
-                    format!("skip {}: {e}", disk.display()),
-                );
-                false
-            }
-            _ => true,
-        }
-    });
-    for (top, disks) in by_repo {
-        skips.lines.push(format!(
-            "skip {} item(s) tracked by the git repo {} (that repo already keeps their history):",
-            disks.len(),
-            top.display()
+    /// A folder command leaves `state` alone: settling it needs the exact path.
+    fn needs_exact(&mut self, disk: &Path, state: &State, verb: Verb) {
+        self.skips.push(format!(
+            "skip {}: {}; to settle it, give its exact path: {}",
+            disk.display(),
+            state.describe(),
+            command(verb.word(), &[disk.to_path_buf()])
         ));
-        for disk in disks {
-            skips.lines.push(format!("  {}", disk.display()));
+    }
+
+    /// Gate 1: drops every write a project's own git repo tracks, or whose
+    /// repo git cannot read.
+    fn drop_tracked(&mut self) {
+        let disks: Vec<PathBuf> = self.writes.iter().map(|p| p.item.disk(p.root)).collect();
+        let tracking = tracking_repos(&disks);
+        let mut by_repo: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
+        let mut skipped = Vec::new();
+        self.writes.retain(|p| {
+            let disk = p.item.disk(p.root);
+            match tracking.get(&disk) {
+                Some(Ok(Some(top))) => {
+                    by_repo.entry(top.clone()).or_default().push(disk);
+                    false
+                }
+                Some(Err(e)) => {
+                    skipped.push((disk.clone(), format!("skip {}: {e}", disk.display())));
+                    false
+                }
+                _ => true,
+            }
+        });
+        for (disk, line) in skipped {
+            self.skip(&disk, line);
+        }
+        for (top, disks) in by_repo {
+            self.named_skipped |= disks.iter().any(|d| self.named.contains(d));
+            self.skips.push(format!(
+                "skip {} item(s) tracked by the git repo {} (that repo already keeps their history):",
+                disks.len(),
+                top.display()
+            ));
+            self.skips
+                .extend(disks.iter().map(|d| format!("  {}", d.display())));
+        }
+    }
+
+    /// Drops every write whose new content breaks the safety rules.
+    fn drop_breaking(&mut self, repo: &SkillRepo, content: impl Fn(&Planned) -> Option<Content>) {
+        let mut skipped = Vec::new();
+        self.writes.retain(|p| {
+            let disk = p.item.disk(p.root);
+            let Some(new) = content(p) else {
+                skipped.push((
+                    disk.clone(),
+                    vec![format!("skip {}: it cannot be read", disk.display())],
+                ));
+                return false;
+            };
+            match check_rules(repo, &p.item, &new) {
+                Ok(()) => true,
+                Err(violations) => {
+                    let mut lines = vec![format!("skip {}: it breaks the rules:", disk.display())];
+                    lines.extend(violations.iter().map(|v| format!("  {v}")));
+                    lines.extend(rules::allow_hint(&violations));
+                    skipped.push((disk, lines));
+                    false
+                }
+            }
+        });
+        for (disk, lines) in skipped {
+            self.named_skipped |= self.named.contains(&disk);
+            self.skips.extend(lines);
+        }
+    }
+
+    /// Prints the plan and the skips, and asks unless `yes`. `false` when
+    /// there is nothing to write or it is a dry run.
+    fn confirm(&self, verb: Verb, yes: bool, dry_run: bool) -> Result<bool, Failure> {
+        for p in &self.writes {
+            println!("{} {}", p.what, p.item.disk(p.root).display());
+        }
+        for line in &self.skips {
+            eprintln!("{line}");
+        }
+        if self.writes.is_empty() {
+            println!("nothing to {}", verb.word());
+            return Ok(false);
+        }
+        if dry_run {
+            return Ok(false);
+        }
+        if !yes && !confirm(&verb.question(self.writes.len()))? {
+            return Err(Failure::refused(format!(
+                "not {}; nothing was changed",
+                verb.done()
+            )));
+        }
+        Ok(true)
+    }
+
+    fn own_exit(&self) -> Exit {
+        if self.named_skipped {
+            Exit::Refused
+        } else {
+            Exit::Success
         }
     }
 }
 
-/// Prints the plan and the skips; asks unless `yes`. `false` when there is
-/// nothing to do or the user said no.
-fn show_plan(
-    planned: &[Planned],
-    skips: &Skips,
-    verb: &str,
-    yes: bool,
-    dry_run: bool,
-) -> Result<bool, Failure> {
-    for p in planned {
-        println!("{} {}", p.what, p.item.disk(p.root).display());
-    }
-    for line in &skips.lines {
-        eprintln!("{line}");
-    }
-    if planned.is_empty() {
-        println!("nothing to {verb}");
-        return Ok(false);
-    }
-    if dry_run {
-        return Ok(false);
-    }
-    if !yes
-        && !confirm(&format!(
-            "{} {} item(s)? [y/N] ",
-            capitalise(verb),
-            planned.len()
-        ))?
-    {
-        return Err(Failure::refused(format!(
-            "not {}; nothing was changed",
-            past(verb)
-        )));
-    }
-    Ok(true)
-}
-
-fn past(verb: &str) -> &'static str {
-    match verb {
-        "adopt" => "adopted",
-        "restore" => "restored",
-        _ => "done",
-    }
-}
-
-fn capitalise(word: &str) -> String {
-    let mut chars = word.chars();
-    chars
-        .next()
-        .map(|c| c.to_uppercase().collect::<String>() + chars.as_str())
-        .unwrap_or_default()
-}
-
-/// Ends a write command: saves the synced hashes, reports the backup, and
-/// syncs. `own` is the exit status of the command's own work.
-fn finish_write(
-    ctx: &Context,
-    synced: &mut Synced,
-    backups: &Backups,
-    own: Exit,
-) -> Result<Exit, Failure> {
-    synced.save(&ctx.paths).map_err(|e| {
-        Failure::operational(format!(
-            "cannot write {}: {e}",
-            ctx.paths.state_dir().display()
-        ))
-    })?;
-    if let Some(dir) = backups.created() {
-        println!("replaced versions are in {}", dir.display());
-    }
-    Ok(own.combine(sync::run(&ctx.paths, &ctx.repo, &ctx.lock, Output::Normal)))
-}
-
-/// Applies one replace and prints its outcome; returns the exit it adds.
-fn report_outcome(outcome: std::io::Result<Outcome>, done: &str, disk: &Path) -> Exit {
+/// Prints the outcome of one replace and returns the exit it adds; the
+/// new content is in place exactly when the first value is `true`.
+fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) -> (bool, Exit) {
     match outcome {
-        Ok(Outcome::Replaced { backup, late_write }) => {
-            println!("{done} {}", disk.display());
-            if late_write && let Some(backup) = backup {
-                eprintln!(
-                    "warning: a write landed while {} was replaced; that version is in {}",
-                    disk.display(),
-                    backup.display()
-                );
-                return Exit::NeedsAttention;
+        Ok(Outcome::Replaced {
+            previous,
+            late_write,
+        }) => {
+            println!("{} {}", verb.done(), disk.display());
+            match previous {
+                Previous::At(backup) if late_write => {
+                    eprintln!(
+                        "warning: a write landed while {} was replaced; that version is in {}",
+                        disk.display(),
+                        backup.display()
+                    );
+                    (true, Exit::NeedsAttention)
+                }
+                Previous::LeftInSwap { at, error } => {
+                    eprintln!(
+                        "error: the previous version of {} cannot be moved to the backup ({error}); it is kept at {}",
+                        disk.display(),
+                        at.display()
+                    );
+                    (true, Exit::OperationalError)
+                }
+                _ => (true, Exit::Success),
             }
-            Exit::Success
         }
         Ok(Outcome::Conflict(why)) => {
             eprintln!("warning: {why}; nothing was replaced, run the command again");
-            Exit::NeedsAttention
+            (false, Exit::NeedsAttention)
         }
-        Ok(Outcome::Kept(why)) => {
+        Ok(Outcome::Failed(why)) => {
             eprintln!("error: {why}");
-            Exit::OperationalError
+            (false, Exit::OperationalError)
         }
         Err(e) => {
             eprintln!("error: cannot write {}: {e}", disk.display());
-            Exit::OperationalError
+            (false, Exit::OperationalError)
         }
     }
 }
@@ -437,21 +481,19 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     let ctx = Context::open()?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
-    let skip_dirs = vec![
+    let skip_dirs = [
         ctx.repo.root().to_path_buf(),
         ctx.paths
             .state_dir()
             .canonicalize()
             .unwrap_or(ctx.paths.state_dir()),
     ];
-    let mut named = BTreeSet::new();
-    let mut planned: Vec<Planned> = Vec::new();
-    let mut skips = Skips::default();
+    let mut plan = Plan::default();
     let mut seen = BTreeSet::new();
     for target in &targets {
         let candidates: Vec<Item> = match &target.exact {
             Some(item) => {
-                named.insert(item.disk(target.root));
+                plan.named.insert(item.disk(target.root));
                 vec![item.clone()]
             }
             None => {
@@ -465,50 +507,60 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                         leftover.display()
                     );
                 }
+                // The items only the mirror knows (deleted in the project or
+                // in the mirror, changed there) are listed with their fix too.
                 let mut items = found.items;
+                let tree = WorkingTree::new(ctx.repo.root());
+                for item in managed(&tree, target.root, &synced).map_err(io_failure)? {
+                    if !items.contains(&item) {
+                        items.push(item);
+                    }
+                }
                 items.retain(|i| under(&i.rel, &target.rel));
                 items
             }
         };
-        if target.exact.is_none() && !target.rel.is_empty() && candidates.is_empty() {
-            let path = target.root.dir.join(&target.rel);
-            if !path.is_dir() {
-                return Err(Failure::refused(format!(
-                    "{} is neither a project item nor a folder holding one",
-                    path.display()
-                )));
-            }
-        }
+        refuse_missing(target, candidates.is_empty())?;
         for item in candidates {
             if !seen.insert((item.root.clone(), item.rel.clone())) {
                 continue;
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
-            let eval = evaluated(&ctx, &synced, target.root, &item)?;
+            let eval = ctx.classify(&synced, target.root, &item)?;
             let what = match (&eval.state, exact) {
                 (State::New, _) => "adopt",
-                (State::ProjectChanged, _) => "copy into the mirror",
                 (State::DeletedInMirror | State::MirrorChanged | State::Conflict, true) => {
                     "keep the project's version of"
                 }
-                (State::InSync, _) => continue,
+                // Sync, which ends every adopt, copies a project change in.
+                (State::InSync | State::ProjectChanged, _) => continue,
                 (
                     state @ (State::DeletedInMirror | State::MirrorChanged | State::Conflict),
                     false,
                 ) => {
-                    skips.lines.push(needs_exact(&disk, state, "adopt"));
+                    plan.needs_exact(&disk, state, Verb::Adopt);
                     continue;
                 }
+                // Folder adopt is about the project side; restore handles these.
+                (
+                    State::NotOnMachine
+                    | State::DeletedInProject
+                    | State::NotHere
+                    | State::ProjectGone
+                    | State::Forgotten
+                    | State::Nothing,
+                    false,
+                ) => continue,
                 (state, _) => {
-                    skips.add(
-                        exact,
-                        format!("skip {}: {}", disk.display(), describe(state)),
+                    plan.skip(
+                        &disk,
+                        format!("skip {}: {}", disk.display(), state.describe()),
                     );
                     continue;
                 }
             };
-            planned.push(Planned {
+            plan.writes.push(Planned {
                 root: target.root,
                 item,
                 eval,
@@ -516,64 +568,50 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             });
         }
     }
-    drop_tracked(&mut planned, &named, &mut skips);
-    planned.retain(|p| {
+    plan.drop_tracked();
+    plan.drop_breaking(&ctx.repo, |p| p.eval.disk.clone());
+    let own = plan.own_exit();
+    if !plan.confirm(Verb::Adopt, yes, dry_run)? {
+        return Ok(if dry_run {
+            own
+        } else {
+            own.combine(ctx.sync())
+        });
+    }
+    let mut backups = ctx.backups();
+    let swap_dir = swap_parent(&ctx.repo);
+    for message in swap::recover(
+        Place::Mirror {
+            swap_dir: &swap_dir,
+        },
+        &mut backups,
+    ) {
+        println!("{message}");
+    }
+    let mut exit = own;
+    let mut written = Vec::new();
+    for p in &plan.writes {
         let content = p
             .eval
             .disk
             .as_ref()
             .expect("a planned adopt has read the project side");
-        match check_rules(&ctx.repo, &p.item, content) {
-            Ok(()) => true,
-            Err(violations) => {
-                let disk = p.item.disk(p.root);
-                skips.add(
-                    named.contains(&disk),
-                    format!("skip {}: it breaks the rules:", disk.display()),
-                );
-                skips
-                    .lines
-                    .extend(violations.iter().map(|v| format!("  {v}")));
-                if let Some(hint) = rules::allow_hint(&violations) {
-                    skips.lines.push(hint);
-                }
-                false
-            }
+        let dest = ctx.repo.root().join(p.item.mirror_rel());
+        let outcome = Replace {
+            dest: &dest,
+            kind: p.item.kind,
+            expected: &Expect::from_hash(p.eval.mirror_hash.as_deref()),
+            new: content,
+            place: Place::Mirror {
+                swap_dir: &swap_dir,
+            },
+            inside: ctx.repo.root(),
+            backup_rel: &Path::new("repo").join(p.item.mirror_rel()),
         }
-    });
-    let own = if skips.named {
-        Exit::Refused
-    } else {
-        Exit::Success
-    };
-    if !show_plan(&planned, &skips, "adopt", yes, dry_run)? {
-        if dry_run {
-            return Ok(own);
-        }
-        return Ok(own.combine(sync::run(&ctx.paths, &ctx.repo, &ctx.lock, Output::Normal)));
-    }
-    let mut backups = Backups::new(&ctx.paths);
-    for message in swap::recover(&swap_parent(&ctx.repo), Place::Mirror, &mut backups) {
-        println!("{message}");
-    }
-    let mut exit = own;
-    let mut written = Vec::new();
-    for p in &planned {
-        let content = p.eval.disk.as_ref().expect("read");
-        let mirror = ctx.repo.root().join(p.item.mirror_rel());
-        let outcome = swap::replace(
-            &mirror,
-            p.item.kind,
-            &Expect::from_hash(p.eval.mirror_hash.as_deref()),
-            content,
-            &swap_parent(&ctx.repo),
-            Place::Mirror,
-            &mut backups,
-            &Path::new("repo").join(p.item.mirror_rel()),
-        );
-        let replaced = matches!(outcome, Ok(Outcome::Replaced { .. }));
-        exit = exit.combine(report_outcome(outcome, "adopted", &p.item.disk(p.root)));
-        if replaced {
+        .run(&mut backups);
+        let (placed, more) = report_outcome(outcome, Verb::Adopt, &p.item.disk(p.root));
+        exit = exit.combine(more);
+        if placed {
             synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
             written.push(p.item.mirror_rel());
         }
@@ -583,84 +621,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             "warning: git ignores {path} in the skill repo ({rule}), so it never gets history; change that rule"
         );
     }
-    finish_write(&ctx, &mut synced, &backups, exit)
-}
-
-/// An item's state in a few words: why it is not adopted or restored, and
-/// what `doctor` says about it.
-pub(crate) fn describe(state: &State) -> String {
-    match state {
-        State::MirrorInvalid(why) => format!("its mirror cannot be used: {why}"),
-        State::ProjectGone => "its project folder is gone".to_owned(),
-        State::NotHere => "its project folder is not on this machine".to_owned(),
-        State::Occupied(what) => what.clone(),
-        State::NotOnMachine => "it is in the mirror but not in the project yet".to_owned(),
-        State::DeletedInProject => "it was deleted in the project".to_owned(),
-        State::DeletedInMirror => "it was deleted in the mirror".to_owned(),
-        State::Blocked(why) => format!("the project's version cannot be taken: {why}"),
-        State::MirrorChanged => "its mirror changed".to_owned(),
-        State::Conflict => "both sides changed".to_owned(),
-        State::ProjectChanged => {
-            "the project's version is newer; `skiman sync` copies it into the mirror".to_owned()
-        }
-        State::InSync => "both sides are equal".to_owned(),
-        State::New => "it is not adopted yet".to_owned(),
-        State::Forgotten | State::Nothing => "there is nothing on either side".to_owned(),
-    }
-}
-
-/// The commands that settle an item in `state`, paste-ready.
-pub(crate) fn fix(state: &State, disk: &Path) -> Option<String> {
-    let one = [disk.to_path_buf()];
-    let cmd = |verb: &str| crate::project::sync::command(verb, &one);
-    Some(match state {
-        State::DeletedInProject => format!(
-            "bring it back: {}; or stop managing it: {}",
-            cmd("restore"),
-            cmd("eject")
-        ),
-        State::DeletedInMirror => format!(
-            "take it back in: {}; or stop managing it: {}",
-            cmd("adopt"),
-            cmd("eject")
-        ),
-        State::MirrorChanged | State::Conflict => format!(
-            "keep the project's version: {}; or the mirror's: {}",
-            cmd("adopt"),
-            cmd("restore")
-        ),
-        State::Blocked(_) => format!(
-            "fix it in the project, or bring back the mirror's version: {}",
-            cmd("restore")
-        ),
-        State::Occupied(_) | State::ProjectGone => format!("stop managing it: {}", cmd("eject")),
-        State::NotOnMachine => format!("write it: {}", cmd("restore")),
-        _ => return None,
-    })
-}
-
-/// A skip line for an item a folder command leaves alone because settling
-/// it needs the item's exact path.
-fn needs_exact(disk: &Path, state: &State, verb: &str) -> String {
-    format!(
-        "skip {}: {}; to settle it, give its exact path: {}",
-        disk.display(),
-        describe(state),
-        crate::project::sync::command(verb, &[disk.to_path_buf()])
-    )
-}
-
-/// `eval` with a project side that breaks the safety rules (a secret,
-/// conflict markers) shown as blocked, like sync shows it.
-fn with_rules(repo: &SkillRepo, item: &Item, mut eval: Evaluated) -> Evaluated {
-    if eval.state == State::ProjectChanged
-        && let Some(content) = &eval.disk
-        && let Err(violations) = check_rules(repo, item, content)
-    {
-        let why: Vec<String> = violations.iter().map(ToString::to_string).collect();
-        eval.state = State::Blocked(why.join("; "));
-    }
-    eval
+    ctx.finish(&mut synced, &backups, exit)
 }
 
 // ---------------------------------------------------------------- restore
@@ -674,23 +635,21 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     let ctx = Context::open()?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
-    let mut named = BTreeSet::new();
-    let mut planned: Vec<Planned> = Vec::new();
-    let mut skips = Skips::default();
+    let tree = WorkingTree::new(ctx.repo.root());
+    let mut plan = Plan::default();
     let mut seen = BTreeSet::new();
     for target in &targets {
-        let items = known_items(&ctx, &synced, target)?;
-        if target.exact.is_none() && !target.rel.is_empty() && items.is_empty() {
-            let path = target.root.dir.join(&target.rel);
-            if !path.is_dir() {
-                return Err(Failure::refused(format!(
-                    "{} is neither a project item nor a folder holding one",
-                    path.display()
-                )));
-            }
-        }
+        let items: Vec<Item> = managed(&tree, target.root, &synced)
+            .map_err(io_failure)?
+            .into_iter()
+            .filter(|i| match &target.exact {
+                Some(exact) => i.rel == exact.rel,
+                None => under(&i.rel, &target.rel),
+            })
+            .collect();
+        refuse_missing(target, items.is_empty())?;
         if let Some(exact) = &target.exact {
-            named.insert(exact.disk(target.root));
+            plan.named.insert(exact.disk(target.root));
             if items.is_empty() {
                 return Err(Failure::refused(format!(
                     "{} is not in the mirror",
@@ -704,11 +663,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
-            let eval = with_rules(
-                &ctx.repo,
-                &item,
-                evaluated(&ctx, &synced, target.root, &item)?,
-            );
+            let eval = ctx.classify(&synced, target.root, &item)?;
             let what = match (&eval.state, exact) {
                 (State::NotOnMachine, _) => "write",
                 (
@@ -717,7 +672,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     | State::MirrorChanged
                     | State::Conflict,
                     true,
-                ) => "write the mirror's version over",
+                ) if eval.mirror_hash.is_some() => "write the mirror's version over",
                 (State::InSync, _) => continue,
                 (
                     state @ (State::DeletedInProject
@@ -725,22 +680,22 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     | State::MirrorChanged
                     | State::Conflict),
                     false,
-                ) => {
-                    skips.lines.push(needs_exact(&disk, state, "restore"));
+                ) if eval.mirror_hash.is_some() => {
+                    plan.needs_exact(&disk, state, Verb::Restore);
                     continue;
                 }
                 (State::New | State::NotHere | State::Nothing | State::Forgotten, false) => {
                     continue;
                 }
                 (state, _) => {
-                    skips.add(
-                        exact,
-                        format!("skip {}: {}", disk.display(), describe(state)),
+                    plan.skip(
+                        &disk,
+                        format!("skip {}: {}", disk.display(), state.describe()),
                     );
                     continue;
                 }
             };
-            planned.push(Planned {
+            plan.writes.push(Planned {
                 root: target.root,
                 item,
                 eval,
@@ -748,75 +703,56 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             });
         }
     }
-    drop_tracked(&mut planned, &named, &mut skips);
-    let mut contents = BTreeMap::new();
-    planned.retain(|p| {
-        let disk = p.item.disk(p.root);
-        let mirror = ctx.repo.root().join(p.item.mirror_rel());
-        let content = match content::read(&mirror, p.item.kind) {
-            Ok(Side::Present(content)) => content,
-            _ => {
-                skips.add(
-                    named.contains(&disk),
-                    format!("skip {}: its mirror cannot be read", disk.display()),
-                );
-                return false;
-            }
-        };
-        if let Err(violations) = check_rules(&ctx.repo, &p.item, &content) {
-            skips.add(
-                named.contains(&disk),
-                format!("skip {}: its mirror breaks the rules:", disk.display()),
-            );
-            skips
-                .lines
-                .extend(violations.iter().map(|v| format!("  {v}")));
-            return false;
-        }
-        contents.insert(disk, content);
-        true
-    });
-    let own = if skips.named {
-        Exit::Refused
-    } else {
-        Exit::Success
+    plan.drop_tracked();
+    let mirror_of = |p: &Planned| match content::read(
+        &ctx.repo.root().join(p.item.mirror_rel()),
+        p.item.kind,
+    ) {
+        Ok(Side::Present(content)) => Some(content),
+        _ => None,
     };
-    if !show_plan(&planned, &skips, "restore", yes, dry_run)? {
+    plan.drop_breaking(&ctx.repo, mirror_of);
+    let own = plan.own_exit();
+    if !plan.confirm(Verb::Restore, yes, dry_run)? {
         return Ok(own);
     }
-    let mut backups = Backups::new(&ctx.paths);
+    let mut backups = ctx.backups();
     let mut exit = own;
     let mut recovered = BTreeSet::new();
-    for p in &planned {
+    for p in &plan.writes {
         let disk = p.item.disk(p.root);
         let anchor = p.item.anchor_dir(p.root);
         if recovered.insert(anchor.clone()) {
-            for message in swap::recover(&anchor, Place::Project, &mut backups) {
+            for message in swap::recover(Place::Project { anchor: &anchor }, &mut backups) {
                 println!("{message}");
             }
         }
-        let content = &contents[&disk];
-        let expect = match (&p.eval.state, &p.eval.disk_hash) {
+        let Some(content) = mirror_of(p) else {
+            eprintln!("error: the mirror of {} cannot be read", disk.display());
+            exit = exit.combine(Exit::OperationalError);
+            continue;
+        };
+        let expected = match (&p.eval.state, &p.eval.disk_hash) {
             (State::Blocked(_), None) => Expect::Present,
             (_, hash) => Expect::from_hash(hash.as_deref()),
         };
-        let outcome = swap::replace(
-            &disk,
-            p.item.kind,
-            &expect,
-            content,
-            &anchor,
-            Place::Project,
-            &mut backups,
-            &Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.rel),
-        );
-        let replaced = matches!(outcome, Ok(Outcome::Replaced { .. }));
-        exit = exit.combine(report_outcome(outcome, "restored", &disk));
-        if replaced {
+        let outcome = Replace {
+            dest: &disk,
+            kind: p.item.kind,
+            expected: &expected,
+            new: &content,
+            place: Place::Project { anchor: &anchor },
+            inside: &p.root.dir,
+            backup_rel: &Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.rel),
+        }
+        .run(&mut backups);
+        let (placed, more) = report_outcome(outcome, Verb::Restore, &disk);
+        exit = exit.combine(more);
+        if placed {
             synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
         }
     }
-    finish_write(&ctx, &mut synced, &backups, exit)
+    ctx.finish(&mut synced, &backups, exit)
 }
 
 // ---------------------------------------------------------------- eject
@@ -831,6 +767,16 @@ struct Configured {
     /// The `path` expanded lexically, and its realpath when it exists.
     paths: Vec<PathBuf>,
     skill_dirs: Vec<String>,
+}
+
+/// What eject does under one path.
+struct Ejection<'a> {
+    root: &'a Configured,
+    rel: String,
+    /// Mirror items under the path.
+    items: Vec<Item>,
+    /// Synced hashes under the path whose mirror is already gone.
+    forgotten: Vec<String>,
 }
 
 fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
@@ -856,11 +802,10 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         .collect();
     let tree = WorkingTree::new(ctx.repo.root());
     let mut synced = Synced::load(&ctx.paths);
-    // (root id, rel of the target, mirror items under it)
-    let mut plan: Vec<(&Configured, String, Vec<Item>)> = Vec::new();
+    let mut plan: Vec<Ejection> = Vec::new();
     for path in &given {
         let lexical = cwd_absolute(path)?;
-        let real = realpath_as_far_as_exists(&lexical);
+        let real = realpath_of_parent(&lexical);
         let found = configured.iter().find_map(|c| {
             c.paths.iter().find_map(|root| {
                 [&lexical, &real]
@@ -869,50 +814,66 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                     .map(|rel| (c, rel.to_string_lossy().into_owned()))
             })
         });
-        let Some((configured, rel)) = found else {
+        let Some((root, rel)) = found else {
             return Err(Failure::refused(format!(
                 "{} is not inside a project root",
                 path.display()
             )));
         };
-        let mirror =
-            read_mirror_of(&tree, &configured.id, &configured.skill_dirs).map_err(|e| {
-                Failure::operational(format!("cannot read {}: {e}", ctx.repo.root().display()))
-            })?;
-        let items: Vec<Item> = mirror
+        let items: Vec<Item> = read_mirror_of(&tree, &root.id, &root.skill_dirs)
+            .map_err(io_failure)?
             .items
             .into_iter()
             .filter(|i| under(&i.rel, &rel))
             .collect();
-        plan.push((configured, rel, items));
+        let forgotten = synced
+            .rels_under(&root.id, &rel)
+            .into_iter()
+            .filter(|r| !items.iter().any(|i| &i.rel == r))
+            .collect();
+        plan.push(Ejection {
+            root,
+            rel,
+            items,
+            forgotten,
+        });
     }
-    let count: usize = plan.iter().map(|(_, _, items)| items.len()).sum();
-    for (configured, rel, items) in &plan {
-        for item in items {
+    let mut anything = false;
+    for ejection in &plan {
+        for item in &ejection.items {
             println!(
                 "stop managing {} (its mirror goes to a backup; the project file stays)",
                 item.mirror_rel()
             );
         }
-        if rel.is_empty() {
-            println!("remove [projects.{}] from skiman.toml", configured.id);
+        for rel in &ejection.forgotten {
+            println!(
+                "forget {rel} in project root {} (its mirror is already gone)",
+                ejection.root.id
+            );
         }
+        if ejection.rel.is_empty() {
+            println!("remove [projects.{}] from skiman.toml", ejection.root.id);
+        }
+        anything |=
+            !ejection.items.is_empty() || !ejection.forgotten.is_empty() || ejection.rel.is_empty();
     }
-    let unregisters = plan.iter().any(|(_, rel, _)| rel.is_empty());
-    if count == 0 && !unregisters {
+    if !anything {
         println!("nothing to eject");
+        return Ok(Exit::Success);
     }
-    if !yes && (count > 0 || unregisters) && !confirm("Eject? [y/N] ")? {
+    if !yes && !confirm("Eject? [y/N] ")? {
         return Err(Failure::refused("not ejected; nothing was changed"));
     }
     let mut backup: Option<Backup> = None;
     let mut exit = Exit::Success;
     let mut unregister = Vec::new();
-    for (configured, rel, items) in &plan {
+    let projects_dir = ctx.repo.root().join(MIRROR_DIR);
+    for ejection in &plan {
         let mut all_out = true;
-        for item in items {
+        for item in &ejection.items {
             let mirror = ctx.repo.root().join(item.mirror_rel());
-            let backup = match &backup {
+            let backup = match &mut backup {
                 Some(b) => b,
                 None => backup.insert(Backup::create(&ctx.paths).map_err(|e| {
                     Failure::operational(format!(
@@ -923,7 +884,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             match backup.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {
                     println!("moved {} to {}", item.mirror_rel(), to.display());
-                    remove_empty_parents(&mirror, &ctx.repo.root().join(MIRROR_DIR));
+                    remove_empty_parents(&mirror, &projects_dir);
                 }
                 Err(e) => {
                     eprintln!("error: cannot move {} to the backup: {e}", mirror.display());
@@ -932,9 +893,9 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 }
             }
         }
-        synced.remove_under(&configured.id, rel);
-        if rel.is_empty() && all_out {
-            unregister.push(configured.id.clone());
+        synced.remove_under(&ejection.root.id, &ejection.rel);
+        if ejection.rel.is_empty() && all_out {
+            unregister.push(ejection.root.id.clone());
         }
     }
     if !unregister.is_empty() {
@@ -944,9 +905,9 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             text = manifest::without_project(&text, id)
                 .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
             synced.remove_root(id);
-            let _ = std::fs::remove_dir(ctx.repo.root().join(MIRROR_DIR).join(id));
+            remove_if_empty(&projects_dir.join(id));
         }
-        let _ = std::fs::remove_dir(ctx.repo.root().join(MIRROR_DIR));
+        remove_if_empty(&projects_dir);
         write_atomic(&file, text.as_bytes())
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
         for id in &unregister {
@@ -956,15 +917,38 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
     if let Some(backup) = &backup {
         println!("the mirrors are in {}", backup.dir().display());
     }
-    let backups = Backups::new(&ctx.paths);
-    finish_write(&ctx, &mut synced, &backups, exit)
+    ctx.finish(&mut synced, &ctx.backups(), exit)
 }
 
-/// Removes the empty folders between `path` and `stop` (exclusive).
+/// Removes `dir` when it holds nothing but empty folders and files every
+/// tool ignores (`.DS_Store`, `Thumbs.db`).
+fn remove_if_empty(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => remove_if_empty(&path),
+            Ok(_) if is_ignored(&entry.file_name().to_string_lossy()) => {
+                let _ = std::fs::remove_file(&path);
+            }
+            _ => {}
+        }
+    }
+    let _ = std::fs::remove_dir(dir);
+}
+
+/// Removes the folders between `path` and `stop` (exclusive) that hold
+/// nothing but ignored files.
 fn remove_empty_parents(path: &Path, stop: &Path) {
     let mut dir = path.parent();
     while let Some(d) = dir {
-        if d == stop || !d.starts_with(stop) || std::fs::remove_dir(d).is_err() {
+        if d == stop || !d.starts_with(stop) {
+            break;
+        }
+        remove_if_empty(d);
+        if d.exists() {
             break;
         }
         dir = d.parent();
@@ -972,6 +956,10 @@ fn remove_empty_parents(path: &Path, stop: &Path) {
 }
 
 // ---------------------------------------------------------------- paths
+
+fn io_failure(e: std::io::Error) -> Failure {
+    Failure::operational(format!("cannot read the skill repo: {e}"))
+}
 
 fn cwd_absolute(path: &Path) -> Result<PathBuf, Failure> {
     let cwd = std::env::current_dir()

@@ -102,29 +102,35 @@ pub struct ProjectEntry {
 impl Manifest {
     /// Every `[projects.<id>]` table, in file order.
     pub fn projects(&self) -> Vec<ProjectEntry> {
-        let Some(projects) = self.doc.get("projects").and_then(Item::as_table_like) else {
-            return Vec::new();
-        };
-        let strings = |item: &Item, key: &str| -> Vec<String> {
-            item.get(key)
-                .and_then(Item::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        projects
-            .iter()
-            .map(|(id, item)| ProjectEntry {
-                id: id.to_owned(),
-                path: item.get("path").and_then(Item::as_str).map(str::to_owned),
-                exclude: strings(item, "exclude"),
-                skill_dirs: strings(item, "skill_dirs"),
-            })
-            .collect()
+        project_entries(self.doc.as_table())
     }
+}
+
+/// The `[projects.<id>]` tables of a parsed `skiman.toml` (`root` is its top
+/// table), in file order. Used by [`Manifest`] and by the rules.
+pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
+    let Some(projects) = root.get("projects").and_then(Item::as_table_like) else {
+        return Vec::new();
+    };
+    let strings = |item: &Item, key: &str| -> Vec<String> {
+        item.get(key)
+            .and_then(Item::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    projects
+        .iter()
+        .map(|(id, item)| ProjectEntry {
+            id: id.to_owned(),
+            path: item.get("path").and_then(Item::as_str).map(str::to_owned),
+            exclude: strings(item, "exclude"),
+            skill_dirs: strings(item, "skill_dirs"),
+        })
+        .collect()
 }
 
 /// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.

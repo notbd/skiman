@@ -236,32 +236,13 @@ impl Records {
         self.lock.skill_names()
     }
 
-    /// Every `[projects.<id>]` table: its id and its `skill_dirs` strings.
-    pub fn projects(&self) -> Vec<(String, Vec<String>)> {
-        let Some(projects) = self
-            .manifest
+    /// Every `[projects.<id>]` table.
+    pub fn projects(&self) -> Vec<crate::manifest::ProjectEntry> {
+        self.manifest
             .doc
             .as_ref()
-            .and_then(|d| d.as_table().get("projects"))
-            .and_then(Item::as_table_like)
-        else {
-            return Vec::new();
-        };
-        projects
-            .iter()
-            .map(|(id, item)| {
-                let dirs = item
-                    .get("skill_dirs")
-                    .and_then(Item::as_array)
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                (id.to_owned(), dirs)
-            })
-            .collect()
+            .map(|d| crate::manifest::project_entries(d.as_table()))
+            .unwrap_or_default()
     }
 
     /// The `[skills.<name>.source]` table, when there is one.
@@ -447,59 +428,35 @@ impl Records {
             };
             section.value("exclude", false, "an array of strings", strings, out);
             section.value("skill_dirs", false, "an array of strings", strings, out);
-            let dirs: Vec<&str> = table
-                .get("skill_dirs")
-                .and_then(Item::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-                .unwrap_or_default();
-            let excludes: Vec<&str> = table
-                .get("exclude")
-                .and_then(Item::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-                .unwrap_or_default();
+            let strings_of = |key: &str| -> Vec<String> {
+                table
+                    .get(key)
+                    .and_then(Item::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
             let exclude_line = m.key_line(table, "exclude", line);
-            for entry in &excludes {
-                let parts: Vec<&str> = entry.trim_end_matches('/').split('/').collect();
-                if entry.starts_with('/')
-                    || entry.starts_with('~')
-                    || parts
-                        .iter()
-                        .any(|p| p.is_empty() || *p == "." || *p == "..")
-                {
+            for entry in strings_of("exclude") {
+                if let Some(why) = crate::project::root::invalid_exclude(&entry) {
                     out.insert(m.violation(
                         exclude_line,
                         rule::TOML_VALUE,
-                        format!(
-                            "`exclude` entry \"{entry}\" in [projects.{id}] must be a name or a path relative to the root, without empty, `.` or `..` parts"
-                        ),
+                        format!("`exclude` entry \"{entry}\" in [projects.{id}] {why}"),
                     ));
                 }
             }
+            let dirs = strings_of("skill_dirs");
             let dirs_line = m.key_line(table, "skill_dirs", line);
             for dir in &dirs {
-                let parts: Vec<&str> = dir.split('/').collect();
-                let problem = if dir.starts_with('/') || dir.starts_with('~') {
-                    Some("must be relative to the root")
-                } else if parts
-                    .iter()
-                    .any(|p| p.is_empty() || *p == "." || *p == "..")
-                {
-                    Some("must be a plain relative path without empty, `.` or `..` parts")
-                } else if crate::project::pattern::contains_skill_dir_pattern(dir) {
-                    Some("holds a tool's own project skill folder, which is found without it")
-                } else if dirs
-                    .iter()
-                    .any(|other| other != dir && dir.starts_with(&format!("{other}/")))
-                {
-                    Some("lies inside another `skill_dirs` entry")
-                } else {
-                    None
-                };
-                if let Some(problem) = problem {
+                if let Some(why) = crate::project::root::invalid_skill_dir(dir, &dirs) {
                     out.insert(m.violation(
                         dirs_line,
                         rule::TOML_VALUE,
-                        format!("`skill_dirs` entry \"{dir}\" in [projects.{id}] {problem}"),
+                        format!("`skill_dirs` entry \"{dir}\" in [projects.{id}] {why}"),
                     ));
                 }
             }

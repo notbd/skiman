@@ -386,18 +386,20 @@ fn restore_moves_a_leftover_swap_folder_in_the_anchor_to_a_backup() {
         .code(0)
         .stdout_eq(str![[r#"
 ...
-moved the previous version of [..]/home/work/a/AGENTS.md, left by an interrupted write in [..]/home/work/a/.skiman-swap-20200101T000000Z, to [..]/home/.local/state/skiman/backups/[..]/swap-leftovers/.skiman-swap-20200101T000000Z
+moved the previous version of [..]/home/work/a/AGENTS.md, left by an interrupted write in [..]/home/work/a/.skiman-swap-20200101T000000Z, to [..]/home/.local/state/skiman/backups/[..]/swap-leftovers/[..]
 ...
 "#]]);
 
     assert!(!exists(&leftover));
-    assert_eq!(
-        read(backed_up(
-            &sandbox,
-            "swap-leftovers/.skiman-swap-20200101T000000Z/AGENTS.md"
-        )),
-        "only copy\n"
-    );
+    // Each leftover gets a fresh folder of its own under `swap-leftovers/`.
+    let kept: Vec<String> = tree(backups_dir(&sandbox))
+        .into_iter()
+        .filter(|(path, entry)| {
+            path.to_string_lossy().contains("swap-leftovers/") && entry.starts_with("file")
+        })
+        .map(|(_, entry)| entry)
+        .collect();
+    assert_eq!(kept, ["file 644 only copy\n"]);
     assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), "from the mirror\n");
     assert_eq!(swap_folders(&disk(&sandbox, "a")), Vec::<PathBuf>::new());
 }
@@ -617,4 +619,22 @@ fn a_restore_path_that_names_nothing_is_refused() {
         stderr.contains("is neither a project item nor a folder holding one"),
         "{stderr}"
     );
+}
+
+#[test]
+fn eject_forgets_an_item_whose_mirror_is_already_gone() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    std::fs::remove_file(mirror(&sandbox, "a/AGENTS.md")).unwrap();
+    sandbox
+        .skiman()
+        .args(["project", "eject", "--yes"])
+        .arg(disk(&sandbox, "a/AGENTS.md"))
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+forget a/AGENTS.md in project root work (its mirror is already gone)
+...
+"#]]);
+    assert!(!read(synced_file(&sandbox)).contains("a/AGENTS.md"));
+    assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), AGENTS);
 }

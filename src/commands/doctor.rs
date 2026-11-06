@@ -383,13 +383,13 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The project scope: every root, every item that is not in step and its
-/// fix, managed items a project repo now tracks, candidates not adopted
+/// The project scope: every root, every item that is not in step with
+/// its fix, managed items a project repo now tracks, candidates not adopted
 /// yet, items only the mirror holds, swap folders left by an interrupted
 /// write, mirror paths git ignores, and uncommitted mirror changes.
 fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
-    use crate::commands::project::{describe, fix};
-    use crate::project::{discover, git as pgit, item, root, state, swap, synced::Synced};
+    use crate::project::state::{State, classify};
+    use crate::project::{command, discover, git as pgit, item, root, swap, synced::Synced};
     if manifest.projects().is_empty() {
         return;
     }
@@ -398,7 +398,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
     }
     let synced = Synced::load(paths);
     let tree = WorkingTree::new(repo.root());
-    let skip = vec![
+    let skip = [
         repo.root().to_path_buf(),
         paths
             .state_dir()
@@ -414,52 +414,35 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
                 continue;
             }
         };
-        let mirror = match item::read_mirror(&tree, &root) {
-            Ok(mirror) => mirror,
+        let items = match item::managed(&tree, &root, &synced) {
+            Ok(items) => items,
             Err(e) => {
                 println!("project root {}: cannot read its mirror: {e}", root.id);
                 continue;
             }
         };
+        let in_mirror = item::read_mirror(&tree, &root)
+            .map(|m| m.items)
+            .unwrap_or_default();
+        mirror_paths.extend(in_mirror.iter().map(item::Item::mirror_rel));
         println!(
             "project root {}: {} ({} item(s) in the mirror)",
             root.id,
             root.dir.display(),
-            mirror.items.len()
+            in_mirror.len()
         );
-        mirror_paths.extend(mirror.items.iter().map(|i| i.mirror_rel()));
         let (mut not_here, mut on_disk) = (0, Vec::new());
-        let mut items = mirror.items.clone();
-        let in_mirror: std::collections::BTreeSet<String> =
-            items.iter().map(|i| i.rel.clone()).collect();
-        for (rel, kind) in synced.items(&root) {
-            if !in_mirror.contains(&rel)
-                && let Some(item) =
-                    item::Item::at(&root, &rel, kind == crate::project::pattern::Kind::Skill)
-            {
-                items.push(item);
-            }
-        }
         for item in &items {
             let recorded = synced.get(&root, &item.rel).map(|(_, h)| h.clone());
-            let Ok(evaluated) = state::evaluate(&root, item, repo.root(), recorded.as_deref())
-            else {
+            let Ok(evaluated) = classify(repo, &root, item, recorded.as_deref()) else {
                 println!("{}: cannot read it", item.disk(&root).display());
                 continue;
             };
             match evaluated.state {
-                state::State::InSync | state::State::ProjectChanged => {
-                    on_disk.push(item.disk(&root))
-                }
-                state::State::NotHere => not_here += 1,
-                state::State::Forgotten | state::State::Nothing => {}
-                ref other => {
-                    let disk = item.disk(&root);
-                    match fix(other, &disk) {
-                        Some(fix) => println!("{}: {}; {fix}", disk.display(), describe(other)),
-                        None => println!("{}: {}", disk.display(), describe(other)),
-                    }
-                }
+                State::InSync | State::ProjectChanged => on_disk.push(item.disk(&root)),
+                State::NotHere => not_here += 1,
+                State::Forgotten | State::Nothing | State::New => {}
+                _ => println!("{}", evaluated.message(&root, item)),
             }
         }
         if not_here > 0 {
@@ -474,17 +457,15 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
                     "{}: now tracked by the git repo {}; leave it to that repo with: {}",
                     disk.display(),
                     top.display(),
-                    crate::project::sync::command("eject", std::slice::from_ref(&disk))
+                    command("eject", std::slice::from_ref(&disk))
                 );
             }
         }
         let found = discover::discover(&root, &skip);
-        let known: std::collections::BTreeSet<&str> =
-            items.iter().map(|i| i.rel.as_str()).collect();
         let candidates: Vec<std::path::PathBuf> = found
             .items
             .iter()
-            .filter(|i| !known.contains(i.rel.as_str()))
+            .filter(|i| !items.iter().any(|m| m.rel == i.rel))
             .map(|i| i.disk(&root))
             .collect();
         let new = pgit::tracking_repos(&candidates)
@@ -495,7 +476,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
             println!(
                 "project root {}: {new} project item(s) are not adopted yet; see them with: {} --dry-run",
                 root.id,
-                crate::project::sync::command("adopt", std::slice::from_ref(&root.dir))
+                command("adopt", std::slice::from_ref(&root.dir))
             );
         }
         for leftover in found.swap_leftovers {
@@ -505,10 +486,10 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
             );
         }
     }
-    for leftover in swap::leftovers(
-        &crate::project::sync::swap_parent(repo),
-        swap::Place::Mirror,
-    ) {
+    let swap_dir = crate::project::sync::swap_parent(repo);
+    for leftover in swap::leftovers(swap::Place::Mirror {
+        swap_dir: &swap_dir,
+    }) {
         println!(
             "{} is left from an interrupted mirror write ({}); the next mirror write moves what it holds to a backup",
             leftover.dir.display(),

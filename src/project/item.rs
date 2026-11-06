@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use super::pattern::{Kind, shape};
 use super::root::Root;
+use super::synced::Synced;
 use crate::tree::{self, Tree};
 
 /// The folder of the skill repo that holds every mirror.
@@ -97,4 +98,21 @@ pub fn read_mirror_of(tree: &dyn Tree, id: &str, skill_dirs: &[String]) -> std::
         }
     }
     Ok(mirror)
+}
+
+/// Every item skiman manages under `root`: the mirror's items, plus the
+/// items only the synced hashes still know (deleted in the mirror), whose
+/// path still has the recorded kind's shape. Sorted by path.
+pub fn managed(tree: &dyn Tree, root: &Root, synced: &Synced) -> std::io::Result<Vec<Item>> {
+    let mut items = read_mirror(tree, root)?.items;
+    for (rel, kind) in synced.items(root) {
+        if !items.iter().any(|i| i.rel == rel)
+            && let Some(item) = Item::at(root, &rel, kind == Kind::Skill)
+            && item.kind == kind
+        {
+            items.push(item);
+        }
+    }
+    items.sort();
+    Ok(items)
 }

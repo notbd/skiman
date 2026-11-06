@@ -91,8 +91,11 @@ fn walk(root: &Root, dir: &Path, rel: &str, skip: &[PathBuf], found: &mut Discov
             continue;
         }
         match Item::at(root, &child, true) {
-            Some(item) if item.kind == Kind::Skill && path.join("SKILL.md").is_file() => {
-                found.items.push(item);
+            // A skill folder's location: nothing inside it is an item of its own.
+            Some(item) if item.kind == Kind::Skill => {
+                if path.join("SKILL.md").is_file() {
+                    found.items.push(item);
+                }
             }
             _ => walk(root, &path, &child, skip, found),
         }

@@ -8,6 +8,7 @@
 //! `proj`).
 
 use std::collections::BTreeSet;
+use std::sync::LazyLock;
 
 use crate::tools::TOOLS;
 
@@ -37,12 +38,12 @@ impl Kind {
     }
 }
 
-/// The union of every tool's instruction-file patterns, deduplicated.
+/// The union of every tool's instruction-file patterns, deduplicated and sorted.
 pub fn instruction_patterns() -> Vec<&'static str> {
     union(TOOLS.iter().flat_map(|t| t.project_instruction_files))
 }
 
-/// The union of every tool's project skill directories, deduplicated.
+/// The union of every tool's project skill directories, deduplicated and sorted.
 pub fn skill_dir_patterns() -> Vec<&'static str> {
     union(TOOLS.iter().flat_map(|t| t.project_skill_dirs))
 }
@@ -50,6 +51,17 @@ pub fn skill_dir_patterns() -> Vec<&'static str> {
 fn union<'a>(patterns: impl Iterator<Item = &'a &'static str>) -> Vec<&'static str> {
     let set: BTreeSet<&'static str> = patterns.copied().collect();
     set.into_iter().collect()
+}
+
+/// The patterns split into components, computed once: discovery matches
+/// every file of a root against them.
+static INSTRUCTIONS: LazyLock<Vec<Vec<&'static str>>> =
+    LazyLock::new(|| split(&instruction_patterns()));
+static SKILL_DIRS: LazyLock<Vec<Vec<&'static str>>> =
+    LazyLock::new(|| split(&skill_dir_patterns()));
+
+fn split(patterns: &[&'static str]) -> Vec<Vec<&'static str>> {
+    patterns.iter().map(|p| p.split('/').collect()).collect()
 }
 
 /// The item shape of the root-relative path `rel` (`/`-separated, no leading
@@ -69,12 +81,8 @@ pub fn shape(rel: &str, is_dir: bool, skill_dirs: &[String]) -> Option<(Kind, St
     if is_dir {
         return skill_anchor(&parts, skill_dirs).map(|len| (Kind::Skill, parts[..len].join("/")));
     }
-    let patterns: Vec<Vec<&str>> = instruction_patterns()
-        .iter()
-        .map(|p| p.split('/').collect())
-        .collect();
     (0..parts.len())
-        .find(|&start| patterns.iter().any(|p| matches(p, &parts[start..])))
+        .find(|&start| INSTRUCTIONS.iter().any(|p| matches(p, &parts[start..])))
         .map(|start| (Kind::File, parts[..start].join("/")))
 }
 
@@ -91,11 +99,7 @@ fn skill_anchor(parts: &[&str], skill_dirs: &[String]) -> Option<usize> {
             return Some(dir.len() - 1);
         }
     }
-    let patterns: Vec<Vec<&str>> = skill_dir_patterns()
-        .iter()
-        .map(|p| p.split('/').collect())
-        .collect();
-    (0..parent.len()).find(|&start| patterns.iter().any(|p| matches(p, &parent[start..])))
+    (0..parent.len()).find(|&start| SKILL_DIRS.iter().any(|p| matches(p, &parent[start..])))
 }
 
 /// Whether `path` contains a tool's skill-dir pattern as consecutive

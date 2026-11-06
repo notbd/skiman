@@ -711,3 +711,29 @@ fn eject_of_two_roots_finishes_the_first_when_the_second_has_a_linked_mirror() {
     assert!(!exists(synced_file(&sandbox)) || !read(synced_file(&sandbox)).contains("a/AGENTS.md"));
     assert!(elsewhere.exists(), "nothing cleaned up through the link");
 }
+
+#[test]
+fn eject_keeps_a_root_whose_mirror_hides_items_behind_a_nested_link() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    let outside = sandbox.root().join("outside-a");
+    std::fs::rename(mirror(&sandbox, "a"), &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, mirror(&sandbox, "a")).unwrap();
+
+    let assert = sandbox
+        .skiman()
+        .args(["project", "eject", "--yes"])
+        .arg(root(&sandbox))
+        .assert()
+        .code(3);
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("is not forgotten: its mirror cannot be used"),
+        "{stderr}"
+    );
+    assert!(read(sandbox.skill_repo().join("skiman.toml")).contains("[projects.work]"));
+    assert!(
+        read(synced_file(&sandbox)).contains("a/AGENTS.md"),
+        "the synced hash stays"
+    );
+    assert_eq!(read(outside.join("AGENTS.md")), AGENTS);
+}

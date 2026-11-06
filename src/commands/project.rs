@@ -911,7 +911,18 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         }
         // Only what is out of the mirror is forgotten: an item that stayed
         // keeps its synced hash, so its next project change is no conflict.
+        // A mirror that only looks gone because a link hides it is not.
         for rel in &ejection.forgotten {
+            let mirror = projects_dir.join(&ejection.root.id).join(rel);
+            if let Some(why) = swap::broken_chain(ctx.repo.root(), &mirror) {
+                eprintln!(
+                    "error: {MIRROR_DIR}/{}/{rel} is not forgotten: its mirror cannot be used: {why}",
+                    ejection.root.id
+                );
+                exit = exit.combine(Exit::NeedsAttention);
+                all_out = false;
+                continue;
+            }
             synced.remove_under(&ejection.root.id, rel);
         }
         if ejection.rel.is_empty() && all_out {

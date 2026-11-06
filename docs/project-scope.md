@@ -375,7 +375,7 @@ repo lock, staging, backups under machine state.
    without frontmatter `name` is adopted.
 4. Adopt: new file, rules folder and skill copied byte-identically with synced hash
    set; project untouched; `--dry-run` writes nothing; rerun is a no-op;
-   folder adopt never replaces; exact-path adopt of rows 10, 14, 15 with the
+   folder adopt never replaces; exact-path adopt of rows 11, 14, 15 with the
    old mirror in a backup.
 5. Sync: every row of the state table, including the pause on each git
    state, an oversized file, a `path` changed under recorded synced hashes,

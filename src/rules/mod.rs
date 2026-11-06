@@ -352,7 +352,7 @@ fn run(
         }
     }
     if scope.project_layout {
-        project::check_layout(tree, &records, &mut out)?;
+        project::check_layout(tree, &records, &mut out, &mut found)?;
     }
     for path in &scope.projects {
         project::check_item(tree, path, &mut out, &mut found)?;

@@ -148,7 +148,8 @@ pub fn replace(
         }
         (true, expected) => {
             std::fs::rename(dest, &old).inspect_err(|_| remove_swap(&swap))?;
-            let seen = content::hash_of(&old, kind)?;
+            // A set-aside copy that cannot be read counts as changed: it goes back.
+            let seen = content::hash_of(&old, kind).ok().flatten();
             let matches = match expected {
                 Expect::Hash(hash) => seen.as_deref() == Some(hash.as_str()),
                 _ => true,
@@ -173,10 +174,12 @@ pub fn replace(
         }
     }
 
-    if let Some(dir) = dest.parent() {
-        std::fs::create_dir_all(dir)?;
+    let placed = match dest.parent() {
+        Some(dir) => std::fs::create_dir_all(dir),
+        None => Ok(()),
     }
-    if let Err(e) = place_without_replacing(&staged, dest, kind) {
+    .and_then(|()| place_without_replacing(&staged, dest, kind));
+    if let Err(e) = placed {
         if !present {
             remove_swap(&swap);
             return Ok(Outcome::Conflict(format!(
@@ -205,7 +208,7 @@ pub fn replace(
         late_write: false,
     };
     if present {
-        let before = fingerprint(&old)?;
+        let before = fingerprint(&old).unwrap_or_default();
         let moved = backups.dir().and_then(|dir| {
             let to = dir.join(backup_rel);
             std::fs::create_dir_all(to.parent().expect("backup path has a parent"))?;
@@ -214,7 +217,7 @@ pub fn replace(
         });
         match moved {
             Ok(to) => {
-                let late_write = fingerprint(&to)? != before;
+                let late_write = fingerprint(&to).unwrap_or_default() != before;
                 outcome = Outcome::Replaced {
                     backup: Some(to),
                     late_write,

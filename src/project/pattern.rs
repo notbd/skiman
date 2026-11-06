@@ -61,33 +61,41 @@ pub fn shape(rel: &str, is_dir: bool, skill_dirs: &[String]) -> Option<(Kind, St
     if parts.iter().any(|p| p.is_empty()) {
         return None;
     }
-    let anchor = |len: usize| parts[..len].join("/");
-    if !is_dir {
-        let patterns: Vec<Vec<&str>> = instruction_patterns()
-            .iter()
-            .map(|p| p.split('/').collect())
-            .collect();
-        return (0..parts.len())
-            .find(|&start| patterns.iter().any(|p| matches(p, &parts[start..])))
-            .map(|start| (Kind::File, anchor(start)));
+    // Anything inside a skill folder's location is that skill's content,
+    // never an item of its own (discovery never enters a skill folder).
+    if (1..parts.len()).any(|len| skill_anchor(&parts[..len], skill_dirs).is_some()) {
+        return None;
     }
-    let (name_at, parent) = (parts.len() - 1, &parts[..parts.len() - 1]);
-    if name_at == 0 {
+    if is_dir {
+        return skill_anchor(&parts, skill_dirs).map(|len| (Kind::Skill, parts[..len].join("/")));
+    }
+    let patterns: Vec<Vec<&str>> = instruction_patterns()
+        .iter()
+        .map(|p| p.split('/').collect())
+        .collect();
+    (0..parts.len())
+        .find(|&start| patterns.iter().any(|p| matches(p, &parts[start..])))
+        .map(|start| (Kind::File, parts[..start].join("/")))
+}
+
+/// When `parts` is a skill folder's location (a skill-dir pattern or a
+/// configured skill folder, then one name): the length of its anchor.
+fn skill_anchor(parts: &[&str], skill_dirs: &[String]) -> Option<usize> {
+    let (_, parent) = parts.split_last()?;
+    if parent.is_empty() {
         return None;
     }
     for dir in skill_dirs {
         let dir: Vec<&str> = dir.split('/').collect();
         if parent == dir.as_slice() {
-            return Some((Kind::Skill, anchor(dir.len() - 1)));
+            return Some(dir.len() - 1);
         }
     }
     let patterns: Vec<Vec<&str>> = skill_dir_patterns()
         .iter()
         .map(|p| p.split('/').collect())
         .collect();
-    (0..parent.len())
-        .find(|&start| patterns.iter().any(|p| matches(p, &parent[start..])))
-        .map(|start| (Kind::Skill, anchor(start)))
+    (0..parent.len()).find(|&start| patterns.iter().any(|p| matches(p, &parent[start..])))
 }
 
 /// Whether `path` contains a tool's skill-dir pattern as consecutive
@@ -151,6 +159,8 @@ mod tests {
         assert_eq!(file("p/.claude/rules/x.txt"), None);
         assert_eq!(file("p/notes.md"), None);
         assert_eq!(file("p/agents.md"), None);
+        assert_eq!(file("p/.claude/skills/s/AGENTS.md"), None);
+        assert_eq!(file("p/.claude/skills/s/deep/CLAUDE.md"), None);
     }
 
     #[test]
@@ -165,6 +175,7 @@ mod tests {
             Some("core")
         );
         assert_eq!(skill("core/skills/x/y", &["core/skills"]), None);
+        assert_eq!(skill("p/.claude/skills/s/.claude/skills/inner", &[]), None);
     }
 
     #[test]

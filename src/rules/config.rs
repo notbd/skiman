@@ -452,6 +452,29 @@ impl Records {
                 .and_then(Item::as_array)
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
+            let excludes: Vec<&str> = table
+                .get("exclude")
+                .and_then(Item::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let exclude_line = m.key_line(table, "exclude", line);
+            for entry in &excludes {
+                let parts: Vec<&str> = entry.trim_end_matches('/').split('/').collect();
+                if entry.starts_with('/')
+                    || entry.starts_with('~')
+                    || parts
+                        .iter()
+                        .any(|p| p.is_empty() || *p == "." || *p == "..")
+                {
+                    out.insert(m.violation(
+                        exclude_line,
+                        rule::TOML_VALUE,
+                        format!(
+                            "`exclude` entry \"{entry}\" in [projects.{id}] must be a name or a path relative to the root, without empty, `.` or `..` parts"
+                        ),
+                    ));
+                }
+            }
             let dirs_line = m.key_line(table, "skill_dirs", line);
             for dir in &dirs {
                 let parts: Vec<&str> = dir.split('/').collect();

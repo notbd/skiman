@@ -1,0 +1,441 @@
+//! `skiman check` and `skiman doctor` on the project scope (plan "Rules" and
+//! "Other changes"): `project-path` on the layout of `projects/`, the gate 2
+//! safety rules on every mirror item, and doctor's project section.
+//!
+//! Secret-like fixtures are built at runtime from pieces, so no literal token
+//! is committed (GitHub push protection would block it).
+
+mod support;
+
+use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
+use support::Sandbox;
+
+fn init(sandbox: &Sandbox) {
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.skill_repo())
+        .assert()
+        .code(0);
+}
+
+fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
+    let path = path.as_ref();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+fn read(path: impl AsRef<Path>) -> String {
+    std::fs::read_to_string(path.as_ref())
+        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
+}
+
+fn append(path: impl AsRef<Path>, text: &str) {
+    let mut old = read(&path);
+    old.push_str(text);
+    std::fs::write(path, old).unwrap();
+}
+
+/// A skill repo with the project root `~/work` registered as `work`.
+fn with_root() -> (Sandbox, PathBuf) {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let root = sandbox.home().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&root)
+        .assert()
+        .code(0);
+    (sandbox, root)
+}
+
+/// `projects/<rel>` in the skill repo.
+fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
+    sandbox.skill_repo().join("projects").join(rel)
+}
+
+fn adopt(sandbox: &Sandbox) {
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+}
+
+/// Exit code and stdout of `skiman check`.
+fn check(sandbox: &Sandbox) -> (i32, String) {
+    let output = sandbox.skiman().arg("check").output().unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stdout).unwrap(),
+    )
+}
+
+/// Stdout of `skiman doctor`, which exits 0 whenever the diagnosis ran.
+fn doctor(sandbox: &Sandbox) -> String {
+    let output = sandbox.skiman().arg("doctor").output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn assert_has(text: &str, line: &str) {
+    assert!(
+        text.lines().any(|l| l == line),
+        "missing line:\n{line}\nin:\n{text}"
+    );
+}
+
+fn assert_lacks(text: &str, part: &str) {
+    assert!(!text.contains(part), "unexpected `{part}` in:\n{text}");
+}
+
+fn git_commit_all(sandbox: &Sandbox, dir: &Path) {
+    sandbox.git(dir, ["add", "-A"]);
+    sandbox.git(
+        dir,
+        [
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "mirror",
+        ],
+    );
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn fingerprint(matched: &str) -> String {
+    format!("sha256:{}", hex(&Sha256::digest(matched.as_bytes())))
+}
+
+fn aws_key() -> String {
+    ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat()
+}
+
+const GIT_CONFLICT: &str = "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n";
+
+// ---------------------------------------------------------------- check: layout
+
+#[test]
+fn a_file_under_a_root_that_belongs_to_no_item_is_a_project_path_violation() {
+    let (sandbox, _) = with_root();
+    write(mirror(&sandbox, "work/proj/AGENTS.md"), "rules\n");
+    write(mirror(&sandbox, "work/proj/notes.txt"), "scratch\n");
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_eq!(
+        stdout,
+        "projects/work/proj/notes.txt: project-path: belongs to no project item (an instruction file or a project skill); restore the configuration that made it one, or `git rm -r projects/work/proj/notes.txt`\n"
+    );
+}
+
+#[test]
+fn a_mirror_folder_of_an_unknown_root_id_is_a_project_path_violation() {
+    let (sandbox, _) = with_root();
+    write(mirror(&sandbox, "gone/proj/AGENTS.md"), "rules\n");
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_eq!(
+        stdout,
+        "projects/gone: project-path: `gone` is not a configured project root; add [projects.gone] to skiman.toml again, or `git rm -r projects/gone`\n"
+    );
+}
+
+#[test]
+fn a_skill_mirrored_through_skill_dirs_becomes_a_stray_when_the_entry_is_removed() {
+    let (sandbox, _) = with_root();
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let without = read(&manifest);
+    append(&manifest, "skill_dirs = [\"lib/skills\"]\n");
+    write(
+        mirror(&sandbox, "work/lib/skills/tool/SKILL.md"),
+        "# tool\n",
+    );
+    assert_eq!(check(&sandbox), (0, String::new()));
+
+    std::fs::write(&manifest, without).unwrap();
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert!(
+        stdout.starts_with("projects/work/lib/skills/tool/SKILL.md: project-path: "),
+        "{stdout}"
+    );
+}
+
+// ---------------------------------------------------------------- check: item rules
+
+#[test]
+fn a_secret_in_a_mirror_file_is_reported_and_an_allow_entry_for_its_projects_path_exempts_it() {
+    let (sandbox, _) = with_root();
+    let key = aws_key();
+    write(
+        mirror(&sandbox, "work/proj/AGENTS.md"),
+        format!("rules\nAWS_ACCESS_KEY_ID={key}\n"),
+    );
+    let fp = fingerprint(&key);
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_has(
+        &stdout,
+        &format!(
+            "projects/work/proj/AGENTS.md:2: aws-access-key: looks like a secret; fingerprint = \"{fp}\""
+        ),
+    );
+    assert_lacks(&stdout, &key);
+
+    append(
+        sandbox.skill_repo().join("skiman.toml"),
+        &format!(
+            "\n[[secrets.allow]]\npath = \"projects/work/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"{fp}\"\n"
+        ),
+    );
+    assert_eq!(check(&sandbox), (0, String::new()));
+}
+
+#[test]
+fn a_secret_in_a_file_of_a_mirror_skill_is_reported() {
+    let (sandbox, _) = with_root();
+    let key = aws_key();
+    let skill = "work/proj/.claude/skills/deploy";
+    write(mirror(&sandbox, &format!("{skill}/SKILL.md")), "# deploy\n");
+    write(
+        mirror(&sandbox, &format!("{skill}/env.sh")),
+        format!("export AWS_ACCESS_KEY_ID={key}\n"),
+    );
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_has(
+        &stdout,
+        &format!(
+            "projects/{skill}/env.sh:1: aws-access-key: looks like a secret; fingerprint = \"{}\"",
+            fingerprint(&key)
+        ),
+    );
+}
+
+#[test]
+fn a_secret_in_a_stray_file_under_projects_is_reported_too() {
+    let (sandbox, _) = with_root();
+    let key = aws_key();
+    write(
+        mirror(&sandbox, "work/proj/notes.env"),
+        format!("AWS_ACCESS_KEY_ID={key}\n"),
+    );
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_has(
+        &stdout,
+        &format!(
+            "projects/work/proj/notes.env:1: aws-access-key: looks like a secret; fingerprint = \"{}\"",
+            fingerprint(&key)
+        ),
+    );
+}
+
+#[test]
+fn git_conflict_markers_in_a_mirror_instruction_file_are_unresolved_conflicts() {
+    let (sandbox, _) = with_root();
+    write(mirror(&sandbox, "work/proj/AGENTS.md"), GIT_CONFLICT);
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_eq!(
+        stdout,
+        "projects/work/proj/AGENTS.md:2: unresolved-conflict: conflict marker; resolve the conflict and remove the markers\n\
+         projects/work/proj/AGENTS.md:6: unresolved-conflict: conflict marker; resolve the conflict and remove the markers\n"
+    );
+}
+
+#[test]
+fn git_conflict_markers_in_a_mirror_skill_file_are_unresolved_conflicts() {
+    let (sandbox, _) = with_root();
+    let skill = "work/proj/.claude/skills/deploy";
+    write(mirror(&sandbox, &format!("{skill}/SKILL.md")), "# deploy\n");
+    write(mirror(&sandbox, &format!("{skill}/steps.md")), GIT_CONFLICT);
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    let reported: Vec<&str> = stdout
+        .lines()
+        .filter(|l| l.contains(": unresolved-conflict: "))
+        .collect();
+    assert_eq!(
+        reported.len(),
+        2,
+        "one violation per marker line:\n{stdout}"
+    );
+    assert!(reported[0].starts_with(&format!("projects/{skill}/steps.md:2: ")));
+    assert!(reported[1].starts_with(&format!("projects/{skill}/steps.md:6: ")));
+}
+
+#[test]
+fn a_mirror_skill_without_skill_md_is_reported() {
+    let (sandbox, _) = with_root();
+    write(
+        mirror(&sandbox, "work/proj/.claude/skills/deploy/steps.md"),
+        "steps\n",
+    );
+
+    let (code, stdout) = check(&sandbox);
+    assert_eq!(code, 1);
+    assert_eq!(
+        stdout,
+        "projects/work/proj/.claude/skills/deploy: skill-md: no SKILL.md at the top of the skill folder\n"
+    );
+}
+
+#[test]
+fn a_mirror_skill_without_frontmatter_name_in_a_folder_of_any_name_passes() {
+    let (sandbox, _) = with_root();
+    write(
+        mirror(&sandbox, "work/proj/.claude/skills/Weekly_PO/SKILL.md"),
+        "---\ndescription: Weekly purchase orders\n---\n\n# Weekly PO\n",
+    );
+    write(
+        mirror(&sandbox, "work/proj/.agents/skills/no-frontmatter/SKILL.md"),
+        "# Just a body\n",
+    );
+
+    assert_eq!(check(&sandbox), (0, String::new()));
+}
+
+// ---------------------------------------------------------------- doctor
+
+#[test]
+fn doctor_prints_each_root_with_its_mirror_item_count() {
+    let (sandbox, root) = with_root();
+    write(root.join("a/AGENTS.md"), "a\n");
+    write(root.join("b/.claude/skills/x/SKILL.md"), "# x\n");
+    adopt(&sandbox);
+
+    assert_has(
+        &doctor(&sandbox),
+        &format!(
+            "project root work: {} (2 item(s) in the mirror)",
+            root.display()
+        ),
+    );
+}
+
+#[test]
+fn doctor_lists_every_item_not_in_step_with_its_fix_and_changes_nothing() {
+    let (sandbox, root) = with_root();
+    for project in ["a", "b", "c"] {
+        write(root.join(project).join("AGENTS.md"), "rules\n");
+    }
+    adopt(&sandbox);
+    write(
+        mirror(&sandbox, "work/a/AGENTS.md"),
+        "edited in the mirror\n",
+    );
+    std::fs::remove_file(root.join("b/AGENTS.md")).unwrap();
+
+    let stdout = doctor(&sandbox);
+    assert_has(
+        &stdout,
+        &format!(
+            "{a}: its mirror changed; keep the project's version: skiman project adopt {a}; or the mirror's: skiman project restore {a}",
+            a = root.join("a/AGENTS.md").display()
+        ),
+    );
+    assert_has(
+        &stdout,
+        &format!(
+            "{b}: it was deleted in the project; bring it back: skiman project restore {b}; or stop managing it: skiman project eject {b}",
+            b = root.join("b/AGENTS.md").display()
+        ),
+    );
+    assert_lacks(&stdout, &root.join("c/AGENTS.md").display().to_string());
+    assert_eq!(read(root.join("a/AGENTS.md")), "rules\n");
+    assert!(!root.join("b/AGENTS.md").exists());
+}
+
+#[test]
+fn doctor_counts_candidates_that_are_not_adopted_yet() {
+    let (sandbox, root) = with_root();
+    write(root.join("a/AGENTS.md"), "a\n");
+    adopt(&sandbox);
+    assert_lacks(&doctor(&sandbox), "not adopted yet");
+
+    write(root.join("b/AGENTS.md"), "b\n");
+    write(root.join("b/.claude/rules/style.md"), "style\n");
+    assert_has(
+        &doctor(&sandbox),
+        &format!(
+            "project root work: 2 project item(s) are not adopted yet; see them with: skiman project adopt {} --dry-run",
+            root.display()
+        ),
+    );
+}
+
+#[test]
+fn doctor_lists_a_swap_folder_left_in_a_project_and_does_not_count_what_it_holds() {
+    let (sandbox, root) = with_root();
+    write(root.join("proj/AGENTS.md"), "rules\n");
+    adopt(&sandbox);
+    let leftover = root.join("proj/.skiman-swap-20260101T000000Z");
+    write(leftover.join("old/AGENTS.md"), "older rules\n");
+    write(leftover.join("target"), "proj/AGENTS.md");
+
+    let stdout = doctor(&sandbox);
+    assert_has(
+        &stdout,
+        &format!(
+            "{} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
+            leftover.display()
+        ),
+    );
+    assert_lacks(&stdout, "not adopted yet");
+    assert_eq!(read(leftover.join("old/AGENTS.md")), "older rules\n");
+}
+
+#[test]
+fn doctor_reports_uncommitted_mirror_changes_until_they_are_committed() {
+    let (sandbox, root) = with_root();
+    write(root.join("a/AGENTS.md"), "a\n");
+    write(root.join("b/AGENTS.md"), "b\n");
+    adopt(&sandbox);
+    assert_has(
+        &doctor(&sandbox),
+        "projects: 2 uncommitted change(s); skiman never commits, so commit them to keep their history",
+    );
+
+    git_commit_all(&sandbox, &sandbox.skill_repo());
+    assert_lacks(&doctor(&sandbox), "uncommitted change");
+}
+
+#[test]
+fn doctor_reports_a_managed_item_that_a_project_git_repo_tracks_later() {
+    let (sandbox, root) = with_root();
+    let project = root.join("proj");
+    let item = project.join("AGENTS.md");
+    write(&item, "rules\n");
+    sandbox.git(&project, ["init", "-q"]);
+    adopt(&sandbox);
+    assert_lacks(&doctor(&sandbox), "now tracked");
+
+    sandbox.git(&project, ["add", "AGENTS.md"]);
+    assert_has(
+        &doctor(&sandbox),
+        &format!(
+            "{}: now tracked by the git repo {}; leave it to that repo with: skiman project eject {}",
+            item.display(),
+            project.display(),
+            item.display()
+        ),
+    );
+}

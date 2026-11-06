@@ -47,6 +47,12 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         Some(id) => id,
         None => root::default_id(&dir),
     };
+    if id.is_empty() {
+        return Err(Failure::refused(format!(
+            "the name of {} has no letters or digits to make a root id from; give one with --id",
+            dir.display()
+        )));
+    }
     if !crate::names::is_valid(&id) {
         return Err(Failure::refused(format!(
             "`{id}` is not a valid project root id (lowercase letters, digits and single hyphens); give one with --id"
@@ -94,9 +100,9 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
     println!("registered project root {id}: {}", dir.display());
     println!(
-        "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the skill repo is pushed; see what it holds with `skiman project adopt {} --dry-run`",
+        "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the skill repo is pushed; see what it holds with: {} --dry-run",
         repo.root().display(),
-        dir.display()
+        crate::project::sync::command("adopt", std::slice::from_ref(&dir))
     );
     Ok(Exit::Success)
 }
@@ -148,11 +154,18 @@ impl Context {
     /// relative to it (`""` for the root itself). The path is compared by
     /// realpath, as far as it exists.
     fn locate(&self, path: &Path) -> Result<(&Root, String), Failure> {
-        let real = realpath_as_far_as_exists(&cwd_absolute(path)?);
+        // The parents are resolved, the last component is not: a path that is
+        // an alias link names the link, not what it points to.
+        let absolute = cwd_absolute(path)?;
+        let real = realpath_of_parent(&absolute);
+        let whole = realpath_as_far_as_exists(&absolute);
         self.roots
             .iter()
             .find_map(|root| {
-                let rel = real.strip_prefix(&root.dir).ok()?;
+                let rel = real
+                    .strip_prefix(&root.dir)
+                    .ok()
+                    .or_else(|| (whole == root.dir).then(|| Path::new("")))?;
                 Some((root, rel.to_string_lossy().into_owned()))
             })
             .ok_or_else(|| {
@@ -340,10 +353,19 @@ fn show_plan(
         ))?
     {
         return Err(Failure::refused(format!(
-            "not {verb}ed; nothing was changed"
+            "not {}; nothing was changed",
+            past(verb)
         )));
     }
     Ok(true)
+}
+
+fn past(verb: &str) -> &'static str {
+    match verb {
+        "adopt" => "adopted",
+        "restore" => "restored",
+        _ => "done",
+    }
 }
 
 fn capitalise(word: &str) -> String {
@@ -471,7 +493,11 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                     "keep the project's version of"
                 }
                 (State::InSync, _) => continue,
-                (State::DeletedInMirror | State::MirrorChanged | State::Conflict, false) => {
+                (
+                    state @ (State::DeletedInMirror | State::MirrorChanged | State::Conflict),
+                    false,
+                ) => {
+                    skips.lines.push(needs_exact(&disk, state, "adopt"));
                     continue;
                 }
                 (state, _) => {
@@ -521,7 +547,10 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         Exit::Success
     };
     if !show_plan(&planned, &skips, "adopt", yes, dry_run)? {
-        return Ok(own);
+        if dry_run {
+            return Ok(own);
+        }
+        return Ok(own.combine(sync::run(&ctx.paths, &ctx.repo, &ctx.lock, Output::Normal)));
     }
     let mut backups = Backups::new(&ctx.paths);
     for message in swap::recover(&swap_parent(&ctx.repo), Place::Mirror, &mut backups) {
@@ -565,18 +594,12 @@ pub(crate) fn describe(state: &State) -> String {
         State::ProjectGone => "its project folder is gone".to_owned(),
         State::NotHere => "its project folder is not on this machine".to_owned(),
         State::Occupied(what) => what.clone(),
-        State::NotOnMachine => {
-            "it is not in the project yet (`skiman project restore` writes it)".to_owned()
-        }
-        State::DeletedInProject => {
-            "it was deleted in the project (name it exactly to restore it)".to_owned()
-        }
-        State::DeletedInMirror => {
-            "it was deleted in the mirror (name it exactly to adopt it again)".to_owned()
-        }
+        State::NotOnMachine => "it is in the mirror but not in the project yet".to_owned(),
+        State::DeletedInProject => "it was deleted in the project".to_owned(),
+        State::DeletedInMirror => "it was deleted in the mirror".to_owned(),
         State::Blocked(why) => format!("the project's version cannot be taken: {why}"),
-        State::MirrorChanged => "its mirror changed (name it exactly to choose a side)".to_owned(),
-        State::Conflict => "both sides changed (name it exactly to choose a side)".to_owned(),
+        State::MirrorChanged => "its mirror changed".to_owned(),
+        State::Conflict => "both sides changed".to_owned(),
         State::ProjectChanged => {
             "the project's version is newer; `skiman sync` copies it into the mirror".to_owned()
         }
@@ -584,6 +607,60 @@ pub(crate) fn describe(state: &State) -> String {
         State::New => "it is not adopted yet".to_owned(),
         State::Forgotten | State::Nothing => "there is nothing on either side".to_owned(),
     }
+}
+
+/// The commands that settle an item in `state`, paste-ready.
+pub(crate) fn fix(state: &State, disk: &Path) -> Option<String> {
+    let one = [disk.to_path_buf()];
+    let cmd = |verb: &str| crate::project::sync::command(verb, &one);
+    Some(match state {
+        State::DeletedInProject => format!(
+            "bring it back: {}; or stop managing it: {}",
+            cmd("restore"),
+            cmd("eject")
+        ),
+        State::DeletedInMirror => format!(
+            "take it back in: {}; or stop managing it: {}",
+            cmd("adopt"),
+            cmd("eject")
+        ),
+        State::MirrorChanged | State::Conflict => format!(
+            "keep the project's version: {}; or the mirror's: {}",
+            cmd("adopt"),
+            cmd("restore")
+        ),
+        State::Blocked(_) => format!(
+            "fix it in the project, or bring back the mirror's version: {}",
+            cmd("restore")
+        ),
+        State::Occupied(_) | State::ProjectGone => format!("stop managing it: {}", cmd("eject")),
+        State::NotOnMachine => format!("write it: {}", cmd("restore")),
+        _ => return None,
+    })
+}
+
+/// A skip line for an item a folder command leaves alone because settling
+/// it needs the item's exact path.
+fn needs_exact(disk: &Path, state: &State, verb: &str) -> String {
+    format!(
+        "skip {}: {}; to settle it, give its exact path: {}",
+        disk.display(),
+        describe(state),
+        crate::project::sync::command(verb, &[disk.to_path_buf()])
+    )
+}
+
+/// `eval` with a project side that breaks the safety rules (a secret,
+/// conflict markers) shown as blocked, like sync shows it.
+fn with_rules(repo: &SkillRepo, item: &Item, mut eval: Evaluated) -> Evaluated {
+    if eval.state == State::ProjectChanged
+        && let Some(content) = &eval.disk
+        && let Err(violations) = check_rules(repo, item, content)
+    {
+        let why: Vec<String> = violations.iter().map(ToString::to_string).collect();
+        eval.state = State::Blocked(why.join("; "));
+    }
+    eval
 }
 
 // ---------------------------------------------------------------- restore
@@ -603,6 +680,15 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     let mut seen = BTreeSet::new();
     for target in &targets {
         let items = known_items(&ctx, &synced, target)?;
+        if target.exact.is_none() && !target.rel.is_empty() && items.is_empty() {
+            let path = target.root.dir.join(&target.rel);
+            if !path.is_dir() {
+                return Err(Failure::refused(format!(
+                    "{} is neither a project item nor a folder holding one",
+                    path.display()
+                )));
+            }
+        }
         if let Some(exact) = &target.exact {
             named.insert(exact.disk(target.root));
             if items.is_empty() {
@@ -618,7 +704,11 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
-            let eval = evaluated(&ctx, &synced, target.root, &item)?;
+            let eval = with_rules(
+                &ctx.repo,
+                &item,
+                evaluated(&ctx, &synced, target.root, &item)?,
+            );
             let what = match (&eval.state, exact) {
                 (State::NotOnMachine, _) => "write",
                 (
@@ -630,12 +720,13 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                 ) => "write the mirror's version over",
                 (State::InSync, _) => continue,
                 (
-                    State::DeletedInProject
+                    state @ (State::DeletedInProject
                     | State::Blocked(_)
                     | State::MirrorChanged
-                    | State::Conflict,
+                    | State::Conflict),
                     false,
                 ) => {
+                    skips.lines.push(needs_exact(&disk, state, "restore"));
                     continue;
                 }
                 (State::New | State::NotHere | State::Nothing | State::Forgotten, false) => {
@@ -705,9 +796,9 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             }
         }
         let content = &contents[&disk];
-        let expect = match &p.eval.state {
-            State::Blocked(_) => Expect::Present,
-            _ => Expect::from_hash(p.eval.disk_hash.as_deref()),
+        let expect = match (&p.eval.state, &p.eval.disk_hash) {
+            (State::Blocked(_), None) => Expect::Present,
+            (_, hash) => Expect::from_hash(hash.as_deref()),
         };
         let outcome = swap::replace(
             &disk,
@@ -891,6 +982,15 @@ fn cwd_absolute(path: &Path) -> Result<PathBuf, Failure> {
         None => path.to_path_buf(),
     };
     Ok(absolute_lexical(&cwd, &path))
+}
+
+/// `path` with its parent folder resolved (as far as it exists) and its last
+/// component kept as written.
+fn realpath_of_parent(path: &Path) -> PathBuf {
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => realpath_as_far_as_exists(parent).join(name),
+        _ => realpath_as_far_as_exists(path),
+    }
 }
 
 /// The realpath of the deepest existing ancestor of `path`, joined with the rest.

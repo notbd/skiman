@@ -1,6 +1,6 @@
 ---
 name: managing-skills
-description: Where the user's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), or to import an existing setup.
+description: Where the user's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, or to import an existing setup.
 ---
 
 # Managing skills
@@ -22,6 +22,8 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
 - `skiman.toml`: enabled agent tools, per-skill settings and sources. You may
   edit it.
 - `skiman.lock`: the version each third-party skill is at. skiman writes it.
+- `projects/<root id>/`: the mirror of project instruction files and project
+  skills under each project root (see below). skiman writes it.
 - `.skiman/`: machine-local; skiman's own.
 
 ## Rules for every operation
@@ -113,6 +115,32 @@ reports the size limit of the enabled agent tools.
   skill's `[skills.<name>]` table, then run `skiman sync`. Delete the line to
   enable it again.
 
+## Project instruction files and project skills
+
+The user registers project roots (`[projects.<id>]` in `skiman.toml`).
+Under them, project instruction files (`AGENTS.md`, `CLAUDE.md`,
+`CLAUDE.local.md`, `.claude/CLAUDE.md`, `.claude/rules/**/*.md`,
+`AGENTS.override.md`, `GEMINI.md`) and project skills (`.claude/skills/<n>`,
+`.agents/skills/<n>`, `.agent/skills/<n>`) stay real files in the project.
+skiman keeps a copy of each in `<SKILL_REPO>/projects/<id>/<same path>` and
+copies every change made in the project into it at each sync.
+
+- Edit project items in place, in the project folder. Never edit the copy
+  under `projects/`: a change there reaches the project only through
+  `skiman project restore <item path> --yes`.
+- After creating a project `AGENTS.md`, rules file or project skill under a
+  project root, run `skiman project adopt <its path> --yes`. Files a
+  project's own git repo tracks are left to that repo.
+- To compare the two sides, use `diff` or `git diff`; do not open files under
+  `projects/` (an agent tool that reads a file in a folder loads that
+  folder's instructions).
+- `skiman sync` reports items that need a decision, with the command to
+  run: `skiman project adopt <item path> --yes` keeps the project's version,
+  `skiman project restore <item path> --yes` the mirror's; the other goes to
+  a backup. Only the exact path of one item settles a conflict.
+- `skiman project eject <path> --yes` stops managing what is under `<path>`;
+  the project files stay.
+
 ## Import an existing setup
 
 Run `skiman import --guide` and follow the guide it prints. It applies only
@@ -122,5 +150,5 @@ to a skill repo without skills.
 
 - `skiman list`: every skill with its kind, source, version, local
   modifications, conflicts and whether it is enabled.
-- `skiman doctor`: locations, hooks, foreign skills, occupied paths and other
-  problems.
+- `skiman doctor`: locations, hooks, foreign skills, occupied paths, project
+  roots and items, and other problems.

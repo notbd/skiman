@@ -66,7 +66,8 @@ pub fn tracking_repos(items: &[PathBuf]) -> BTreeMap<PathBuf, Result<Option<Path
     let mut by_top: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     let mut out = BTreeMap::new();
     for item in items {
-        let Some(found) = item.parent().and_then(nearest_dot_git) else {
+        // From the item itself: a skill folder may be a git clone of its own.
+        let Some(found) = nearest_dot_git(item) else {
             out.insert(item.clone(), Ok(None));
             continue;
         };
@@ -99,9 +100,9 @@ pub fn tracking_repos(items: &[PathBuf]) -> BTreeMap<PathBuf, Result<Option<Path
     out
 }
 
-/// The nearest folder at or above `dir` that holds a `.git` entry.
-fn nearest_dot_git(dir: &Path) -> Option<PathBuf> {
-    dir.ancestors()
+/// The nearest folder at or above `path` that holds a `.git` entry.
+fn nearest_dot_git(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
         .find(|d| std::fs::symlink_metadata(d.join(".git")).is_ok())
         .map(Path::to_path_buf)
 }
@@ -127,6 +128,13 @@ fn tracked_under(top: &Path, items: &[PathBuf]) -> Result<Vec<PathBuf>, String> 
     let rels: Vec<&Path> = items
         .iter()
         .filter_map(|item| item.strip_prefix(top).ok())
+        .map(|rel| {
+            if rel.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                rel
+            }
+        })
         .collect();
     let output = query_command(top)
         .args(["ls-files", "-z", "--"])

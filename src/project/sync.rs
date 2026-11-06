@@ -49,10 +49,17 @@ pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &
                 &scope,
                 repo.root().join(MIRROR_DIR).join(&problem.id),
                 "root",
-                format!(
-                    "project root `{}` is skipped: {}; fix [projects.{}] in skiman.toml",
-                    problem.id, problem.message, problem.id
-                ),
+                if problem.absent {
+                    format!(
+                        "project root `{}` is skipped: {}",
+                        problem.id, problem.message
+                    )
+                } else {
+                    format!(
+                        "project root `{}` is skipped: {}; fix [projects.{}] in skiman.toml",
+                        problem.id, problem.message, problem.id
+                    )
+                },
                 false,
             )),
             Ok(root) => reconcile_root(
@@ -108,7 +115,8 @@ fn reconcile_root(
     let mut gone_anchors = BTreeSet::new();
     let mut not_here = Vec::new();
     let mut to_restore = Vec::new();
-    let mut to_decide = Vec::new();
+    let mut to_adopt = Vec::new();
+    let mut to_choose = Vec::new();
     for item in items {
         let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
         let evaluated = match evaluate(root, &item, repo.root(), recorded.as_deref()) {
@@ -121,6 +129,7 @@ fn reconcile_root(
             }
         };
         let disk = item.disk(root);
+        let one = std::slice::from_ref(&disk);
         let attention = evaluated.state.needs_attention();
         let mut say = |what: &'static str, message: String| {
             report
@@ -136,13 +145,14 @@ fn reconcile_root(
                 }
             }
             State::ProjectGone => {
-                if gone_anchors.insert(item.anchor_dir(root)) {
+                let anchor = item.anchor_dir(root);
+                if gone_anchors.insert(anchor.clone()) {
                     say(
                         "gone",
                         format!(
-                            "project folder {} is gone; its items stay in the mirror. If it moved, `skiman project adopt <new path>`; to stop managing it, `skiman project eject {}`",
-                            item.anchor_dir(root).display(),
-                            item.anchor_dir(root).display()
+                            "project folder {} is gone; its items stay in the mirror. If it moved, adopt the new path; to stop managing it: {}",
+                            anchor.display(),
+                            command("eject", std::slice::from_ref(&anchor))
                         ),
                     );
                 }
@@ -158,19 +168,19 @@ fn reconcile_root(
             State::Occupied(what) => say(
                 "occupied",
                 format!(
-                    "project item {} is not synced: {what}; move it away, or `skiman project eject {}` to stop managing it",
+                    "project item {} is not synced: {what}; move it away, or stop managing it: {}",
                     disk.display(),
-                    disk.display()
+                    command("eject", one)
                 ),
             ),
             State::DeletedInProject => {
                 say(
                     "deleted-in-project",
                     format!(
-                        "{} was deleted in the project; `skiman project restore {}` brings it back from the mirror, `skiman project eject {}` stops managing it",
+                        "{} was deleted in the project; bring it back from the mirror: {}; or stop managing it: {}",
                         disk.display(),
-                        disk.display(),
-                        disk.display()
+                        command("restore", one),
+                        command("eject", one)
                     ),
                 );
                 to_restore.push(disk.clone());
@@ -179,62 +189,53 @@ fn reconcile_root(
                 say(
                     "deleted-in-mirror",
                     format!(
-                        "{} was deleted in the mirror; `skiman project adopt {}` takes it back in, `skiman project eject {}` stops managing it",
+                        "{} was deleted in the mirror; take it back in: {}; or stop managing it: {}",
                         item.mirror_rel(),
-                        disk.display(),
-                        disk.display()
+                        command("adopt", one),
+                        command("eject", one)
                     ),
                 );
-                to_decide.push(disk.clone());
+                to_adopt.push(disk.clone());
             }
-            State::Blocked(why) => say(
-                "blocked",
-                format!(
-                    "{} is not copied into the mirror: {why}; fix it in the project, or `skiman project restore {}` to bring back the mirror's version",
-                    disk.display(),
-                    disk.display()
-                ),
-            ),
+            State::Blocked(why) => say("blocked", blocked_message(&disk, &why)),
             State::MirrorChanged => {
                 say(
                     "mirror-changed",
                     format!(
-                        "the mirror of {} changed; `skiman project restore {}` writes it to the project, `skiman project adopt {}` keeps the project's version",
+                        "the mirror of {} changed; write it to the project: {}; or keep the project's version: {}",
                         disk.display(),
-                        disk.display(),
-                        disk.display()
+                        command("restore", one),
+                        command("adopt", one)
                     ),
                 );
-                to_decide.push(disk.clone());
+                to_choose.push(disk.clone());
             }
             State::Conflict => {
                 say(
                     "conflict",
                     format!(
-                        "{} and its mirror both changed; `skiman project adopt {}` keeps the project's version, `skiman project restore {}` the mirror's (the other goes to a backup)",
+                        "{} and its mirror both changed; keep the project's version: {}; or the mirror's: {} (the other goes to a backup)",
                         disk.display(),
-                        disk.display(),
-                        disk.display()
+                        command("adopt", one),
+                        command("restore", one)
                     ),
                 );
-                to_decide.push(disk.clone());
+                to_choose.push(disk.clone());
             }
             State::ProjectChanged => {
                 let Some(content) = &evaluated.disk else {
                     continue;
                 };
                 if let Err(violations) = check_rules(repo, &item, content) {
-                    let violations: Vec<String> =
-                        violations.iter().map(ToString::to_string).collect();
+                    let mut why: Vec<String> = violations.iter().map(ToString::to_string).collect();
+                    if let Some(hint) = rules::allow_hint(&violations) {
+                        why.push(hint.replace('\n', " "));
+                    }
                     report.items.push(note(
                         &scope,
                         disk.clone(),
                         "blocked",
-                        format!(
-                            "{} is not copied into the mirror: {}",
-                            disk.display(),
-                            violations.join("; ")
-                        ),
+                        blocked_message(&disk, &why.join("; ")),
                         true,
                     ));
                     continue;
@@ -273,31 +274,47 @@ fn reconcile_root(
             false,
         ));
     }
+    let mut all = |what: &'static str, message: String| {
+        report
+            .items
+            .push(note(&scope, root.dir.clone(), what, message, false));
+    };
     if to_restore.len() > 1 {
-        report.items.push(note(
-            &scope,
-            root.dir.clone(),
+        all(
             "restore-all",
             format!(
                 "to bring them all back: {}",
                 command("restore", &to_restore)
             ),
-            false,
-        ));
+        );
     }
-    if to_decide.len() > 1 {
-        report.items.push(note(
-            &scope,
-            root.dir.clone(),
-            "decide-all",
+    if to_adopt.len() > 1 {
+        all(
+            "adopt-all",
             format!(
-                "to keep the project's version of each: {}; or the mirror's: {}",
-                command("adopt", &to_decide),
-                command("restore", &to_decide)
+                "to take every item deleted in the mirror back in: {}",
+                command("adopt", &to_adopt)
             ),
-            false,
-        ));
+        );
     }
+    if to_choose.len() > 1 {
+        all(
+            "choose-all",
+            format!(
+                "to keep the project's version of each changed item: {}; or the mirror's: {}",
+                command("adopt", &to_choose),
+                command("restore", &to_choose)
+            ),
+        );
+    }
+}
+
+fn blocked_message(disk: &Path, why: &str) -> String {
+    format!(
+        "{} is not copied into the mirror: {why}; fix it in the project, or bring back the mirror's version: {}",
+        disk.display(),
+        command("restore", &[disk.to_path_buf()])
+    )
 }
 
 /// Row 13: copies the project's version into the mirror.

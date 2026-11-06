@@ -28,6 +28,9 @@ pub struct Root {
 pub struct Problem {
     pub id: String,
     pub message: String,
+    /// The folder simply is not on this machine (the configuration may be
+    /// right for another one).
+    pub absent: bool,
 }
 
 /// `written` (absolute or `~/...`) as an absolute path, lexically normalised;
@@ -86,6 +89,7 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
             });
             match overlap {
                 Some((j, _)) => Err(Problem {
+                    absent: false,
                     message: format!(
                         "it overlaps project root `{}`; roots must not contain each other",
                         entries[j].id
@@ -110,6 +114,7 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
     let problem = |message: String| Problem {
         id: entry.id.clone(),
         message,
+        absent: false,
     };
     if !names::is_valid(&entry.id) {
         return Err(problem(format!(
@@ -129,10 +134,10 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         Ok(dir) if dir.is_dir() => dir,
         Ok(_) => return Err(problem(format!("{} is not a folder", path.display()))),
         Err(_) => {
-            return Err(problem(format!(
-                "{} does not exist on this machine",
-                path.display()
-            )));
+            return Err(Problem {
+                absent: true,
+                ..problem(format!("{} is not on this machine", path.display()))
+            });
         }
     };
     validate_dir(home, repo, &dir).map_err(problem)?;
@@ -200,10 +205,8 @@ pub fn default_id(dir: &Path) -> String {
             id.push('-');
         }
     }
-    id.trim_end_matches('-')
-        .chars()
-        .take(names::MAX_LEN)
-        .collect::<String>()
+    let id: String = id.chars().take(names::MAX_LEN).collect();
+    id.trim_end_matches('-').to_owned()
 }
 
 #[cfg(test)]
@@ -226,6 +229,8 @@ mod tests {
             "five-continents"
         );
         assert_eq!(default_id(Path::new("/x/My Projects_2")), "my-projects-2");
+        let long = format!("/x/{} tail", "a".repeat(63));
+        assert_eq!(default_id(Path::new(&long)), "a".repeat(63));
     }
 
     #[test]

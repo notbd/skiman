@@ -23,6 +23,7 @@ pub fn check_layout(
     tree: &dyn Tree,
     records: &Records,
     out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
 ) -> io::Result<()> {
     let roots = records.projects();
     for entry in tree.children(MIRROR_DIR)? {
@@ -40,6 +41,7 @@ pub fn check_layout(
                     entry.path
                 ),
             ));
+            scan_files(tree, &entry.path, found)?;
             continue;
         };
         if entry.kind != Kind::Dir {
@@ -52,6 +54,7 @@ pub fn check_layout(
             continue;
         }
         for stray in read_mirror_of(tree, id, skill_dirs)?.strays {
+            scan_files(tree, &stray, found)?;
             out.insert(Violation::new(
                 &stray,
                 None,
@@ -60,6 +63,25 @@ pub fn check_layout(
                     "belongs to no project item (an instruction file or a project skill); restore the configuration that made it one, or `git rm -r {stray}`"
                 ),
             ));
+        }
+    }
+    Ok(())
+}
+
+/// The secret rule on every readable file at or below `path`, so content
+/// that belongs to no item is still checked.
+fn scan_files(tree: &dyn Tree, path: &str, found: &mut Vec<Found>) -> io::Result<()> {
+    let mut files = vec![];
+    match tree.kind(path)? {
+        Some(kind @ Kind::File { .. }) => files.push((path.to_owned(), kind)),
+        Some(Kind::Dir) => {
+            files.extend(tree.walk(path)?.into_iter().map(|e| (e.path, e.kind)));
+        }
+        _ => {}
+    }
+    for (file, kind) in files {
+        if readable(kind) && !is_ignored(&file) {
+            secrets::scan(&file, &tree.read(&file)?, found);
         }
     }
     Ok(())

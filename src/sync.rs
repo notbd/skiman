@@ -314,11 +314,21 @@ fn reconcile_instruction_locations(
         if reconciled.contains(&location) {
             continue;
         }
+        let refused = |path: PathBuf| Item {
+            scope: location.display().to_string(),
+            path,
+            kind: ItemKind::RefusedLocation,
+        };
         match std::fs::symlink_metadata(&location) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 test_hook::at("sync", &format!("link:{}", location.display()));
-                match fsutil::symlink_atomic(&target, &location) {
+                // `symlink` never replaces: a file that appeared since the
+                // check is refused like one the check found.
+                match std::os::unix::fs::symlink(&target, &location) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        report.items.push(refused(path))
+                    }
                     Err(e) => report
                         .errors
                         .push(format!("cannot link {}: {e}", path.display())),
@@ -335,11 +345,7 @@ fn reconcile_instruction_locations(
                         .errors
                         .push(format!("cannot retarget {}: {e}", path.display())),
                 },
-                None => report.items.push(Item {
-                    scope: location.display().to_string(),
-                    path,
-                    kind: ItemKind::RefusedLocation,
-                }),
+                None => report.items.push(refused(path)),
             },
         }
         reconciled.push(location);
@@ -525,8 +531,13 @@ fn reconcile_tool_dir(
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 test_hook::at("sync", &format!("link:{}", path.display()));
-                match fsutil::symlink_atomic(target, &path) {
+                // `symlink` never replaces: an entry that appeared since the
+                // check is occupied like one the check found.
+                match std::os::unix::fs::symlink(target, &path) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        report.items.push(occupied(name, path))
+                    }
                     Err(e) => report
                         .errors
                         .push(format!("cannot link {}: {e}", path.display())),

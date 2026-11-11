@@ -3,6 +3,7 @@
 mod support;
 
 use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use snapbox::str;
@@ -179,6 +180,67 @@ fn sync_hook_links_new_skills_without_printing() {
         &target,
         &target,
     );
+}
+
+/// `sync`, with the test hook writing a regular file to `path` after sync
+/// found `path` empty and right before it creates its link there.
+fn sync_while_a_file_appears_at(sandbox: &Sandbox, path: &Path) -> snapbox::cmd::OutputAssert {
+    sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", format!("sync:link:{}", path.display()))
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("printf mine > '{}'", path.display()),
+        )
+        .assert()
+}
+
+/// `path` is still the file the test hook wrote.
+fn assert_kept(path: &Path) {
+    let meta = std::fs::symlink_metadata(path).unwrap();
+    assert!(meta.is_file(), "{} was replaced by a link", path.display());
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "mine");
+}
+
+#[test]
+fn a_file_that_appears_where_sync_is_about_to_link_a_skill_is_kept_and_reported_as_occupied() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    let path = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+
+    let assert = sync_while_a_file_appears_at(&sandbox, &path);
+
+    assert_kept(&path);
+    assert
+        .code(3)
+        .stdout_eq(str![[r#"
+linked [..]/home/.agents/skills/notes
+linked [..]/home/.gemini/config/skills/notes
+
+"#]])
+        .stderr_eq(str![[r#"
+warning: [..]/home/.claude/skills/notes is occupied by an entry skiman does not own, so skill notes is not linked there; move it away, then run `skiman sync`
+
+"#]]);
+}
+
+#[test]
+fn a_file_that_appears_where_sync_is_about_to_link_the_shared_body_is_kept_and_reported_as_refused()
+{
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let path = sandbox.instruction_file(Tool::ClaudeCode);
+    std::fs::remove_file(&path).unwrap();
+
+    let assert = sync_while_a_file_appears_at(&sandbox, &path);
+
+    assert_kept(&path);
+    assert.code(3).stdout_eq("").stderr_eq(str![[r#"
+warning: instruction file [..]/home/.claude/CLAUDE.md is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`
+
+"#]]);
 }
 
 #[test]

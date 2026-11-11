@@ -91,20 +91,20 @@ impl Backup {
         Ok(Backup { dir })
     }
 
-    /// The backup folder `dir` an earlier run created (a resumed import
-    /// keeps using its own).
-    pub fn existing(dir: PathBuf) -> Backup {
-        Backup { dir }
-    }
-
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
-    /// Moves `original` to `<backup>/<rel>` (a symlink as a symlink). Across
-    /// filesystems: copy, verify, then delete the original; an original
-    /// holding a special file is refused and left in place.
-    pub fn move_in(&self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
+    /// Writes `content`, the content of a file about to be replaced in one
+    /// step, to `<backup>/<rel>`.
+    pub fn save(&self, rel: &Path, content: &[u8]) -> io::Result<PathBuf> {
+        let dest = self.fresh(rel)?;
+        std::fs::write(&dest, content)?;
+        Ok(dest)
+    }
+
+    /// `<backup>/<rel>` with its parent folders created; refuses a taken one.
+    fn fresh(&self, rel: &Path) -> io::Result<PathBuf> {
         let dest = self.dir.join(rel);
         if std::fs::symlink_metadata(&dest).is_ok() {
             return Err(io::Error::new(
@@ -113,6 +113,14 @@ impl Backup {
             ));
         }
         std::fs::create_dir_all(dest.parent().expect("backup path has a parent"))?;
+        Ok(dest)
+    }
+
+    /// Moves `original` to `<backup>/<rel>` (a symlink as a symlink). Across
+    /// filesystems: copy, verify, then delete the original; an original
+    /// holding a special file is refused and left in place.
+    pub fn move_in(&self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
+        let dest = self.fresh(rel)?;
         match std::fs::rename(original, &dest) {
             Ok(()) => Ok(dest),
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {

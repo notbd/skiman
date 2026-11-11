@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, init, read, skill_md, tree, write};
+use crate::support::{Sandbox, Tool, backup_dirs, fingerprint, init, read, skill_md, tree, write};
 
 /// An import folder outside the skill repo holding own skill `notes`, a
 /// shared body and a `skiman.toml` with `manifest` as its text.
@@ -52,14 +52,6 @@ fn without_a_terminal_import_needs_yes() {
             "error: missing flag without a terminal: --yes (import without asking for confirmation)\n",
         );
     assert_eq!(world(&sandbox), before);
-}
-
-/// Hex sha256 of `bytes`, prefixed like the import record's file hashes.
-fn file_hash(bytes: impl AsRef<[u8]>) -> String {
-    use sha2::Digest;
-    let digest = sha2::Sha256::digest(bytes.as_ref());
-    let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    format!("sha256:{hex}")
 }
 
 /// A messy setup: instruction files that are regular files, a skill copied
@@ -152,9 +144,9 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
       modified SKILL.md
   move {repo}/instructions/shared.md to the backup, then write the import's
   move {repo}/skiman.toml to the backup, then write the import's
-  move {claude}/notes to the backup, then link it to skill notes
   move {claude}/old-copy to the backup (no imported skill of that name is distributed)
   move {codex}/notes to the backup, then link it to skill notes
+  move {claude}/notes to the backup, then link it to skill notes
   move {home}/.claude/CLAUDE.md to the backup, then link it to the shared body
   move {home}/.codex/AGENTS.md to the backup, then link it to the shared body
   skip {claude}/synced: managed elsewhere
@@ -172,7 +164,7 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
         .lines()
         .find_map(|l| {
             l.strip_prefix("imported ")
-                .and_then(|l| l.split_once("; the originals are in "))
+                .and_then(|l| l.split_once("; the originals this run moved are in "))
         })
         .map(|(_, b)| PathBuf::from(b))
         .unwrap_or_else(|| panic!("no backup line in {stdout}"));
@@ -259,45 +251,13 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
     assert_eq!(read(gemini.join("notes")), "not a skill\n");
     assert_eq!(tree(&folder), folder_before);
 
-    // Machine state holds the finished import's record.
-    let record: toml_edit::DocumentMut =
-        read(sandbox.state_home().join("skiman/import/record.toml"))
-            .parse()
-            .unwrap();
-    assert_eq!(record["status"].as_str(), Some("finished"));
-    assert_eq!(record["folder"].as_str(), Some(folder.to_str().unwrap()));
-    assert_eq!(record["backup"].as_str(), Some(backup.to_str().unwrap()));
-    assert_eq!(
-        record["pre_import"]["shared_body"].as_str(),
-        Some(file_hash("old shared body\n").as_str())
-    );
-    assert_eq!(
-        record["pre_import"]["manifest"].as_str(),
-        Some(file_hash(&old_manifest).as_str())
-    );
-    assert_eq!(
-        record["candidate"]["manifest"].as_str(),
-        Some(file_hash(&manifest).as_str())
-    );
-    assert_eq!(
-        record["candidate"]["lock"].as_str(),
-        Some(file_hash(&lock).as_str())
-    );
-    assert_eq!(record["lock_content"].as_str(), Some(lock.as_str()));
-    let locations = record["locations"].as_array_of_tables().unwrap();
-    assert_eq!(locations.len(), 5);
-    assert!(
-        locations
-            .iter()
-            .all(|l| l["state"].as_str() == Some("taken-over"))
-    );
-    assert!(!sandbox.state_home().join("skiman/import/area").exists());
+    assert!(!sandbox.state_home().join("skiman/import").exists());
 }
 
 /// Every case leaves everything unchanged: the import folder, the skill
 /// repo, the tool directories, the instruction files and machine state.
 #[track_caller]
-fn assert_refused(sandbox: &Sandbox, folder: &Path, code: i32, stderr_has: &[&str]) {
+fn assert_refused(sandbox: &Sandbox, folder: &Path, code: i32, stderr_has: &[&str]) -> String {
     let before = world(sandbox);
     let folder_before = tree(folder);
     let output = sandbox
@@ -324,6 +284,7 @@ fn assert_refused(sandbox: &Sandbox, folder: &Path, code: i32, stderr_has: &[&st
             .collect();
         assert!(changed.is_empty(), "changed: {changed:?}\n{stderr}");
     }
+    stderr
 }
 
 #[test]
@@ -336,11 +297,21 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
     write(repo.join("upstream/.keep"), "");
 
     write(repo.join("skills/mine/SKILL.md"), skill_md("mine"));
-    assert_refused(&sandbox, &folder, 1, &["already holds skills/mine"]);
+    assert_refused(
+        &sandbox,
+        &folder,
+        1,
+        &["  skills/mine is not in the import folder\n"],
+    );
     std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
 
     write(repo.join("upstream/pdf/SKILL.md"), skill_md("pdf"));
-    assert_refused(&sandbox, &folder, 1, &["already holds upstream/pdf"]);
+    assert_refused(
+        &sandbox,
+        &folder,
+        1,
+        &["  upstream/pdf is the snapshot of no third-party skill in the import folder\n"],
+    );
     std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
 
     write(
@@ -351,8 +322,27 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &sandbox,
         &folder,
         1,
-        &["already holds a skiman.lock entry for pdf"],
+        &[
+            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder\n",
+        ],
     );
+    std::fs::remove_file(repo.join("skiman.lock")).unwrap();
+
+    // The import's own skill, already in the skill repo as the import folder
+    // holds it, is kept, and the rest is written.
+    write(repo.join("skills/notes/SKILL.md"), skill_md("notes"));
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert_eq!(
+        read(repo.join("instructions/shared.md")),
+        "# Shared\n\nBe brief.\n"
+    );
+    assert_eq!(read(repo.join("skiman.toml")), TOOLS);
 }
 
 #[test]
@@ -498,6 +488,25 @@ fn a_special_file_in_an_entry_to_move_refuses_the_import_naming_it() {
 }
 
 #[test]
+fn a_skill_repo_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
+ {
+    for rel in ["instructions/shared.md", "skiman.toml"] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let repo = sandbox.skill_repo();
+        let elsewhere = sandbox.home().join("elsewhere");
+        std::fs::rename(repo.join(rel), &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, repo.join(rel)).unwrap();
+        let folder = import_folder(&sandbox, TOOLS);
+
+        let line = format!("  {rel} is not a regular file");
+        let first = assert_refused(&sandbox, &folder, 1, &[&line]);
+        let again = assert_refused(&sandbox, &folder, 1, &[&line]);
+        assert_eq!(again, first);
+    }
+}
+
+#[test]
 fn with_a_terminal_declining_changes_nothing() {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -614,7 +623,7 @@ fn project_with_an_exempted_key(sandbox: &Sandbox) -> String {
         .code(0);
     let entry = format!(
         "[[secrets.allow]]\npath = \"projects/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"{}\"\n",
-        file_hash(&key)
+        fingerprint(&key)
     );
     let manifest = sandbox.skill_repo().join("skiman.toml");
     std::fs::write(&manifest, format!("{}\n{entry}", read(&manifest))).unwrap();
@@ -793,7 +802,7 @@ fn a_link_into_skill_dirs_that_only_the_import_folder_declares_is_left_in_place(
 }
 
 #[test]
-fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_command_resumes_it() {
+fn a_failure_during_takeover_stops_the_import_and_the_same_command_finishes_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let claude = sandbox.tool_dir(Tool::ClaudeCode);
@@ -824,7 +833,6 @@ fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_comm
         )),
         "{stdout}"
     );
-    let record_file = sandbox.state_home().join("skiman/import/record.toml");
     assert!(
         stderr.contains(&format!(
             "cannot move {} to the backup",
@@ -833,42 +841,21 @@ fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_comm
         "{stderr}"
     );
     assert!(stderr.contains("the import stopped part-way"), "{stderr}");
+    // The run's backup holds the repo files it replaced.
+    let [first] = backup_dirs(&sandbox).try_into().unwrap();
     assert!(
-        stderr.contains(&record_file.display().to_string()),
+        stderr.contains(&format!(
+            "the originals this run moved are in {}",
+            first.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("run the same command again to finish it"),
         "{stderr}"
     );
     assert_eq!(read(claude.join("notes/SKILL.md")), skill_md("notes"));
     assert_eq!(tree(&folder), folder_before);
-
-    let record: toml_edit::DocumentMut = read(&record_file).parse().unwrap();
-    assert_eq!(record["status"].as_str(), Some("in-progress"));
-    let backup = PathBuf::from(record["backup"].as_str().unwrap());
-    assert!(stderr.contains(&backup.display().to_string()), "{stderr}");
-    assert_eq!(
-        record["skills"]["notes"]["skill"].as_str().map(str::len),
-        Some("sha256:".len() + 64)
-    );
-    let location = &record["locations"]
-        .as_array_of_tables()
-        .unwrap()
-        .get(0)
-        .unwrap();
-    assert_eq!(
-        location["path"].as_str(),
-        Some(claude.join("notes").to_str().unwrap())
-    );
-    assert_eq!(location["state"].as_str(), Some("planned"));
-    assert!(
-        sandbox
-            .state_home()
-            .join("skiman/import/area/skiman.lock")
-            .is_file()
-    );
-
-    assert!(
-        stderr.contains("run the same command again with the import folder unchanged"),
-        "{stderr}"
-    );
 
     // With the tool directory writable again, the same command finishes it.
     let output = sandbox
@@ -881,13 +868,16 @@ fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_comm
         .get_output()
         .clone();
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("resuming the import of"), "{stdout}");
     assert!(
         !stdout.contains(&format!("created {}", repo.display())),
         "{stdout}"
     );
+    let second = backup_dirs(&sandbox)
+        .into_iter()
+        .find(|dir| *dir != first)
+        .expect("the second run's backup");
     assert_eq!(
-        read(backup.join("claude-code/notes/SKILL.md")),
+        read(second.join("claude-code/notes/SKILL.md")),
         skill_md("notes")
     );
     crate::support::assert_symlink(
@@ -895,9 +885,6 @@ fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_comm
         repo.join("skills/notes"),
         repo.join("skills/notes"),
     );
-    let record: toml_edit::DocumentMut = read(&record_file).parse().unwrap();
-    assert_eq!(record["status"].as_str(), Some("finished"));
-    assert!(!sandbox.state_home().join("skiman/import/area").exists());
     assert_eq!(tree(&folder), folder_before);
 }
 

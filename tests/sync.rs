@@ -115,6 +115,31 @@ fn managing_skills_is_rewritten_when_its_content_differs() {
 }
 
 #[test]
+fn sync_hook_does_not_write_managing_skills_through_a_linked_folder_and_names_it() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let materialised = sandbox.skill_repo().join(".skiman/managing-skills");
+    std::fs::remove_dir_all(&materialised).unwrap();
+    let foreign = sandbox.root().join("foreign");
+    std::fs::create_dir(&foreign).unwrap();
+    std::fs::write(foreign.join("SKILL.md"), "user original").unwrap();
+    std::os::unix::fs::symlink(&foreign, &materialised).unwrap();
+
+    let assert = sandbox.skiman().args(["sync", "--hook"]).assert();
+
+    assert_eq!(
+        std::fs::read_to_string(foreign.join("SKILL.md")).unwrap(),
+        "user original",
+        "sync wrote through the link"
+    );
+    assert_eq!(std::fs::read_link(&materialised).unwrap(), foreign);
+    assert.code(0).stdout_eq("").stderr_eq(str![[r#"
+error: cannot write [..]/skill-repo/.skiman/managing-skills: [..]/skill-repo/.skiman/managing-skills is not a real folder (a link or a file is in the way)
+
+"#]]);
+}
+
+#[test]
 fn sync_skips_a_tool_whose_presence_directory_is_missing_and_creates_a_missing_tool_directory() {
     let sandbox = Sandbox::builder()
         .tool(Tool::Codex, ToolSetup::PresenceOnly)

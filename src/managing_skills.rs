@@ -45,10 +45,14 @@ fn code_list(items: &[&str]) -> String {
 }
 
 /// Writes `.skiman/managing-skills/SKILL.md` only when its content differs.
-/// Returns whether it wrote.
+/// Returns whether it wrote. Fails without writing when a folder on the way
+/// is not a real folder: a link there could lead the write out of the repo.
 pub fn materialise(repo: &SkillRepo) -> io::Result<bool> {
     let dir = repo.managing_skills_dir();
     let file = dir.join("SKILL.md");
+    if let Some(why) = fsutil::broken_chain(repo.root(), &file) {
+        return Err(io::Error::other(why));
+    }
     let wanted = content(repo);
     if std::fs::read(&file).is_ok_and(|current| current == wanted.as_bytes()) {
         return Ok(false);

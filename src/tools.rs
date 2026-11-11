@@ -107,7 +107,7 @@ pub const TOOLS: &[AgentTool] = &[
         // Phase 1 could not confirm that a trusted entry runs on startup and
         // resume (`docs/phase1-results.md`, experiment 4).
         session_hook_unavailable: Some(
-            "Codex runs only the hooks you have trusted with `/hooks`, so skiman does not add one yet; after a change, run `skiman sync`, or rely on the skill repo's git hooks",
+            "Codex runs only the hooks you have trusted with `/hooks`; after a change, run `skiman sync`, or rely on the skill repo's git hooks",
         ),
         // Codex reads `AGENTS.override.md` instead of `AGENTS.md` at each level.
         project_instruction_files: &["AGENTS.md", "AGENTS.override.md"],

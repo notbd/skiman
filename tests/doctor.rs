@@ -91,7 +91,7 @@ recorded binary: {BINARY}
 git: version [..]
 git hooks: installed in {repo}/.git/hooks
 session-start hook for claude-code: installed in {home}/.claude/settings.json
-session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`, so skiman does not add one yet; after a change, run `skiman sync`, or rely on the skill repo's git hooks
+session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; after a change, run `skiman sync`, or rely on the skill repo's git hooks
 claude-code: installed; tool directory {home}/.claude/skills; instruction file {home}/.claude/CLAUDE.md
 codex: installed; tool directory {home}/.agents/skills; instruction file {home}/.codex/AGENTS.md
 antigravity: installed; tool directory {home}/.gemini/config/skills; instruction file {home}/.gemini/GEMINI.md

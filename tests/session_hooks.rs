@@ -432,3 +432,42 @@ fn with_a_terminal_accepting_the_preview_writes_the_entry() {
     assert_eq!(code, 0, "{rest}");
     assert!(!rest.contains("[y/N]"), "{rest}");
 }
+
+#[test]
+fn init_through_a_renamed_link_keeps_one_entry_and_none_through_it_removes_it() {
+    let sandbox = Sandbox::new();
+    write_json(&claude_settings(&sandbox), &user_settings());
+    let bin = sandbox.root().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let sk = bin.join("sk");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_skiman"), &sk).unwrap();
+    let init_as_sk = |session_hooks: &str| {
+        sandbox
+            .command(&sk)
+            .args(["init", "--session-hooks", session_hooks])
+            .arg(sandbox.skill_repo())
+            .assert()
+            .code(0);
+    };
+
+    for _ in 0..3 {
+        init_as_sk("claude-code");
+    }
+
+    let mut settings = user_settings();
+    settings["hooks"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "matcher": "startup|resume",
+            "hooks": [{
+                "type": "command",
+                "command": format!("{} sync --hook", sk.display()),
+                "timeout": 10
+            }]
+        }));
+    assert_eq!(read_json(&claude_settings(&sandbox)), settings);
+
+    init_as_sk("none");
+    assert_eq!(read_json(&claude_settings(&sandbox)), user_settings());
+}

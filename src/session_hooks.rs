@@ -2,13 +2,18 @@
 //! "Hooks"): `init` adds one group per file whose hook calls the recorded
 //! binary with `sync --hook`, and `--session-hooks none` removes skiman's hooks.
 //!
-//! A hook is skiman's when its command contains [`MARKER`]. A settings file is
-//! rewritten at its realpath (temporary file in that directory, then rename),
-//! keeping every other key and entry; a file that is not valid JSON, or whose
-//! `hooks.SessionStart` is not a list, is never rewritten (exit 4, and the
-//! entry to add by hand is printed). A missing settings file is created when
-//! the folder that holds it exists; when that folder is missing the tool is not
-//! installed and nothing is written.
+//! A hook is skiman's when its command contains [`MARKER`], or is exactly the
+//! command this run writes: a binary run through a renamed link (`sk`) has no
+//! `skiman` in its command. A hook written under an earlier name is then not
+//! recognised and has to be removed by hand; claiming every `… sync --hook`
+//! would also claim, and later remove, another program's hook.
+//!
+//! A settings file is rewritten at its realpath (temporary file in that
+//! directory, then rename), keeping every other key and entry; a file that is
+//! not valid JSON, or whose `hooks.SessionStart` is not a list, is never
+//! rewritten (exit 4, and the entry to add by hand is printed). A missing
+//! settings file is created when the folder that holds it exists; when that
+//! folder is missing the tool is not installed and nothing is written.
 
 use std::path::{Path, PathBuf};
 
@@ -42,16 +47,17 @@ pub enum Request<'a> {
 /// file is handled on its own, and the exit is the highest of them.
 pub fn apply(home: &Path, binary: &Path, request: Request) -> Exit {
     let group = entry_group(binary);
+    let own = entry_command(binary);
     let hookable = TOOLS.iter().filter(|tool| tool.session_hook_file.is_some());
     match request {
         Request::Add(ids) => hookable
             .filter(|tool| ids.split(',').any(|id| id == tool.id))
-            .map(|tool| add(home, tool, &group))
+            .map(|tool| add(home, tool, &group, &own))
             .fold(Exit::Success, Exit::combine),
         Request::Remove => hookable
-            .map(|tool| remove(home, tool))
+            .map(|tool| remove(home, tool, &own))
             .fold(Exit::Success, Exit::combine),
-        Request::Ask => ask(home, hookable.collect(), &group),
+        Request::Ask => ask(home, hookable.collect(), &group, &own),
     }
 }
 
@@ -85,8 +91,9 @@ pub fn status(home: &Path, tool: &AgentTool, binary: &Path) -> (PathBuf, Status)
             );
         }
     };
-    let ours: Vec<&Value> = groups.iter().filter(|g| hook_count(g) > 0).collect();
-    let total: usize = groups.iter().map(hook_count).sum();
+    let own = entry_command(binary);
+    let ours: Vec<&Value> = groups.iter().filter(|g| hook_count(g, &own) > 0).collect();
+    let total: usize = groups.iter().map(|g| hook_count(g, &own)).sum();
     let status = if total == 0 {
         Status::Missing
     } else if total == 1 && ours == [&entry_group(binary)] {
@@ -103,10 +110,15 @@ pub fn entry_group(binary: &Path) -> Value {
         "matcher": MATCHER,
         "hooks": [{
             "type": "command",
-            "command": format!("{} sync --hook", shell_word(&binary.to_string_lossy())),
+            "command": entry_command(binary),
             "timeout": TIMEOUT_SECONDS,
         }],
     })
+}
+
+/// The command of the hook skiman adds.
+fn entry_command(binary: &Path) -> String {
+    format!("{} sync --hook", shell_word(&binary.to_string_lossy()))
 }
 
 /// `path` for a shell command line: every ASCII character outside a safe set
@@ -212,18 +224,19 @@ fn plan_addition(
     home: &Path,
     tool: &AgentTool,
     group: &Value,
+    own: &str,
 ) -> Result<Option<Settings>, Unusable> {
     let mut settings = load(settings_path(home, tool))?;
     let shape_error = |what: &str| Unusable::Broken(format!("{}: {what}", settings.path.display()));
     let groups = session_start(&settings.root)
         .map_err(shape_error)?
         .map_or(&[][..], Vec::as_slice);
-    let ours: Vec<&Value> = groups.iter().filter(|g| hook_count(g) > 0).collect();
-    let total: usize = groups.iter().map(hook_count).sum();
+    let ours: Vec<&Value> = groups.iter().filter(|g| hook_count(g, own) > 0).collect();
+    let total: usize = groups.iter().map(|g| hook_count(g, own)).sum();
     if total == 1 && ours == [group] {
         return Ok(None);
     }
-    strip(&mut settings.root, false);
+    strip(&mut settings.root, own, false);
     let Value::Object(root) = &mut settings.root else {
         unreachable!("checked by session_start")
     };
@@ -242,12 +255,12 @@ fn plan_addition(
     Ok(Some(settings))
 }
 
-fn add(home: &Path, tool: &AgentTool, group: &Value) -> Exit {
+fn add(home: &Path, tool: &AgentTool, group: &Value, own: &str) -> Exit {
     if let Some(reason) = tool.session_hook_unavailable {
         warn_unavailable(home, tool, reason);
         return Exit::Success;
     }
-    match plan_addition(home, tool, group) {
+    match plan_addition(home, tool, group, own) {
         Ok(None) => Exit::Success,
         Ok(Some(settings)) => write_addition(&settings, group),
         Err(Unusable::NotInstalled(dir)) => {
@@ -295,11 +308,11 @@ fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).expect("JSON value serialises")
 }
 
-fn remove(home: &Path, tool: &AgentTool) -> Exit {
+fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
     let path = settings_path(home, tool);
     let by_hand = |reason: String| {
         err!(
-            "error: {reason}, so skiman did not change it; remove by hand every hook whose command contains `{MARKER}`"
+            "error: {reason}, so skiman did not change it; remove by hand every hook whose command contains `{MARKER}` or is `{own}`"
         );
         Exit::OperationalError
     };
@@ -309,7 +322,7 @@ fn remove(home: &Path, tool: &AgentTool) -> Exit {
         Err(Unusable::NotInstalled(_)) => return Exit::Success,
         Err(Unusable::Broken(reason)) => return by_hand(reason),
     };
-    if !strip(&mut settings.root, true) {
+    if !strip(&mut settings.root, own, true) {
         return Exit::Success;
     }
     match settings.save() {
@@ -325,7 +338,7 @@ fn remove(home: &Path, tool: &AgentTool) -> Exit {
 }
 
 /// Previews the entries `init` would add, asks, and adds them on "y".
-fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value) -> Exit {
+fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value, own: &str) -> Exit {
     let mut exit = Exit::Success;
     let mut planned = Vec::new();
     for tool in tools {
@@ -337,7 +350,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value) -> Exit {
             warn_unavailable(home, tool, reason);
             continue;
         }
-        match plan_addition(home, tool, group) {
+        match plan_addition(home, tool, group, own) {
             Ok(None) | Err(Unusable::NotInstalled(_)) => {}
             Ok(Some(settings)) => planned.push((tool.id, settings)),
             Err(Unusable::Broken(reason)) => {
@@ -398,26 +411,27 @@ fn session_start(root: &Value) -> Result<Option<&Vec<Value>>, &'static str> {
     }
 }
 
-/// How many of the group's hooks are skiman's.
-fn hook_count(group: &Value) -> usize {
+/// How many of the group's hooks are skiman's; `own` is the command this
+/// run writes.
+fn hook_count(group: &Value, own: &str) -> usize {
     group
         .get("hooks")
         .and_then(Value::as_array)
         .map_or(0, |hooks| {
-            hooks.iter().filter(|h| is_skiman_hook(h)).count()
+            hooks.iter().filter(|h| is_skiman_hook(h, own)).count()
         })
 }
 
-fn is_skiman_hook(hook: &Value) -> bool {
+fn is_skiman_hook(hook: &Value, own: &str) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(MARKER))
+        .is_some_and(|command| command.contains(MARKER) || command == own)
 }
 
 /// Removes skiman's hooks from `hooks.SessionStart`, and every group they
 /// leave empty. With `prune`, also removes `SessionStart` and `hooks` when
 /// this left them empty. Returns whether anything was removed.
-fn strip(root: &mut Value, prune: bool) -> bool {
+fn strip(root: &mut Value, own: &str, prune: bool) -> bool {
     let Value::Object(root) = root else {
         return false;
     };
@@ -429,11 +443,11 @@ fn strip(root: &mut Value, prune: bool) -> bool {
     };
     let mut removed = false;
     groups.retain_mut(|group| {
-        if hook_count(group) == 0 {
+        if hook_count(group, own) == 0 {
             return true;
         }
         let list = group["hooks"].as_array_mut().expect("counted above");
-        list.retain(|hook| !is_skiman_hook(hook));
+        list.retain(|hook| !is_skiman_hook(hook, own));
         removed = true;
         !list.is_empty()
     });

@@ -23,7 +23,7 @@ The source a third-party skill came from (a git repo path, an archive, a local f
 _Avoid_: origin, remote, source
 
 **Upstream snapshot** (上游原样):
-An unmodified copy of a third-party skill's upstream at the pinned version, kept read-only in the skill repo and never distributed.
+An unmodified copy of a third-party skill's upstream at the pinned version, without the upstream's `.gitignore`, `.gitattributes` and `.gitmodules` files, kept read-only in the skill repo and never distributed.
 _Avoid_: vendor copy, pristine copy, base
 
 **Local modification** (本地改动):

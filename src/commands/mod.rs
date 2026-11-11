@@ -26,12 +26,18 @@ pub fn has_terminal() -> bool {
     std::io::stdin().is_terminal()
 }
 
-/// Asks `question` on stderr; only `y` or `yes` agrees.
-pub fn confirm(question: &str) -> Result<bool, Failure> {
+/// Asks `question` on stderr and returns the line answered, trimmed.
+pub fn ask(question: &str) -> Result<String, Failure> {
     let io = |e: std::io::Error| Failure::operational(format!("cannot read the answer: {e}"));
-    eprint!("{question}");
-    std::io::stderr().flush().map_err(io)?;
+    let mut stderr = std::io::stderr();
+    write!(stderr, "{question}").map_err(io)?;
+    stderr.flush().map_err(io)?;
     let mut line = String::new();
     std::io::stdin().read_line(&mut line).map_err(io)?;
-    Ok(matches!(line.trim(), "y" | "Y" | "yes" | "Yes"))
+    Ok(line.trim().to_owned())
+}
+
+/// Asks `question` on stderr; only `y` or `yes` agrees.
+pub fn confirm(question: &str) -> Result<bool, Failure> {
+    Ok(matches!(ask(question)?.as_str(), "y" | "Y" | "yes" | "Yes"))
 }

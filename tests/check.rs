@@ -50,8 +50,8 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// The spec's tree hash, computed here independently of skiman: regular
-/// files only, sorted by path bytes, `path \0 x \0 sha256 \n`, `.DS_Store`
-/// and `Thumbs.db` ignored.
+/// files only, sorted by path bytes, `path \0 x \0 sha256 \n`, `.DS_Store`,
+/// `Thumbs.db` and `Icon\r` ignored.
 fn expected_tree_hash(dir: &Path) -> String {
     fn files(root: &Path, dir: &Path, out: &mut Vec<(String, bool, Vec<u8>)>) {
         for entry in std::fs::read_dir(dir).unwrap() {
@@ -61,7 +61,7 @@ fn expected_tree_hash(dir: &Path) -> String {
                 files(root, &path, out);
             } else if meta.is_file() {
                 let name = path.file_name().unwrap().to_str().unwrap();
-                if name != ".DS_Store" && name != "Thumbs.db" {
+                if ![".DS_Store", "Thumbs.db", "Icon\r"].contains(&name) {
                     let rel = path
                         .strip_prefix(root)
                         .unwrap()

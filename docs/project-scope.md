@@ -1,15 +1,13 @@
 # Project scope: project instruction files and project skills
 
-Status: implemented on branch `feat/local-scope`; plan approved by the council (round 5: 9.7, 9.7, 9.7).
-
 ## Goal
 
 skiman manages global content only: `skills/<name>` linked into every tool
 directory, and `instructions/shared.md` linked into every global instruction
-file. Most of a real setup is per project: 76 `AGENTS.md` files under
-`~/Work/Five-Continents`, project skills such as
-`<project>/.claude/skills/fcusa-weekly-po`, company skills kept in
-`~/Work/Five-Continents/fivec-core/skills/`, the `AGENTS.md` of code projects
+file. Most of a real setup is per project: dozens of `AGENTS.md` files under
+a work folder such as `~/Work/Acme-Corp`, project skills such as
+`<project>/.claude/skills/weekly-report`, company skills kept in
+`~/Work/Acme-Corp/acme-core/skills/`, the `AGENTS.md` of code projects
 that their own git repo does not track. They have no history and no backup.
 
 The user registers one or more folders (project roots). skiman finds every
@@ -31,9 +29,9 @@ whatever skiman replaces on either side goes to a backup first.
 
 ## Model: the mirror follows the project
 
-Two decisions came out of measuring the real tools and two council rounds:
+Two decisions came out of measuring the real tools against two earlier drafts:
 
-1. **Copy, not links.** Round 1 replaced each project file with a symlink into
+1. **Copy, not links.** The first draft replaced each project file with a symlink into
    the skill repo, like global skills. That breaks how these files are edited
    (`docs/project-scope-evidence.md`): Claude Code does not edit a symlinked
    `AGENTS.md` (it treats the target as outside the working directory),
@@ -41,7 +39,7 @@ Two decisions came out of measuring the real tools and two council rounds:
    and labels the file with its target path. Global locations are derived
    (nobody edits `~/.claude/skills/x` in place), so links stay right there;
    project folders are where people and agents edit, so they keep real files.
-2. **One automatic direction.** Round 2 also wrote mirror changes back to the
+2. **One automatic direction.** The second draft also wrote mirror changes back to the
    project at every sync. A routine `git restore .` in the skill repo then
    overwrote project content that existed nowhere else, and a conflicted
    `git pull` could write conflict markers into a project. Now sync only
@@ -100,9 +98,9 @@ only. Project items are not per tool, so `[tools].enabled` does not apply.
 
 ```toml
 [projects.work]
-path = "~/Work/Five-Continents"
-exclude = ["_archive", "00_个人事务_me/五洲工作系统_work-system/05_working"]
-skill_dirs = ["fivec-core/skills"]
+path = "~/Work/Acme-Corp"
+exclude = ["_archive", "项目甲/草稿"]
+skill_dirs = ["acme-core/skills"]
 ```
 
 (An example: this change configures nothing on the user's machine.)
@@ -114,15 +112,14 @@ skill_dirs = ["fivec-core/skills"]
 - `exclude` (optional) limits discovery only: an entry without `/` matches a
   file or folder of that name at any depth; an entry with `/` is a
   root-relative path and everything under it. Real roots hold backup copies
-  (two of the three `fcusa-weekly-po` copies sit in backup folders;
-  `~/Developer/.agents-config/agent-setup-migration/backup-pre-import/` holds
-  an old `.codex/AGENTS.md`). An item adopted before its path was excluded
+  (copies of a project skill in backup folders, an old `.codex/AGENTS.md`
+  kept after a migration). An item adopted before its path was excluded
   keeps syncing; eject it to stop. An exact path given to `adopt` wins over
   `exclude`.
 - `skill_dirs` (optional): root-relative folders whose child folders holding
   `SKILL.md` are project skill items too, for skills kept in a folder of
-  their own and linked into the tools by other means (such as the company
-  skills in `fivec-core/skills/`, linked by the user's `harness-sync`). Same
+  their own and linked into the tools by other means (such as company
+  skills in `acme-core/skills/`, linked by another tool). Same
   item kind, gates and protocol; skiman never touches the tool directories
   for them, and a tool-directory link whose realpath lies under a configured
   `skill_dirs` folder counts as managed elsewhere, so global sync never
@@ -151,11 +148,11 @@ skill repo/
   projects/
     work/                                       [projects.work]
       AGENTS.md
-      30_美国业务_FiveC-USA/
+      项目甲/
         AGENTS.md
-        .claude/skills/fcusa-weekly-po/SKILL.md
+        .claude/skills/weekly-report/SKILL.md
     dev/
-      wec-hist/AGENTS.md
+      website/AGENTS.md
 <state dir>/projects-synced.toml                (per machine)
 ```
 
@@ -251,15 +248,16 @@ set-aside copy (step 3), and `target` the destination path.
 
 1. Read the source into an in-memory snapshot and run the safety rules on it.
    Its hash becomes the new synced hash; the live source is not re-read.
-2. Write the snapshot into the swap folder.
+2. Write the snapshot into the swap folder. For a file, also make and remove
+   a hard link to it there: on a filesystem without hard links this probe
+   fails, and the destination is left untouched.
 3. If the destination exists, rename it into the swap folder (same
    filesystem, so it keeps its inode and a late write through an open handle
    lands in it) and hash it. If it no longer matches what the plan saw, put
    it back without replacing anything, and report a conflict.
 4. Put the new entry in place without replacing anything: a hard link for a
-   file (fails if something appeared; a filesystem without hard links fails
-   here too), `rename` for a folder (fails over a file or a non-empty
-   folder).
+   file (fails if something appeared), `rename` for a folder (fails over a
+   file or a non-empty folder).
 5. Rename the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
    for mirror content, `backups/<ts>/projects/<id>/…` for project content),
    then hash it again: a different hash means a late write landed there, and
@@ -364,14 +362,13 @@ repo lock, staging, backups under machine state.
 
 - Mirrors live in the skill repo, not a second store: one source of truth,
   checked by the same rules and hooks. The user already keeps work-related
-  instructions there (`instructions/legacy-global-rules.md`). Registering a
-  root is an explicit act, and `project add` says where content goes.
-- The three company skills in `~/Work/Five-Continents/fivec-core/skills/`
-  are, by the user's rule in `fivec-core/AGENTS.md`, kept there, linked by
-  `harness-sync` and not managed by skiman, waiting for a backup system.
-  `skill_dirs` makes mirroring them possible without touching their links;
-  whether to use it is the user's call (it means changing that rule), so
-  this change does not configure it or edit that file.
+  instructions there. Registering a root is an explicit act, and
+  `project add` says where content goes.
+- Company skills kept in a folder of their own and linked into the tools by
+  another tool can stay outside skiman by a rule the user keeps in that
+  folder. `skill_dirs` makes mirroring them possible without touching their
+  links; whether to use it is the user's call (it means changing that rule),
+  so this change does not configure it or edit that rule.
 
 ## Not in scope
 
@@ -425,5 +422,3 @@ the project file through Claude Code, sync, see the mirror change.
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
   `cargo test` (the CI job).
-- Council on the plan and on the implementation: every delegate above 9.5
-  and approving.

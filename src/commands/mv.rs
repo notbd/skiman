@@ -162,7 +162,7 @@ impl Plan {
             write.map_err(|e| {
                 Failure::operational(format!("cannot write {}: {e}", file.display()))
             })?;
-            println!("changed {}", file.display());
+            out!("changed {}", file.display());
         }
         if self.has_upstream {
             rename(&repo.upstream_dir(&self.old), &repo.upstream_dir(&self.new))?;
@@ -175,7 +175,7 @@ impl Plan {
                 write_atomic(&path, text.as_bytes()).map_err(|e| {
                     Failure::operational(format!("cannot write {}: {e}", path.display()))
                 })?;
-                println!("changed {}", path.display());
+                out!("changed {}", path.display());
             }
         }
         Ok(())
@@ -195,6 +195,6 @@ fn rename(from: &Path, to: &Path) -> Result<(), Failure> {
         return Err(fail("it appeared while skiman was renaming".to_owned()));
     }
     std::fs::rename(from, to).map_err(|e| fail(e.to_string()))?;
-    println!("renamed {} to {}", from.display(), to.display());
+    out!("renamed {} to {}", from.display(), to.display());
     Ok(())
 }

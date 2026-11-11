@@ -1,42 +1,60 @@
 //! skiman: keeps agent skills and global instruction files in one skill repo
 //! and distributes them to every agent tool.
 
-pub mod backup;
-pub mod cli;
-pub mod commands;
-pub mod config;
-pub mod discovery;
-pub mod exit;
-pub mod failure;
-pub mod fetch;
-pub mod fsutil;
-pub mod git;
-pub mod git_hooks;
-pub mod import_guide;
-pub mod import_record;
-pub mod lockfile;
-pub mod managing_skills;
-pub mod manifest;
-pub mod merge;
-pub mod names;
-pub mod ownership;
-pub mod path_safety;
-pub mod paths;
-pub mod project;
-pub mod repo;
-pub mod repo_lock;
-pub mod reported;
-pub mod rules;
-pub mod session_hooks;
-pub mod skill_md;
-pub mod snapshot;
-pub mod source;
-pub mod staged;
-pub mod staging;
-pub mod sync;
-pub mod test_hook;
-pub mod tools;
-pub mod tree;
+/// `println!` that ignores write errors: when stdout is closed early
+/// (`skiman add … | head`), a command still finishes its writes and returns
+/// its own exit status instead of panicking between two of them.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// `eprintln!` that ignores write errors, for the same reason as `out!`.
+macro_rules! err {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
+mod backup;
+mod cli;
+mod commands;
+mod config;
+mod discovery;
+mod exit;
+mod failure;
+mod fetch;
+mod fsutil;
+mod git;
+mod git_hooks;
+mod import_guide;
+mod import_record;
+mod lockfile;
+mod managing_skills;
+mod manifest;
+mod merge;
+mod names;
+mod ownership;
+mod path_safety;
+mod paths;
+mod project;
+mod repo;
+mod repo_lock;
+mod reported;
+mod rules;
+mod session_hooks;
+mod skill_md;
+mod snapshot;
+mod source;
+mod staged;
+mod staging;
+mod sync;
+mod test_hook;
+mod tools;
+mod tree;
 
 pub use exit::Exit;
 

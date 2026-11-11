@@ -23,6 +23,7 @@ use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::reported::Reported;
+use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
 
 /// Who reads sync's output.
@@ -172,7 +173,7 @@ pub fn run_with(
                 Change::Removed => "removed",
                 Change::Mirrored => "mirrored",
             };
-            println!("{verb} {}", entry.display());
+            out!("{verb} {}", entry.display());
         }
     }
     let last = Reported::load(paths);
@@ -180,9 +181,9 @@ pub fn run_with(
     for item in &report.items {
         let id = item.id();
         match output {
-            Output::Normal => eprintln!("warning: {}", item.message()),
+            Output::Normal => err!("warning: {}", item.message()),
             Output::Hook if !last.contains(&item.scope, &id) => {
-                println!("skiman: {}", item.message())
+                out!("skiman: {}", item.message())
             }
             Output::Hook => {}
         }
@@ -196,7 +197,7 @@ pub fn run_with(
             .push(format!("cannot write {}: {e}", paths.state_dir().display()));
     }
     for error in &report.errors {
-        eprintln!("error: {error}");
+        err!("error: {error}");
     }
     let exit = match output {
         Output::Normal => report.exit(),
@@ -241,7 +242,7 @@ pub fn reconcile(
             return report;
         }
     };
-    let ownership = Ownership::new(home, repo, previous_repo);
+    let ownership = Ownership::new(home, repo, manifest, previous_repo);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
     for tool in installed_tools(home, manifest) {
@@ -313,10 +314,21 @@ fn reconcile_instruction_locations(
         if reconciled.contains(&location) {
             continue;
         }
+        let refused = |path: PathBuf| Item {
+            scope: location.display().to_string(),
+            path,
+            kind: ItemKind::RefusedLocation,
+        };
         match std::fs::symlink_metadata(&location) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match fsutil::symlink_atomic(&target, &location) {
+                test_hook::at("sync", &format!("link:{}", location.display()));
+                // `symlink` never replaces: a file that appeared since the
+                // check is refused like one the check found.
+                match std::os::unix::fs::symlink(&target, &location) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        report.items.push(refused(path))
+                    }
                     Err(e) => report
                         .errors
                         .push(format!("cannot link {}: {e}", path.display())),
@@ -333,11 +345,7 @@ fn reconcile_instruction_locations(
                         .errors
                         .push(format!("cannot retarget {}: {e}", path.display())),
                 },
-                None => report.items.push(Item {
-                    scope: location.display().to_string(),
-                    path,
-                    kind: ItemKind::RefusedLocation,
-                }),
+                None => report.items.push(refused(path)),
             },
         }
         reconciled.push(location);
@@ -522,8 +530,14 @@ fn reconcile_tool_dir(
         let path = dir.join(name);
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                match fsutil::symlink_atomic(target, &path) {
+                test_hook::at("sync", &format!("link:{}", path.display()));
+                // `symlink` never replaces: an entry that appeared since the
+                // check is occupied like one the check found.
+                match std::os::unix::fs::symlink(target, &path) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        report.items.push(occupied(name, path))
+                    }
                     Err(e) => report
                         .errors
                         .push(format!("cannot link {}: {e}", path.display())),

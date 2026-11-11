@@ -14,6 +14,7 @@ use crate::backup::Backup;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil;
+use crate::manifest::Manifest;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -43,12 +44,13 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         .expect("clap accepts only known tool ids");
     let entry = tool.tool_dir(paths.home()).join(name);
     check_name(&repo, name, &entry)?;
-    let entry = locate(&paths, &repo, tool, name)?;
+    let manifest = Manifest::load(&repo)?;
+    let entry = locate(&paths, &repo, &manifest, tool, name)?;
     let files = read_copy(&entry, name)?;
     if !yes {
-        println!("skill {name} from {}:", entry.display());
+        out!("skill {name} from {}:", entry.display());
         for file in &files {
-            println!("  {}", file.path);
+            out!("  {}", file.path);
         }
         if !confirm(&format!("Adopt skill {name}? [y/N] "))? {
             return Err(Failure::refused("not adopted; nothing was changed"));
@@ -71,7 +73,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         let _ = std::fs::remove_dir(backup.dir());
         return Err(failure);
     }
-    println!("created {}", copy.display());
+    out!("created {}", copy.display());
     let rel = Path::new(tool.id).join(name);
     let moved = backup.move_in(&entry, &rel).map_err(|e| {
         Failure::operational(format!(
@@ -81,7 +83,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
             backup.dir().join(&rel).display()
         ))
     })?;
-    println!("moved {} to {}", entry.display(), moved.display());
+    out!("moved {} to {}", entry.display(), moved.display());
     drop(staging);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
@@ -105,6 +107,7 @@ fn check_name(repo: &SkillRepo, name: &str, entry: &Path) -> Result<(), Failure>
 fn locate(
     paths: &Paths,
     repo: &SkillRepo,
+    manifest: &Manifest,
     tool: &AgentTool,
     name: &str,
 ) -> Result<PathBuf, Failure> {
@@ -113,7 +116,7 @@ fn locate(
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
-    let ownership = Ownership::new(paths.home(), repo, None);
+    let ownership = Ownership::new(paths.home(), repo, manifest, None);
     match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => Ok(entry),
         Entry::Owned(_) => Err(Failure::refused(format!(
@@ -132,8 +135,9 @@ fn locate(
 }
 
 /// The files of the copy: the entry's resolved content as a local folder
-/// (path safety applies; `.git/`, `.DS_Store` and `Thumbs.db` are left out),
-/// with the `name` line of `SKILL.md` rewritten when it differs.
+/// (path safety applies; `.git/` and the ignored names in
+/// [`crate::tree::IGNORED_NAMES`] are left out), with the `name` line of
+/// `SKILL.md` rewritten when it differs.
 fn read_copy(entry: &Path, name: &str) -> Result<Vec<SnapshotFile>, Failure> {
     let resolved = entry
         .canonicalize()

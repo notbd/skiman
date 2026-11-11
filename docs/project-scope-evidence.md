@@ -39,7 +39,7 @@ level, instead of that level's `AGENTS.md`.
 
 ## Claude Code and a mirror inside the skill repo
 
-Reported by a council delegate (Claude Code 2.1.311, `claude -p` at the top
+Observed with Claude Code 2.1.311 (`claude -p` at the top
 of a git repo holding `projects/w/p/AGENTS.md`, `.claude/rules/r.md` and
 `.claude/skills/<n>` below it): none of the three loaded at session start;
 after the session read one file in `projects/w/p/`, all three were in

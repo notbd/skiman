@@ -186,7 +186,7 @@ mod tests {
     fn skill_dir_patterns_inside_paths() {
         assert!(contains_skill_dir_pattern("p/.claude/skills"));
         assert!(contains_skill_dir_pattern("p/.claude/skills/x/sub"));
-        assert!(!contains_skill_dir_pattern("fivec-core/skills"));
+        assert!(!contains_skill_dir_pattern("acme-core/skills"));
     }
 
     #[test]

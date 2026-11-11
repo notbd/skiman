@@ -596,6 +596,229 @@ fn a_folder_without_tools_keeps_the_repo_tools_and_one_with_tools_uses_its_own()
 }
 
 #[test]
+fn an_upstream_gitignore_in_a_local_source_is_left_out_of_the_snapshot() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.home().join("src/pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    write(source.join(".gitignore"), "*\n");
+    let folder = import_folder(
+        &sandbox,
+        &format!("{TOOLS}\n[skills.pdf.source]\nurl = \"~/src/pdf\"\npath = \"\"\n"),
+    );
+    write(folder.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    let snapshot = sandbox.skill_repo().join("upstream/pdf");
+    assert_eq!(read(snapshot.join("SKILL.md")), skill_md("pdf"));
+    assert!(!snapshot.join(".gitignore").exists());
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+}
+
+/// Registers `~/proj` as project root `proj` and adopts its `AGENTS.md`,
+/// which holds a sample key exempted for `projects/proj/AGENTS.md`. Returns
+/// that `[[secrets.allow]]` entry.
+fn project_with_an_exempted_key(sandbox: &Sandbox) -> String {
+    // Assembled at runtime so the source never holds a secret-like value.
+    let key = ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat();
+    write(
+        sandbox.home().join("proj/AGENTS.md"),
+        format!("# Proj\n\nSample: AWS_ACCESS_KEY_ID={key}\n"),
+    );
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(sandbox.home().join("proj"))
+        .assert()
+        .code(0);
+    let entry = format!(
+        "[[secrets.allow]]\npath = \"projects/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"{}\"\n",
+        file_hash(&key)
+    );
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    std::fs::write(&manifest, format!("{}\n{entry}", read(&manifest))).unwrap();
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    entry
+}
+
+#[test]
+fn import_keeps_the_repos_project_roots_and_their_secret_exemptions() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let entry = project_with_an_exempted_key(&sandbox);
+    let folder = import_folder(&sandbox, TOOLS);
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    assert_eq!(
+        read(sandbox.skill_repo().join("skiman.toml")),
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+}
+
+#[test]
+fn import_adds_the_folders_project_roots_to_the_repos_and_keeps_one_copy_of_each_exemption() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let entry = project_with_an_exempted_key(&sandbox);
+    write(sandbox.home().join("other/AGENTS.md"), "# Other\n");
+    let folder = import_folder(
+        &sandbox,
+        &format!("{TOOLS}\n[projects.other]\npath = \"~/other\"\n\n{entry}"),
+    );
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    assert_eq!(
+        read(sandbox.skill_repo().join("skiman.toml")),
+        format!(
+            "{TOOLS}\n[projects.other]\npath = \"~/other\"\n\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"
+        )
+    );
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+}
+
+/// Imports a folder whose `skiman.toml` is `folder` into a skill repo set up
+/// by [`project_with_an_exempted_key`] whose `skiman.toml` is then `repo`
+/// (given that entry). `check` passes before and after, so the root and its
+/// exemption are kept, and the mirror stays. Returns the `skiman.toml` the
+/// import wrote and the entry.
+fn import_project_config(repo: impl FnOnce(&str) -> String, folder: &str) -> (String, String) {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let entry = project_with_an_exempted_key(&sandbox);
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    std::fs::write(&manifest, repo(&entry)).unwrap();
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+    let folder = import_folder(&sandbox, folder);
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+    assert!(
+        sandbox
+            .skill_repo()
+            .join("projects/proj/AGENTS.md")
+            .is_file()
+    );
+    (read(manifest), entry)
+}
+
+#[test]
+fn import_keeps_the_repos_project_roots_written_as_an_inline_table() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("projects = {{ proj = {{ path = \"~/proj\" }} }}\n\n{TOOLS}\n{entry}"),
+        TOOLS,
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+#[test]
+fn import_keeps_the_repos_project_root_written_as_an_inline_entry_of_projects() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects]\nproj = {{ path = \"~/proj\" }}\n\n{entry}"),
+        TOOLS,
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+#[test]
+fn import_adds_the_repos_project_roots_to_an_empty_inline_projects_table_in_the_folder() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"),
+        &format!("projects = {{}}\n{TOOLS}"),
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+#[test]
+fn a_project_root_the_folder_writes_inline_wins_over_the_repos_root_with_the_same_id() {
+    let projects = "projects = { proj = { path = \"~/proj\", exclude = [\"drafts\"] } }\n";
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"),
+        &format!("{projects}{TOOLS}"),
+    );
+    assert_eq!(manifest, format!("{projects}{TOOLS}\n{entry}"));
+}
+
+#[test]
+fn import_keeps_the_repos_project_exemptions_when_the_folder_has_an_empty_inline_secrets_table() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"),
+        &format!("secrets = {{}}\n{TOOLS}"),
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+/// The takeover judges entries by the `skiman.toml` the import writes, not
+/// the one it replaces.
+#[test]
+fn a_link_into_skill_dirs_that_only_the_import_folder_declares_is_left_in_place() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let target = sandbox.home().join("proj/skills/foo");
+    write(target.join("SKILL.md"), skill_md("foo"));
+    let link = sandbox.tool_dir(Tool::ClaudeCode).join("foo");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let folder = import_folder(
+        &sandbox,
+        &format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\nskill_dirs = [\"skills\"]\n"),
+    );
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+}
+
+#[test]
 fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_command_resumes_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);

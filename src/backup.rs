@@ -193,8 +193,8 @@ fn copy_all(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 /// The tree hash (for a single file, its sha256; for a symlink, its target),
-/// every `.DS_Store` and `Thumbs.db`, and every symlink's path and target are
-/// the same at `to`.
+/// every file with an ignored name ([`IGNORED_NAMES`]), and every symlink's
+/// path and target are the same at `to`.
 fn verify(from: &Path, to: &Path) -> io::Result<()> {
     let mismatch = |what: &str| {
         io::Error::other(format!(

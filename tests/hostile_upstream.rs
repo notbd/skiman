@@ -182,6 +182,148 @@ fn a_tree_entry_whose_name_holds_a_slash_is_refused() {
     assert_refused(&sandbox, "acme/pdf", "docs/hidden.md");
 }
 
+/// Names that would make the file list lie: a terminal escape, a carriage
+/// return, a line feed, two direction controls and a line separator.
+const DECEPTIVE_NAMES: [&str; 6] = [
+    "steal.sh\u{1b}[8m",
+    "run.sh\r  README.md",
+    "a\nb.md",
+    "notes\u{202e}hs.md",
+    "x\u{61c}y.md",
+    "line\u{2028}break.md",
+];
+
+#[test]
+fn control_and_direction_changing_characters_in_a_name_are_refused_for_a_git_and_a_local_source() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    for name in DECEPTIVE_NAMES {
+        crafted_upstream(&sandbox, |up| {
+            let file = blob(&sandbox, up, b"#!/bin/sh\n");
+            vec![("100755", name.as_bytes().to_vec(), file)]
+        });
+        let stderr = assert_refused(&sandbox, "acme/pdf", &format!("{name:?}"));
+        assert!(!stderr.contains(name), "printed unescaped: {stderr}");
+    }
+
+    let dir = local_upstream(&sandbox);
+    for name in DECEPTIVE_NAMES {
+        write(dir.join("docs").join(name), "x\n");
+        let stderr = assert_refused(
+            &sandbox,
+            "~/src/pdf",
+            &format!("{:?}", format!("docs/{name}")),
+        );
+        assert!(!stderr.contains(name), "printed unescaped: {stderr}");
+        std::fs::remove_file(dir.join("docs").join(name)).unwrap();
+    }
+}
+
+/// Names in other scripts: Chinese, Arabic, a combining accent, and the
+/// zero-width non-joiner Persian spelling needs.
+const SCRIPT_NAMES: [&str; 4] = ["说明.md", "مرجع.md", "cafe\u{301}.md", "می\u{200c}خواهم.md"];
+
+#[test]
+fn names_in_other_scripts_and_with_combining_characters_are_installed_for_a_git_and_a_local_source()
+{
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    crafted_upstream(&sandbox, |up| {
+        SCRIPT_NAMES
+            .iter()
+            .map(|name| {
+                (
+                    "100644",
+                    name.as_bytes().to_vec(),
+                    blob(&sandbox, up, b"x\n"),
+                )
+            })
+            .collect()
+    });
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+    for name in SCRIPT_NAMES {
+        assert!(
+            sandbox.skill_repo().join("skills/pdf").join(name).is_file(),
+            "{name}"
+        );
+    }
+
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = local_upstream(&sandbox);
+    for name in SCRIPT_NAMES {
+        write(dir.join(name), "x\n");
+    }
+    sandbox
+        .skiman()
+        .args(["add", "~/src/pdf", "--yes"])
+        .assert()
+        .code(0);
+    for name in SCRIPT_NAMES {
+        assert!(
+            sandbox.skill_repo().join("skills/pdf").join(name).is_file(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_macos_folder_icon_file_is_ignored_rather_than_refused() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = local_upstream(&sandbox);
+    write(dir.join("Icon\r"), "");
+
+    sandbox
+        .skiman()
+        .args(["add", "~/src/pdf", "--yes"])
+        .assert()
+        .code(0);
+
+    let skill = sandbox.skill_repo().join("skills/pdf");
+    assert!(skill.join("SKILL.md").is_file());
+    assert!(!skill.join("Icon\r").exists());
+}
+
+#[test]
+fn a_candidate_folder_with_an_unsafe_name_is_skipped_and_the_others_can_be_installed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/skills");
+    up.write(
+        "evil\nREADME.md/SKILL.md",
+        "---\nname: evil\ndescription: Fakes a line\n---\n",
+    )
+    .write(
+        "good/SKILL.md",
+        "---\nname: good\ndescription: Does good things\n---\n",
+    );
+    up.commit("v1");
+
+    let output = sandbox
+        .skiman()
+        .args(["add", "acme/skills", "--skill", "good", "--yes"])
+        .output()
+        .unwrap();
+
+    // Read raw: snapbox would turn the escape's `\` into `/`.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let (warning, rest) = stderr.split_once('\n').unwrap();
+    assert!(
+        warning.starts_with(
+            r#"warning: https://github.com/acme/skills.git holds an unsafe path "evil\nREADME.md" ("#
+        ) && warning.ends_with("; the skill there is skipped"),
+        "{stderr}"
+    );
+    assert_eq!(rest, "");
+    assert!(sandbox.skill_repo().join("skills/good/SKILL.md").is_file());
+}
+
 #[test]
 fn a_case_collision_is_refused() {
     let sandbox = Sandbox::new();
@@ -269,14 +411,14 @@ fn too_many_files_are_refused_for_a_git_and_a_local_source() {
     let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(p, c)| (p.as_str(), c.clone())).collect();
     plain_upstream(&sandbox, &refs);
     let stderr = assert_refused(&sandbox, "acme/pdf", "https://github.com/acme/pdf.git");
-    assert!(stderr.contains("1001 files"), "{stderr}");
+    assert!(stderr.contains("more than 1000 files"), "{stderr}");
 
     let dir = local_upstream(&sandbox);
     for (path, content) in &files {
         write(dir.join(path), content);
     }
     let stderr = assert_refused(&sandbox, "~/src/pdf", &dir.display().to_string());
-    assert!(stderr.contains("1001 files"), "{stderr}");
+    assert!(stderr.contains("more than 1000 files"), "{stderr}");
 }
 
 #[test]
@@ -417,15 +559,75 @@ fn filter_drivers_hook_templates_and_fsmonitor_from_the_users_git_config_never_r
         .assert()
         .code(0);
 
-    assert!(
-        sandbox
-            .skill_repo()
-            .join("upstream/pdf/reference.md")
-            .is_file()
-    );
+    let repo = sandbox.skill_repo();
+    assert!(repo.join("upstream/pdf/reference.md").is_file());
+    for dir in ["skills/pdf", "upstream/pdf"] {
+        assert!(
+            !repo.join(dir).join(".gitattributes").exists(),
+            "the upstream's .gitattributes would apply to the skill repo"
+        );
+    }
     assert!(
         !markers.exists(),
         "upstream code ran: {:?}",
         std::fs::read_dir(&markers).map(|d| d.map(|e| e.unwrap().file_name()).collect::<Vec<_>>())
     );
+}
+
+/// Files that configure git, as an upstream may carry them.
+const GIT_FILES: [(&str, &str); 3] = [
+    (".gitignore", "*.log\n"),
+    ("docs/.gitattributes", "*.md text\n"),
+    (".gitmodules", "[submodule \"lib\"]\n\tpath = lib\n"),
+];
+
+#[test]
+fn adopted_skills_and_project_skills_keep_their_own_git_files() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let foreign = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
+    write(foreign.join("SKILL.md"), SKILL_MD);
+    for (path, content) in GIT_FILES {
+        write(foreign.join(path), content);
+    }
+    sandbox
+        .skiman()
+        .args(["adopt", "pdf", "--from", "claude-code", "--yes"])
+        .assert()
+        .code(0);
+    for (path, content) in GIT_FILES {
+        let copy = sandbox.skill_repo().join("skills/pdf").join(path);
+        assert_eq!(std::fs::read_to_string(copy).unwrap(), content, "{path}");
+    }
+
+    let project = sandbox.home().join("work");
+    let skill = project.join(".claude/skills/forms");
+    write(
+        skill.join("SKILL.md"),
+        "---\nname: forms\ndescription: Fill forms\n---\n",
+    );
+    for (path, content) in GIT_FILES {
+        write(skill.join(path), content);
+    }
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(&project)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    let mirror = sandbox
+        .skill_repo()
+        .join("projects/work/.claude/skills/forms");
+    for (path, content) in GIT_FILES {
+        assert_eq!(
+            std::fs::read_to_string(mirror.join(path)).unwrap(),
+            content,
+            "{path}"
+        );
+    }
 }

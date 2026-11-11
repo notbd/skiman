@@ -1,10 +1,9 @@
 //! `skiman new <name> -d <description>`: create an own skill, then sync.
 
 use std::collections::BTreeSet;
-use std::io::Write;
 
 use crate::Exit;
-use crate::commands::has_terminal;
+use crate::commands::{ask, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::names;
 use crate::paths::Paths;
@@ -31,7 +30,7 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
     names::check_new_name(name)?;
     let description = match description {
         Some(description) => description,
-        None => prompt("Description: ")?,
+        None => ask("Description: ")?,
     };
     let length = description.chars().count();
     if !(1..=MAX_DESCRIPTION).contains(&length) {
@@ -61,17 +60,8 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
         std::fs::write(&file, &content)
     };
     write().map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
-    println!("created {}", file.display());
+    out!("created {}", file.display());
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
-}
-
-fn prompt(question: &str) -> Result<String, Failure> {
-    let io = |e: std::io::Error| Failure::operational(format!("cannot read the answer: {e}"));
-    eprint!("{question}");
-    std::io::stderr().flush().map_err(io)?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(io)?;
-    Ok(line.trim().to_owned())
 }
 
 /// A `SKILL.md` that passes every rule: frontmatter with `name` and the

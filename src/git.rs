@@ -9,8 +9,9 @@
 //! attributes and environment as well, so no merge driver, filter or hook of
 //! the user's can run and no setting changes the merge result.
 
+use std::io::Write;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use crate::failure::Failure;
 
@@ -183,6 +184,26 @@ pub fn run(mut cmd: Command, what: &str) -> Result<Vec<u8>, Failure> {
     let output = cmd
         .output()
         .map_err(|e| Failure::operational(format!("cannot run git (skiman requires git): {e}")))?;
+    check(&output, what)?;
+    Ok(output.stdout)
+}
+
+/// [`run`] with `input` on git's stdin, written from another thread so a
+/// large input and a large output cannot block each other.
+pub fn run_with_input(mut cmd: Command, input: &[u8], what: &str) -> Result<Vec<u8>, Failure> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| Failure::operational(format!("cannot run git (skiman requires git): {e}")))?;
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let input = input.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let output = child
+        .wait_with_output()
+        .map_err(|e| Failure::operational(format!("{what} failed: {e}")))?;
+    let _ = writer.join();
     check(&output, what)?;
     Ok(output.stdout)
 }

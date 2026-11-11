@@ -236,11 +236,8 @@ pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), Str
 
 /// Realpaths of every usable root's `skill_dirs` folders: links into them
 /// from a tool directory are managed elsewhere, not foreign.
-pub fn configured_skill_dirs(home: &Path, repo: &SkillRepo) -> Vec<PathBuf> {
-    let Ok(manifest) = Manifest::load(repo) else {
-        return Vec::new();
-    };
-    usable(home, repo, &manifest)
+pub fn configured_skill_dirs(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<PathBuf> {
+    usable(home, repo, manifest)
         .iter()
         .flat_map(|root| root.skill_dirs.iter().map(|d| root.dir.join(d)))
         .filter_map(|d| d.canonicalize().ok())
@@ -281,10 +278,7 @@ mod tests {
 
     #[test]
     fn default_ids() {
-        assert_eq!(
-            default_id(Path::new("/x/Five-Continents")),
-            "five-continents"
-        );
+        assert_eq!(default_id(Path::new("/x/Acme-Corp")), "acme-corp");
         assert_eq!(default_id(Path::new("/x/My Projects_2")), "my-projects-2");
         let long = format!("/x/{} tail", "a".repeat(63));
         assert_eq!(default_id(Path::new(&long)), "a".repeat(63));

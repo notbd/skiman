@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::git::query_command;
+use crate::git::{query_command, run_with_input};
 
 /// What the repo at `root` is in the middle of, as the end of a sentence
 /// about it ("is in the middle of a merge", "has a detached HEAD …"), or
@@ -32,11 +32,11 @@ pub fn operation_in_progress(root: &Path) -> Option<&'static str> {
         .map(|(_, phrase)| phrase)
 }
 
-/// The git dir of the work tree at `root`: `.git` itself, or what a `.git`
-/// file points to.
+/// The git dir of the work tree at `root`: `.git` itself (also when it is a
+/// link to a folder), or what a `.git` file points to.
 fn git_dir(root: &Path) -> Option<PathBuf> {
     let dot_git = root.join(".git");
-    let meta = std::fs::symlink_metadata(&dot_git).ok()?;
+    let meta = std::fs::metadata(&dot_git).ok()?;
     if meta.is_dir() {
         return Some(dot_git);
     }
@@ -163,18 +163,25 @@ pub fn ignored(root: &Path, paths: &[String]) -> Vec<(String, String)> {
     if paths.is_empty() {
         return Vec::new();
     }
-    let Ok(output) = query_command(root)
-        .args(["check-ignore", "-v", "--"])
-        .args(paths)
-        .output()
-    else {
+    // `-z`, which git takes only with `--stdin`, keeps a non-ASCII path as it
+    // is (no quotes, no octal escapes): the paths go in NUL-terminated, and
+    // each ignored one comes out as four NUL-terminated fields: source, line,
+    // pattern, path. git exits 1 when no path is ignored, which
+    // `run_with_input` reports as a failure: empty either way.
+    let mut check_ignore = query_command(root);
+    check_ignore.args(["check-ignore", "-v", "-z", "--stdin"]);
+    let input: Vec<u8> = paths.iter().flat_map(|p| p.bytes().chain([0])).collect();
+    let Ok(stdout) = run_with_input(check_ignore, &input, "git check-ignore") else {
         return Vec::new();
     };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (rule, path) = line.split_once('\t')?;
-            Some((path.to_owned(), rule.to_owned()))
+    let text = String::from_utf8_lossy(&stdout);
+    let fields: Vec<&str> = text.split_terminator('\0').collect();
+    fields
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|[source, line, pattern, path]| {
+            ((*path).to_owned(), format!("{source}:{line}:{pattern}"))
         })
         .collect()
 }
@@ -196,4 +203,27 @@ pub fn uncommitted_mirror_changes(root: &Path) -> Option<usize> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).lines().count())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dot_git_link_to_a_folder_still_reports_the_operation_in_progress() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let git_dir = root.join("elsewhere.git");
+        std::fs::create_dir(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git_dir.join("MERGE_HEAD"), "0123456789abcdef\n").unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::os::unix::fs::symlink(&git_dir, repo.join(".git")).unwrap();
+
+        assert_eq!(
+            operation_in_progress(&repo),
+            Some("is in the middle of a merge")
+        );
+    }
 }

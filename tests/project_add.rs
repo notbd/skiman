@@ -93,32 +93,31 @@ fn check_violations(sandbox: &Sandbox) -> String {
 #[test]
 fn add_writes_a_tilde_path_and_an_id_from_the_folder_name() {
     let sandbox = initialised();
-    let dir = folder(sandbox.home().join("Work/Five-Continents"));
+    let dir = folder(sandbox.home().join("Work/Acme-Corp"));
 
     // A relative path is taken from the working directory (HOME here).
     let assert = sandbox
         .skiman()
-        .args(["project", "add", "Work/Five-Continents"])
+        .args(["project", "add", "Work/Acme-Corp"])
         .assert()
         .code(0);
 
     assert!(
-        manifest(&sandbox)
-            .contains("[projects.five-continents]\npath = \"~/Work/Five-Continents\"\n"),
+        manifest(&sandbox).contains("[projects.acme-corp]\npath = \"~/Work/Acme-Corp\"\n"),
         "{}",
         manifest(&sandbox)
     );
     let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
     assert!(
         stdout.contains(&format!(
-            "registered project root five-continents: {}",
+            "registered project root acme-corp: {}",
             dir.display()
         )),
         "{stdout}"
     );
     assert!(
         stdout.contains(&format!(
-            "{}/projects/five-continents/",
+            "{}/projects/acme-corp/",
             sandbox.skill_repo().display()
         )) && stdout.contains("pushed wherever the skill repo is pushed"),
         "add says where the project files will be stored: {stdout}"
@@ -155,7 +154,7 @@ fn add_derives_a_valid_id_from_a_long_folder_name() {
 #[test]
 fn add_with_id_uses_the_given_id() {
     let sandbox = initialised();
-    let dir = folder(sandbox.home().join("Work/Five-Continents"));
+    let dir = folder(sandbox.home().join("Work/Acme-Corp"));
     sandbox
         .skiman()
         .args(["project", "add", "--id", "work"])
@@ -164,10 +163,10 @@ fn add_with_id_uses_the_given_id() {
         .code(0);
     let toml = manifest(&sandbox);
     assert!(
-        toml.contains("[projects.work]\npath = \"~/Work/Five-Continents\"\n"),
+        toml.contains("[projects.work]\npath = \"~/Work/Acme-Corp\"\n"),
         "{toml}"
     );
-    assert!(!toml.contains("five-continents"), "{toml}");
+    assert!(!toml.contains("acme-corp"), "{toml}");
 }
 
 #[test]
@@ -272,11 +271,11 @@ fn add_refuses_a_folder_containing_a_linked_presence_dir() {
 #[test]
 fn add_refuses_a_folder_containing_another_root() {
     let sandbox = initialised();
-    add(&sandbox, folder(sandbox.home().join("Work/fcusa")));
+    add(&sandbox, folder(sandbox.home().join("Work/acme-us")));
     assert_refused(
         &sandbox,
         add_cmd(&sandbox, sandbox.home().join("Work")),
-        "overlaps project root `fcusa`",
+        "overlaps project root `acme-us`",
     );
 }
 
@@ -287,7 +286,7 @@ fn add_refuses_a_folder_inside_another_root() {
     add(&sandbox, &work);
     assert_refused(
         &sandbox,
-        add_cmd(&sandbox, folder(work.join("fcusa"))),
+        add_cmd(&sandbox, folder(work.join("acme-us"))),
         "overlaps project root `work`",
     );
 }
@@ -301,7 +300,7 @@ fn add_compares_other_roots_by_realpath() {
     append_manifest(&sandbox, "\n[projects.aliased]\npath = \"~/w\"\n");
     assert_refused(
         &sandbox,
-        add_cmd(&sandbox, folder(work.join("fcusa"))),
+        add_cmd(&sandbox, folder(work.join("acme-us"))),
         "overlaps project root `aliased`",
     );
 }
@@ -556,7 +555,7 @@ fn check_accepts_valid_project_tables() {
     let sandbox = initialised();
     append_manifest(
         &sandbox,
-        "\n[projects.work]\npath = \"~/Work/Five-Continents\"\nexclude = [\"_archive\", \"a/b\"]\nskill_dirs = [\"fivec-core/skills\", \"shared\", \"shared2\"]\n\n[projects.srv]\npath = \"/srv/team\"\n",
+        "\n[projects.work]\npath = \"~/Work/Acme-Corp\"\nexclude = [\"_archive\", \"a/b\"]\nskill_dirs = [\"acme-core/skills\", \"shared\", \"shared2\"]\n\n[projects.srv]\npath = \"/srv/team\"\n",
     );
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }

@@ -13,7 +13,7 @@ use super::content::{self, Content, Side};
 use super::item::Item;
 use super::pattern::Kind;
 use super::root::Root;
-use super::swap::broken_chain;
+use crate::fsutil::broken_chain;
 use crate::repo::SkillRepo;
 use crate::rules::{self, Scope, Violation};
 use crate::tree::{Overlay, WorkingTree};

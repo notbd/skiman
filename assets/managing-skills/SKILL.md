@@ -74,6 +74,11 @@ Flags for `skiman add`:
 - `--ref <branch|tag|commit>`: follow a branch other than the default branch,
   or pin a tag or a full 40-hex commit.
 
+An upstream's `.gitignore`, `.gitattributes` and `.gitmodules` configure its
+own git, so skiman never installs them (the file list marks them
+`[not installed]`). When a skill needs one, add it by hand in
+`skills/<name>/`; it is a local modification, which updates keep.
+
 ## Edit a skill
 
 Edit the files in `{{SKILL_REPO}}/skills/<name>/`, for own and third-party

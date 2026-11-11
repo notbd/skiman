@@ -4,12 +4,12 @@
 //! the `[skills.<name>.source]` table and the lock entry of each, and syncs.
 //! Never commits.
 
-use std::collections::BTreeSet;
-use std::io::Write;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::commands::{confirm, has_terminal};
+use crate::commands::update::print_not_installed;
+use crate::commands::{ask, confirm, has_terminal};
 use crate::discovery;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -18,6 +18,7 @@ use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry};
 use crate::manifest::{self, SourceRecord};
 use crate::names;
+use crate::path_safety;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
@@ -61,21 +62,27 @@ enum Upstream {
 }
 
 impl Upstream {
-    /// Every file path below `path` (relative to it).
-    fn list(&self, path: &str) -> Result<Vec<String>, Failure> {
+    /// Every file below `path`: its path relative to `path`, and what
+    /// [`Upstream::read_files`] reads it by: its blob id in a git upstream,
+    /// so no name can break `cat-file`'s line protocol, or its path from the
+    /// upstream's root in a local folder.
+    fn list(&self, path: &str) -> Result<Vec<(String, String)>, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
-            Upstream::Local { dir } => snapshot::list_local(&local_path(dir, path)),
+            Upstream::Local { dir } => Ok(snapshot::list_local(&local_path(dir, path))?
+                .into_iter()
+                .map(|file| (file.clone(), discovery::join(path, &file)))
+                .collect()),
         }
     }
 
-    /// The contents of `paths` (relative to the upstream's root). In a local
-    /// folder, anything but a regular file reads as empty: a symlink is not
-    /// followed and a FIFO is not opened.
-    fn read_files(&self, paths: &[String]) -> Result<Vec<Vec<u8>>, Failure> {
+    /// The contents of the files `keys` name, as [`Upstream::list`] gives
+    /// them. In a local folder, anything but a regular file reads as empty: a
+    /// symlink is not followed and a FIFO is not opened.
+    fn read_files(&self, keys: &[&str]) -> Result<Vec<Vec<u8>>, Failure> {
         match self {
-            Upstream::Git { cache, commit, .. } => snapshot::read_files(cache, commit, paths),
-            Upstream::Local { dir } => paths
+            Upstream::Git { cache, .. } => snapshot::cat_blobs(cache.git(), keys.iter().copied()),
+            Upstream::Local { dir } => keys
                 .iter()
                 .map(|p| {
                     let file = local_path(dir, p);
@@ -94,7 +101,7 @@ impl Upstream {
     fn snapshot(&self, path: &str) -> Result<Snapshot, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => Snapshot::read(cache, commit, path),
-            Upstream::Local { dir } => Snapshot::read_local(&local_path(dir, path)),
+            Upstream::Local { dir } => Snapshot::read_local_upstream(&local_path(dir, path)),
         }
     }
 
@@ -188,7 +195,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         candidates.iter().collect()
     } else if args.dry_run {
         print_candidates(&source, &upstream, &candidates, false);
-        println!("dry run: nothing was written");
+        out!("dry run: nothing was written");
         return Ok(Exit::Success);
     } else if !terminal {
         return Err(Failure::usage(format!(
@@ -218,7 +225,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         print_file_list(install, &upstream);
     }
     if args.dry_run {
-        println!("dry run: nothing was written");
+        out!("dry run: nothing was written");
         return Ok(Exit::Success);
     }
     let names: Vec<&str> = installs.iter().map(|i| i.name.as_str()).collect();
@@ -304,9 +311,24 @@ fn fetch(
 
 /// The candidate skills below `source.path`, with their upstream names. A
 /// candidate whose `SKILL.md` cannot be read as frontmatter goes by its
-/// folder name here; it is refused only if it is selected.
+/// folder name here; it is refused only if it is selected. A candidate whose
+/// folder path has a name path safety refuses is skipped with a warning.
 fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Failure> {
-    let folders = discovery::candidates(&upstream.list(&source.path)?);
+    let listing: BTreeMap<String, String> = upstream.list(&source.path)?.into_iter().collect();
+    let files: Vec<String> = listing.keys().cloned().collect();
+    let mut folders = discovery::candidates(&files);
+    folders.retain(|folder| {
+        // `""` is the source folder itself.
+        let safe = folder.is_empty() || path_safety::is_safe_path(folder);
+        if !safe {
+            err!(
+                "warning: {} holds {}; the skill there is skipped",
+                source.url,
+                path_safety::unsafe_path(&discovery::join(&source.path, folder))
+            );
+        }
+        safe
+    });
     if folders.is_empty() {
         let at = if source.path.is_empty() {
             String::new()
@@ -322,9 +344,10 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
         .iter()
         .map(|f| discovery::join(&source.path, f))
         .collect();
-    let skill_mds: Vec<String> = paths
+    // Every candidate was found by its listed `SKILL.md`.
+    let skill_mds: Vec<&str> = folders
         .iter()
-        .map(|p| discovery::join(p, "SKILL.md"))
+        .map(|f| listing[&discovery::join(f, "SKILL.md")].as_str())
         .collect();
     let contents = upstream.read_files(&skill_mds)?;
     Ok(paths
@@ -379,7 +402,7 @@ fn print_candidates(
     } else {
         "; choose with --skill <name> or --all"
     };
-    println!(
+    out!(
         "{} {} holds {} skills{choose}:",
         source.url,
         upstream.version(),
@@ -391,9 +414,10 @@ fn print_candidates(
         } else {
             String::new()
         };
-        println!(
+        out!(
             "  {number}{}  ({})",
-            candidate.upstream_name, candidate.path
+            candidate.upstream_name,
+            candidate.path
         );
     }
 }
@@ -401,7 +425,7 @@ fn print_candidates(
 /// Asks which candidates to install: numbers separated by spaces, or `all`.
 fn pick(candidates: &[Candidate]) -> Result<Vec<&Candidate>, Failure> {
     let answer = ask("Install which skills? Numbers separated by spaces, or `all`: ")?;
-    if answer.trim() == "all" {
+    if answer == "all" {
         return Ok(candidates.iter().collect());
     }
     let mut picked = BTreeSet::new();
@@ -496,7 +520,7 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     } else {
         format!(" ({})", install.source.path)
     };
-    println!(
+    out!(
         "skill {}{upstream_name} from {}{path} {}:",
         install.name,
         install.source.url,
@@ -505,7 +529,7 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     if let Some(r) = upstream.resolved()
         && r.also_tag
     {
-        println!(
+        out!(
             "  note: `{}` is also a tag; the branch is installed",
             r.name
         );
@@ -519,16 +543,14 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
             flags.push("executable");
         }
         if flags.is_empty() {
-            println!("  {}", file.path);
+            out!("  {}", file.path);
         } else {
-            println!("  {}  [{}]", file.path, flags.join(", "));
+            out!("  {}  [{}]", file.path, flags.join(", "));
         }
     }
-    for submodule in &install.snapshot.submodules {
-        println!("  {submodule}  [submodule, not fetched]");
-    }
+    print_not_installed(&install.snapshot);
     if install.renamed_skill_md.is_some() {
-        println!(
+        out!(
             "the `name` line of skills/{0}/SKILL.md is set to `{0}` (a local modification; upstream/{0} keeps the upstream text)",
             install.name
         );
@@ -560,16 +582,6 @@ fn is_script(path: &str, content: &[u8]) -> bool {
         || tree::basename(path)
             .rsplit_once('.')
             .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-}
-
-/// Asks `question` on stderr and reads one line of answer.
-fn ask(question: &str) -> Result<String, Failure> {
-    let io = |e: std::io::Error| Failure::operational(format!("cannot read the answer: {e}"));
-    eprint!("{question}");
-    std::io::stderr().flush().map_err(io)?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(io)?;
-    Ok(line)
 }
 
 /// The new `skiman.toml` and `skiman.lock` texts.
@@ -726,7 +738,7 @@ fn write(
             let rel = format!("{root}/{}", install.name);
             let target = repo.root().join(&rel);
             staging::rename_into_place(&staging.dir().join(&rel), &target)?;
-            println!("created {}", target.display());
+            out!("created {}", target.display());
         }
     }
     let write_file = |path: &Path, text: &str| {
@@ -734,13 +746,13 @@ fn write(
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))
     };
     write_file(&repo.manifest_file(), &records.manifest)?;
-    println!("changed {}", repo.manifest_file().display());
+    out!("changed {}", repo.manifest_file().display());
     write_file(&repo.lockfile(), &records.lock)?;
     let verb = if records.lock_existed {
         "changed"
     } else {
         "created"
     };
-    println!("{verb} {}", repo.lockfile().display());
+    out!("{verb} {}", repo.lockfile().display());
     Ok(())
 }

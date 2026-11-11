@@ -37,7 +37,7 @@ impl Failure {
 
     /// Prints the message to stderr and returns the exit status.
     pub fn report(self) -> Exit {
-        eprintln!("error: {}", self.message);
+        err!("error: {}", self.message);
         self.exit
     }
 }

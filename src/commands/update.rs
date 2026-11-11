@@ -91,7 +91,7 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
             .filter(|name| manifest.source(name).is_some())
             .collect();
         if names.is_empty() {
-            println!("no third-party skills to update");
+            out!("no third-party skills to update");
         }
         names
     } else {
@@ -118,7 +118,7 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
                 exit = exit.combine(result);
             }
             Err(failure) => {
-                eprintln!("error: skill {name}: {}", failure.message);
+                err!("error: skill {name}: {}", failure.message);
                 exit = exit.combine(failure.exit);
             }
         }
@@ -258,7 +258,7 @@ fn update_skill(context: &mut Context, name: &str, git_ref: Option<&str>) -> Res
     let target = fetch(context, name, &current, git_ref)?;
     let result = update_to(context, name, &current, &target)?;
     for note in &target.notes {
-        println!("  note: {note}");
+        out!("  note: {note}");
     }
     Ok(result)
 }
@@ -273,18 +273,18 @@ fn update_to(
 ) -> Result<Exit, Failure> {
     if target.entry.snapshot == current.entry.snapshot {
         if target.entry == current.entry && target.manifest_text.is_none() {
-            println!("skill {name}: up to date at {}", target.version);
-            print_submodules(&target.snapshot);
+            out!("skill {name}: up to date at {}", target.version);
+            print_not_installed(&target.snapshot);
             return Ok(Exit::Success);
         }
         context.staging()?;
         let backup = advance_records(context, name, current, target)?;
-        println!(
+        out!(
             "skill {name}: now at {}; no file of the skill changed",
             target.version
         );
-        print_submodules(&target.snapshot);
-        println!("saved the records of {name} to {}", backup.dir().display());
+        print_not_installed(&target.snapshot);
+        out!("saved the records of {name} to {}", backup.dir().display());
         return Ok(Exit::Success);
     }
 
@@ -322,36 +322,40 @@ fn update_to(
     } else {
         " with conflicts"
     };
-    println!(
+    out!(
         "skill {name}: updated to {}{with_conflicts}; changed files:",
         target.version
     );
     for (change, path) in &changes {
-        println!("  {} {path}", change.verb());
+        out!("  {} {path}", change.verb());
     }
-    print_submodules(&target.snapshot);
+    print_not_installed(&target.snapshot);
     let saved = if old_folders_saved {
         "the old folders and records"
     } else {
         "the records"
     };
-    println!("saved {saved} of {name} to {}", backup.display());
+    out!("saved {saved} of {name} to {}", backup.display());
     if conflicts.is_empty() {
         return Ok(Exit::Success);
     }
-    println!(
+    out!(
         "skill {name}: resolve these conflicts in skills/{name}, then delete the conflict records:"
     );
     for conflict in &conflicts {
-        println!("  {}", describe(conflict));
+        out!("  {}", describe(conflict));
     }
     Ok(Exit::NeedsAttention)
 }
 
-/// The snapshot's submodules, which are not fetched (as `add` lists them).
-fn print_submodules(snapshot: &Snapshot) {
+/// The snapshot's submodules and git files, which are not installed, as
+/// `add` and `update` list them.
+pub(crate) fn print_not_installed(snapshot: &Snapshot) {
     for submodule in &snapshot.submodules {
-        println!("  {submodule}  [submodule, not fetched]");
+        out!("  {submodule}  [submodule, not fetched]");
+    }
+    for path in &snapshot.git_files {
+        out!("  {path}  [not installed]");
     }
 }
 
@@ -481,7 +485,7 @@ fn fetch_local(
             dir.display()
         )));
     }
-    let snapshot = Snapshot::read_local(&dir)?;
+    let snapshot = Snapshot::read_local_upstream(&dir)?;
     let entry = LockEntry {
         commit: None,
         git_ref: None,
@@ -948,7 +952,7 @@ fn swap(
         (&work.old_upstream, format!("repo/upstream/{name}")),
     ] {
         if let Err(e) = backup.move_in(old, Path::new(&rel)) {
-            eprintln!(
+            err!(
                 "warning: skill {name}: cannot move {} to the backup ({e}); it stays in .skiman/tmp/ as a tmp leftover",
                 old.display()
             );

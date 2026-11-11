@@ -293,6 +293,54 @@ error: refusing to write content that breaks the rules:
 }
 
 #[test]
+fn files_inside_a_dot_git_folder_do_not_count_toward_the_file_limit() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+    write(dir.join("SKILL.md"), skill_md("notes"));
+    write(dir.join("reference.md"), "# Reference\n");
+    write(dir.join("scripts/run.sh"), "echo run\n");
+    for i in 0..2000 {
+        write(dir.join(format!(".git/objects/{:02x}/{i}", i % 256)), "x");
+    }
+
+    sandbox
+        .skiman()
+        .args(["adopt", "notes", "--from", "claude-code", "--yes"])
+        .assert()
+        .code(0);
+
+    let copy = sandbox.skill_repo().join("skills/notes");
+    assert!(copy.join("reference.md").is_file());
+    assert!(copy.join("scripts/run.sh").is_file());
+    assert!(!exists(copy.join(".git")));
+}
+
+#[test]
+fn adopt_refuses_a_foreign_skill_over_the_file_limit_and_changes_nothing() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+    write(dir.join("SKILL.md"), skill_md("notes"));
+    for i in 0..1000 {
+        write(dir.join(format!("many/{i}.md")), "x");
+    }
+    let before = world(&sandbox);
+
+    sandbox
+        .skiman()
+        .args(["adopt", "notes", "--from", "claude-code", "--yes"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(str![[r#"
+error: [..]/home/.claude/skills/notes holds more than 1000 files; a skill may hold at most 1000
+
+"#]]);
+    assert_eq!(world(&sandbox), before);
+}
+
+#[test]
 fn adopt_whose_original_cannot_be_moved_exits_4_and_prints_the_manual_finish() {
     let sandbox = Sandbox::new();
     init(&sandbox);

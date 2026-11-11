@@ -8,12 +8,14 @@
 //! [`crate::tree::Overlay`] of a command's output (update's merged folder),
 //! a [`crate::tree::WorkingTree`] of an import or adopt folder.
 //!
-//! Refused: absolute paths, empty, `.`, `..` and `.git` components, an entry
-//! whose parent folder is not listed (a crafted git name holding `/`), names
-//! that are not UTF-8, any symlink, any special file (FIFO, socket, device),
-//! case and Unicode-normalisation (NFC) collisions, Git LFS pointers and the
-//! size limits of a skill. For [`Content::Upstream`] also conflict-record
-//! names and skiman conflict-marker lines (spec Merge semantics).
+//! Refused: absolute paths, empty, `.`, `..` and `.git` components, names
+//! holding control or direction-changing characters (they can make a printed
+//! file list lie), an entry whose parent folder is not listed (a crafted git
+//! name holding `/`), names that are not UTF-8, any symlink, any special file
+//! (FIFO, socket, device), case and Unicode-normalisation (NFC) collisions,
+//! Git LFS pointers and the size limits of a skill. For [`Content::Upstream`]
+//! also conflict-record names and skiman conflict-marker lines (spec Merge
+//! semantics).
 //!
 //! Names and kinds are checked first; file content is read only when they
 //! pass, so an oversized file is never read.
@@ -48,7 +50,7 @@ const LFS_VERSIONS: &[&str] = &[
 /// Refuses (exit 1) the folder `dir` of `tree` when anything in it is unsafe
 /// to write. `origin` names the content in the message (a URL, a folder);
 /// every problem is one line naming its path relative to `dir`. Ignored names
-/// (`.DS_Store`, `Thumbs.db`) are never written and so not checked.
+/// ([`crate::tree::IGNORED_NAMES`]) are never written and so not checked.
 pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Result<(), Failure> {
     let io = |e: std::io::Error| Failure::operational(format!("cannot read {origin}: {e}"));
     let skip = if dir.is_empty() { 0 } else { dir.len() + 1 };
@@ -75,10 +77,8 @@ pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Resu
         let parent_listed = path
             .rsplit_once('/')
             .is_none_or(|(parent, _)| folders.contains(parent));
-        if !parent_listed || !path.split('/').all(is_safe_component) {
-            problems.push(format!(
-                "an unsafe path {path:?} (absolute paths and empty, `.`, `..` and `.git` names are not allowed)"
-            ));
+        if !parent_listed || !is_safe_path(path) {
+            problems.push(unsafe_path(path));
             continue;
         }
         let key = path.nfc().collect::<String>().to_lowercase();
@@ -116,16 +116,17 @@ pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Resu
             }
         }
     }
+    // A local folder stops being walked once it is over a limit, so these
+    // two name the limit rather than a total.
     if files.len() > LIMITS.files {
         problems.push(format!(
-            "{} files; a skill may hold at most {}",
-            files.len(),
+            "more than {0} files; a skill may hold at most {0}",
             LIMITS.files
         ));
     }
     if bytes > LIMITS.skill_bytes {
         problems.push(format!(
-            "{bytes} bytes in total; a skill may hold at most {} MiB",
+            "more than {0} MiB in total; a skill may hold at most {0} MiB",
             LIMITS.skill_bytes / MIB
         ));
     }
@@ -155,11 +156,43 @@ pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Resu
     refuse(origin, &problems)
 }
 
+/// Whether every component of the relative `path` is a name [`check`]
+/// accepts: skill discovery skips a candidate folder whose path is not.
+pub fn is_safe_path(path: &str) -> bool {
+    path.split('/').all(is_safe_component)
+}
+
+/// The problem line for a path that is not [`is_safe_path`], escaped.
+pub fn unsafe_path(path: &str) -> String {
+    format!(
+        "an unsafe path {path:?} (absolute paths, empty, `.`, `..` and `.git` names, and control or direction-changing characters are not allowed)"
+    )
+}
+
 fn is_safe_component(component: &str) -> bool {
     !(component.is_empty()
         || component == "."
         || component == ".."
-        || component.eq_ignore_ascii_case(".git"))
+        || component.eq_ignore_ascii_case(".git")
+        || component.chars().any(is_unsafe_char))
+}
+
+/// Control characters (C0, DEL, C1), the line and paragraph separators, and
+/// the direction marks, embeddings, overrides and isolates: they move or hide
+/// text on a terminal. Other format characters, such as the joiners some
+/// scripts need, are allowed.
+fn is_unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}'
+                | '\u{2029}'
+                | '\u{061C}'
+                | '\u{200E}'
+                | '\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2066}'..='\u{2069}'
+        )
 }
 
 /// The Git LFS spec's pointer: under 1024 bytes, first line a known

@@ -9,6 +9,8 @@ use super::item::Item;
 use super::pattern::Kind;
 use super::root::Root;
 use super::swap::PROJECT_PREFIX;
+use crate::paths::Paths;
+use crate::repo::SkillRepo;
 
 /// Folder names discovery never enters, at any depth.
 const SKIPPED_NAMES: &[&str] = &[".git", "node_modules"];
@@ -37,8 +39,20 @@ pub fn is_excluded(rel: &str, exclude: &[String]) -> bool {
     })
 }
 
-/// Walks `root`. `skip` holds realpaths never entered (the skill repo,
-/// skiman's state directory).
+/// The realpaths no project command works in, though a root may hold them:
+/// the skill repo and skiman's state folder. Discovery never enters them,
+/// and `skiman project` refuses a path given inside them.
+pub fn never_entered(paths: &Paths, repo: &SkillRepo) -> [PathBuf; 2] {
+    [
+        repo.root().to_path_buf(),
+        paths
+            .state_dir()
+            .canonicalize()
+            .unwrap_or(paths.state_dir()),
+    ]
+}
+
+/// Walks `root`. `skip` holds realpaths never entered ([`never_entered`]).
 pub fn discover(root: &Root, skip: &[PathBuf]) -> Discovery {
     let mut found = Discovery::default();
     walk(root, &root.dir, "", skip, &mut found);

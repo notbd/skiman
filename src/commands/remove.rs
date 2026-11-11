@@ -46,8 +46,8 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
     let backup = move_folders(&paths, &found)?;
     records.write()?;
     match backup {
-        Some(dir) => println!("removed skill {name}; its folders are in {}", dir.display()),
-        None => println!("removed the records of skill {name}"),
+        Some(dir) => out!("removed skill {name}; its folders are in {}", dir.display()),
+        None => out!("removed the records of skill {name}"),
     }
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
@@ -95,13 +95,13 @@ impl Found {
 
     fn print(&self, repo: &SkillRepo) {
         for (path, _) in &self.folders {
-            println!("move to a backup: {}", path.display());
+            out!("move to a backup: {}", path.display());
         }
         if self.table {
-            println!("remove from {}: its table", repo.manifest_file().display());
+            out!("remove from {}: its table", repo.manifest_file().display());
         }
         if self.lock_entry {
-            println!("remove from {}: its entry", repo.lockfile().display());
+            out!("remove from {}: its entry", repo.lockfile().display());
         }
     }
 }
@@ -140,7 +140,7 @@ impl Records {
                     path.display()
                 ))
             })?;
-            println!("changed {}", path.display());
+            out!("changed {}", path.display());
         }
         Ok(())
     }
@@ -191,7 +191,7 @@ fn move_folders(paths: &Paths, found: &Found) -> Result<Option<PathBuf>, Failure
                     backup.dir().display()
                 ))
             })?;
-        println!("moved {} to {}", path.display(), dest.display());
+        out!("moved {} to {}", path.display(), dest.display());
     }
     Ok(Some(backup.dir().to_path_buf()))
 }

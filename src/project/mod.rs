@@ -47,11 +47,11 @@ mod tests {
     fn commands_quote_what_the_shell_would_split() {
         let paths = [
             PathBuf::from("/w/a b/AGENTS.md"),
-            PathBuf::from("/w/五洲/AGENTS.md"),
+            PathBuf::from("/w/中文/AGENTS.md"),
         ];
         assert_eq!(
             command("restore", &paths),
-            "skiman project restore '/w/a b/AGENTS.md' /w/五洲/AGENTS.md"
+            "skiman project restore '/w/a b/AGENTS.md' /w/中文/AGENTS.md"
         );
         assert_eq!(
             command("adopt", &[PathBuf::from("/w/it's")]),

@@ -911,3 +911,77 @@ fn a_root_that_holds_the_skill_repo_skips_it() {
         "the skill repo is never discovered"
     );
 }
+
+#[test]
+fn an_exact_path_inside_the_skill_repo_is_refused_and_nothing_is_mirrored_twice() {
+    let sandbox = Sandbox::new();
+    let holder = sandbox.home().join("dev");
+    let skill_repo = holder.join("skills");
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&skill_repo)
+        .assert()
+        .code(0);
+    write(holder.join("proj/AGENTS.md"), "p\n");
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "dev"])
+        .arg(&holder)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    let own_mirror = skill_repo.join("projects/dev/proj/AGENTS.md");
+    let world = || {
+        let mut repo = tree(&skill_repo);
+        repo.retain(|path, _| !path.starts_with(".git"));
+        (repo, tree(state_dir(&sandbox)))
+    };
+    let before = world();
+
+    for verb in ["adopt", "restore"] {
+        let (stdout, stderr) = run(
+            sandbox
+                .skiman()
+                .args(["project", verb, "--yes"])
+                .arg(&own_mirror),
+            1,
+        );
+
+        assert_eq!(stdout, "");
+        assert_eq!(
+            stderr,
+            format!(
+                "error: {} is inside {}, which project commands never read or write; name the item's path in its project\n",
+                own_mirror.display(),
+                skill_repo.display()
+            )
+        );
+        assert_eq!(world(), before);
+    }
+    assert!(!exists(skill_repo.join("projects/dev/skills")));
+}
+
+#[test]
+fn the_warning_about_a_mirror_git_ignores_shows_a_non_ascii_path_as_it_is() {
+    let sandbox = setup("");
+    let gitignore = sandbox.skill_repo().join(".gitignore");
+    let mut rules = read(&gitignore);
+    rules.push_str("projects/work/美国/\n");
+    std::fs::write(&gitignore, &rules).unwrap();
+    write(root(&sandbox).join("美国/AGENTS.md"), "# 美国\n");
+
+    let (_, stderr) = run(adopt(&sandbox, ["--yes"]), 0);
+
+    assert!(
+        stderr.contains(&format!(
+            "warning: git ignores projects/work/美国/AGENTS.md in the skill repo (.gitignore:{}:projects/work/美国/), so it never gets history; change that rule\n",
+            rules.lines().count()
+        )),
+        "{stderr}"
+    );
+}

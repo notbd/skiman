@@ -85,7 +85,7 @@ added the session-start hook entry to [..]/home/.claude/settings.json
 
 "#]])
         .stderr_eq(str![[r#"
-warning: session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4); skiman adds no entry to [..]/home/.codex/hooks.json
+warning: Codex runs only the hooks you have trusted with `/hooks`; after you change a skill or the shared body, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json
 
 "#]]);
 
@@ -102,7 +102,7 @@ warning: session refresh for Codex is not available until it is confirmed (Phase
     init(&sandbox, "claude-code,codex")
         .code(0)
         .stdout_eq("")
-        .stderr_eq("warning: session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4); skiman adds no entry to [..]/home/.codex/hooks.json\n");
+        .stderr_eq("warning: Codex runs only the hooks you have trusted with `/hooks`; after you change a skill or the shared body, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json\n");
     assert_eq!(
         std::fs::read(claude_settings(&sandbox)).unwrap(),
         settings_bytes
@@ -395,7 +395,7 @@ fn with_a_terminal_init_previews_the_exact_entry_and_declining_changes_nothing()
     );
     assert!(
         shown.contains(&format!(
-            "warning: session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4); skiman adds no entry to {}\n",
+            "warning: Codex runs only the hooks you have trusted with `/hooks`; after you change a skill or the shared body, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to {}\n",
             codex_hooks(&sandbox).display()
         )),
         "{shown}"
@@ -431,4 +431,63 @@ fn with_a_terminal_accepting_the_preview_writes_the_entry() {
     let (code, rest) = pty.wait();
     assert_eq!(code, 0, "{rest}");
     assert!(!rest.contains("[y/N]"), "{rest}");
+}
+
+#[test]
+fn init_through_a_renamed_link_keeps_one_entry_and_none_through_it_removes_it() {
+    let sandbox = Sandbox::new();
+    write_json(&claude_settings(&sandbox), &user_settings());
+    let bin = sandbox.root().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let sk = bin.join("sk");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_skiman"), &sk).unwrap();
+    let init_as_sk = |session_hooks: &str| {
+        sandbox
+            .command(&sk)
+            .args(["init", "--session-hooks", session_hooks])
+            .arg(sandbox.skill_repo())
+            .assert()
+            .code(0);
+    };
+
+    for _ in 0..3 {
+        init_as_sk("claude-code");
+    }
+
+    let mut settings = user_settings();
+    settings["hooks"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "matcher": "startup|resume",
+            "hooks": [{
+                "type": "command",
+                "command": format!("{} sync --hook", sk.display()),
+                "timeout": 10
+            }]
+        }));
+    assert_eq!(read_json(&claude_settings(&sandbox)), settings);
+
+    init_as_sk("none");
+    assert_eq!(read_json(&claude_settings(&sandbox)), user_settings());
+}
+
+#[test]
+fn with_a_terminal_a_change_made_to_the_settings_while_the_question_is_open_is_kept() {
+    let sandbox = Sandbox::new();
+    write_json(&claude_settings(&sandbox), &user_settings());
+
+    let mut pty = init_pty(&sandbox);
+    pty.expect("Add this entry? [y/N] ");
+    let mut changed = user_settings();
+    changed["theme"] = json!("dark");
+    write_json(&claude_settings(&sandbox), &changed);
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 0, "{rest}");
+    assert_eq!(
+        read_json(&claude_settings(&sandbox)),
+        with_skiman_group(changed)
+    );
 }

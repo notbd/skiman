@@ -29,10 +29,11 @@ use std::io;
 
 use crate::Exit;
 use crate::failure::Failure;
+use crate::project::item::MIRROR_DIR;
 use crate::tree::{Kind, Tree};
 
 pub use config::{LOCKFILE, MANIFEST};
-pub use secrets::{AllowEntry, DETECTORS, DETECTORS_VERSION, Detector};
+pub use secrets::AllowEntry;
 pub use skill::{CONFLICT_MARKERS, CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR};
 
 /// Rule ids, printed with every violation.
@@ -242,7 +243,19 @@ impl Scope {
     }
 }
 
-/// Names of the entries directly in `dir`, except `.DS_Store` and `Thumbs.db`.
+/// Every top-level path of the skill repo that the rules read: everything
+/// [`Scope::all`] names lives below one of them.
+pub const TOP_LEVEL_PATHS: [&str; 6] = [
+    MANIFEST,
+    LOCKFILE,
+    "skills",
+    "upstream",
+    "instructions",
+    MIRROR_DIR,
+];
+
+/// Names of the entries directly in `dir`, except ignored names
+/// ([`crate::tree::IGNORED_NAMES`]).
 fn folder_names(tree: &dyn Tree, dir: &str) -> io::Result<BTreeSet<String>> {
     Ok(tree
         .children(dir)?
@@ -449,11 +462,11 @@ pub fn validate_write_except(
     }
     for violation in check_all(tree).map_err(io)? {
         if !excused(&violation) {
-            eprintln!("warning: {violation}");
+            err!("warning: {violation}");
         }
     }
     for warning in warnings_all(tree).map_err(io)? {
-        eprintln!("warning: {warning}");
+        err!("warning: {warning}");
     }
     Ok(())
 }

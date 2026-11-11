@@ -187,6 +187,6 @@ pub fn line_to_add(name: &str, binary: &Path) -> String {
     }
 }
 
-fn shell_quote(text: &str) -> String {
+pub(crate) fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }

@@ -13,7 +13,7 @@ use crate::Exit;
 use crate::commands::has_terminal;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
-use crate::fsutil::absolute_lexical;
+use crate::fsutil::{absolute_lexical, rewrite_atomic, write_atomic};
 use crate::git_hooks;
 use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
@@ -30,8 +30,11 @@ pub fn run(path: &Path, session_hooks: Option<&str>) -> Exit {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
-    /// Missing or empty: create the layout.
+    /// Missing or empty: `git init`, then create the layout.
     Create,
+    /// Holds only `.git` (a fresh `git init` or a clone of an empty repo):
+    /// create the layout in that repo.
+    CreateInRepo,
     /// Holds `skiman.toml`: reuse it as it is.
     Reuse,
 }
@@ -53,12 +56,12 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     }
     let repo = SkillRepo::at(&path)?;
     let lock = RepoLock::wait(&repo)?;
-    if target == Target::Create {
+    if target == Target::Reuse {
+        ignore_machine_state(&repo)?;
+    } else {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
-        println!("created skill repo {}", path.display());
-    } else {
-        ignore_machine_state(&repo)?;
+        out!("created skill repo {}", path.display());
     }
     let previous_repo = UserConfig::load(&paths)
         .ok()
@@ -104,18 +107,18 @@ fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
         .iter()
         .any(|item| item.kind == ItemKind::RefusedLocation);
     if (foreign || refused) && !has_skills(repo) {
-        eprintln!(
+        err!(
             "hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
         );
         return;
     }
     if foreign {
-        eprintln!(
+        err!(
             "hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`"
         );
     }
     if refused {
-        eprintln!(
+        err!(
             "hint: move each instruction file listed above away by hand (copy what you want to keep into {} first), then run `skiman sync`",
             repo.shared_body().display()
         );
@@ -127,29 +130,29 @@ fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
 fn install_git_hooks(repo: &SkillRepo, binary: &Path) -> Result<(), Failure> {
     let installed = git_hooks::install(repo.root(), binary)?;
     if installed.not_a_git_repo {
-        eprintln!(
+        err!(
             "warning: {} is not in a git repository, so skiman installed no git hooks; run `git init` there, then `skiman init` again",
             repo.root().display()
         );
     }
     for path in &installed.written {
-        println!("installed git hook {}", path.display());
+        out!("installed git hook {}", path.display());
     }
     for path in &installed.foreign {
         let name = path.file_name().expect("hook has a name").to_string_lossy();
-        eprintln!(
+        err!(
             "warning: {} is not skiman's git hook, so skiman left it unchanged; add this line to it:\n  {}",
             path.display(),
             git_hooks::line_to_add(&name, binary)
         );
     }
     if let Some(dir) = &installed.hooks_path_elsewhere {
-        eprintln!(
+        err!(
             "warning: core.hooksPath points to {}, so skiman installed no git hooks; add these lines to the hooks there:",
             dir.display()
         );
         for name in git_hooks::hook_names() {
-            eprintln!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
+            err!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
         }
     }
     Ok(())
@@ -181,14 +184,17 @@ fn inspect(path: &Path) -> Result<Target, Failure> {
         }
     };
     if std::fs::symlink_metadata(path.join("skiman.toml")).is_ok() {
-        Ok(Target::Reuse)
-    } else if entries.next().is_none() {
-        Ok(Target::Create)
-    } else {
-        Err(Failure::refused(format!(
-            "{} is not empty and holds no skiman.toml; choose an empty or missing folder, or an existing skill repo",
+        return Ok(Target::Reuse);
+    }
+    match entries.next() {
+        None => Ok(Target::Create),
+        Some(Ok(entry)) if entry.file_name() == ".git" && entries.next().is_none() => {
+            Ok(Target::CreateInRepo)
+        }
+        Some(_) => Err(Failure::refused(format!(
+            "{} is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing skill repo",
             path.display()
-        )))
+        ))),
     }
 }
 
@@ -227,18 +233,32 @@ fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
 
 /// A reused skill repo gets the `.gitignore` entry for `.skiman/` when no
 /// line ignores it yet (the file is created when missing); nothing else of
-/// it changes.
+/// it changes. The new content replaces the file in one step and keeps its
+/// mode. When `.gitignore` is a link (a repo managed with dotfiles), the
+/// file it points to is replaced and the link stays; a link to a missing
+/// file is refused.
 fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
     let path = repo.root().join(".gitignore");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(Failure::operational(format!(
-                "cannot read {}: {e}",
-                path.display()
-            )));
+    let cannot_read =
+        |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", path.display()));
+    let (real, text, permissions) = match std::fs::symlink_metadata(&path) {
+        Ok(_) => {
+            let real = path.canonicalize().map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Failure::refused(format!(
+                        "{} is a link to a missing file; create that file or remove the link, then run `skiman init` again",
+                        path.display()
+                    ))
+                } else {
+                    cannot_read(e)
+                }
+            })?;
+            let text = std::fs::read_to_string(&real).map_err(cannot_read)?;
+            let permissions = std::fs::metadata(&real).map_err(cannot_read)?.permissions();
+            (real, text, Some(permissions))
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (path.clone(), String::new(), None),
+        Err(e) => return Err(cannot_read(e)),
     };
     if text.lines().any(|line| {
         matches!(
@@ -253,9 +273,13 @@ fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
     } else {
         "\n"
     };
-    std::fs::write(&path, format!("{text}{separator}.skiman/\n"))
-        .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
-    println!("added .skiman/ to {}", path.display());
+    let new = format!("{text}{separator}.skiman/\n");
+    match permissions {
+        Some(permissions) => rewrite_atomic(&real, new.as_bytes(), permissions),
+        None => write_atomic(&real, new.as_bytes()),
+    }
+    .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
+    out!("added .skiman/ to {}", path.display());
     Ok(())
 }
 

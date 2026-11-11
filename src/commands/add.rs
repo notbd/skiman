@@ -4,7 +4,7 @@
 //! the `[skills.<name>.source]` table and the lock entry of each, and syncs.
 //! Never commits.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
@@ -17,6 +17,7 @@ use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry};
 use crate::manifest::{self, SourceRecord};
 use crate::names;
+use crate::path_safety;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
@@ -60,21 +61,29 @@ enum Upstream {
 }
 
 impl Upstream {
-    /// Every file path below `path` (relative to it).
-    fn list(&self, path: &str) -> Result<Vec<String>, Failure> {
+    /// Every file below `path`: its path relative to `path`, and what
+    /// [`Upstream::read_files`] reads it by (its blob id in a git upstream,
+    /// its path from the upstream's root in a local folder).
+    fn list(&self, path: &str) -> Result<Vec<(String, String)>, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
-            Upstream::Local { dir } => snapshot::list_local(&local_path(dir, path)),
+            Upstream::Local { dir } => Ok(snapshot::list_local(&local_path(dir, path))?
+                .into_iter()
+                .map(|file| {
+                    let from_root = discovery::join(path, &file);
+                    (file, from_root)
+                })
+                .collect()),
         }
     }
 
-    /// The contents of `paths` (relative to the upstream's root). In a local
-    /// folder, anything but a regular file reads as empty: a symlink is not
-    /// followed and a FIFO is not opened.
-    fn read_files(&self, paths: &[String]) -> Result<Vec<Vec<u8>>, Failure> {
+    /// The contents of the files `keys` name, as [`Upstream::list`] gives
+    /// them. In a local folder, anything but a regular file reads as empty: a
+    /// symlink is not followed and a FIFO is not opened.
+    fn read_files(&self, keys: &[&str]) -> Result<Vec<Vec<u8>>, Failure> {
         match self {
-            Upstream::Git { cache, commit, .. } => snapshot::read_files(cache, commit, paths),
-            Upstream::Local { dir } => paths
+            Upstream::Git { cache, .. } => snapshot::read_blobs(cache, keys),
+            Upstream::Local { dir } => keys
                 .iter()
                 .map(|p| {
                     let file = local_path(dir, p);
@@ -303,9 +312,24 @@ fn fetch(
 
 /// The candidate skills below `source.path`, with their upstream names. A
 /// candidate whose `SKILL.md` cannot be read as frontmatter goes by its
-/// folder name here; it is refused only if it is selected.
+/// folder name here; it is refused only if it is selected. A candidate whose
+/// folder path has a name path safety refuses is skipped with a warning.
 fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Failure> {
-    let folders = discovery::candidates(&upstream.list(&source.path)?);
+    let listing: BTreeMap<String, String> = upstream.list(&source.path)?.into_iter().collect();
+    let files: Vec<String> = listing.keys().cloned().collect();
+    let mut folders = discovery::candidates(&files);
+    folders.retain(|folder| {
+        // `""` is the source folder itself.
+        let safe = folder.is_empty() || path_safety::is_safe_path(folder);
+        if !safe {
+            err!(
+                "warning: {} holds {}; the skill there is skipped",
+                source.url,
+                path_safety::unsafe_path(&discovery::join(&source.path, folder))
+            );
+        }
+        safe
+    });
     if folders.is_empty() {
         let at = if source.path.is_empty() {
             String::new()
@@ -321,9 +345,10 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
         .iter()
         .map(|f| discovery::join(&source.path, f))
         .collect();
-    let skill_mds: Vec<String> = paths
+    // Every candidate was found by its listed `SKILL.md`.
+    let skill_mds: Vec<&str> = folders
         .iter()
-        .map(|p| discovery::join(p, "SKILL.md"))
+        .map(|f| listing[&discovery::join(f, "SKILL.md")].as_str())
         .collect();
     let contents = upstream.read_files(&skill_mds)?;
     Ok(paths

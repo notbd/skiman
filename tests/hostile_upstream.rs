@@ -290,6 +290,41 @@ fn a_macos_folder_icon_file_is_ignored_rather_than_refused() {
 }
 
 #[test]
+fn a_candidate_folder_with_an_unsafe_name_is_skipped_and_the_others_can_be_installed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/skills");
+    up.write(
+        "evil\nREADME.md/SKILL.md",
+        "---\nname: evil\ndescription: Fakes a line\n---\n",
+    )
+    .write(
+        "good/SKILL.md",
+        "---\nname: good\ndescription: Does good things\n---\n",
+    );
+    up.commit("v1");
+
+    let output = sandbox
+        .skiman()
+        .args(["add", "acme/skills", "--skill", "good", "--yes"])
+        .output()
+        .unwrap();
+
+    // Read raw: snapbox would turn the escape's `\` into `/`.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    let (warning, rest) = stderr.split_once('\n').unwrap();
+    assert!(
+        warning.starts_with(
+            r#"warning: https://github.com/acme/skills.git holds an unsafe path "evil\nREADME.md" ("#
+        ) && warning.ends_with("; the skill there is skipped"),
+        "{stderr}"
+    );
+    assert_eq!(rest, "");
+    assert!(sandbox.skill_repo().join("skills/good/SKILL.md").is_file());
+}
+
+#[test]
 fn a_case_collision_is_refused() {
     let sandbox = Sandbox::new();
     init(&sandbox);

@@ -77,10 +77,8 @@ pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Resu
         let parent_listed = path
             .rsplit_once('/')
             .is_none_or(|(parent, _)| folders.contains(parent));
-        if !parent_listed || !path.split('/').all(is_safe_component) {
-            problems.push(format!(
-                "an unsafe path {path:?} (absolute paths, empty, `.`, `..` and `.git` names, and control or direction-changing characters are not allowed)"
-            ));
+        if !parent_listed || !is_safe_path(path) {
+            problems.push(unsafe_path(path));
             continue;
         }
         let key = path.nfc().collect::<String>().to_lowercase();
@@ -155,6 +153,19 @@ pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Resu
         }
     }
     refuse(origin, &problems)
+}
+
+/// Whether every component of the relative `path` is a name [`check`]
+/// accepts: skill discovery skips a candidate folder whose path is not.
+pub fn is_safe_path(path: &str) -> bool {
+    path.split('/').all(is_safe_component)
+}
+
+/// The problem line for a path that is not [`is_safe_path`], escaped.
+pub fn unsafe_path(path: &str) -> String {
+    format!(
+        "an unsafe path {path:?} (absolute paths, empty, `.`, `..` and `.git` names, and control or direction-changing characters are not allowed)"
+    )
 }
 
 fn is_safe_component(component: &str) -> bool {

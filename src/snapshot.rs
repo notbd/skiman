@@ -203,11 +203,11 @@ impl Tree for Listing<'_> {
     }
 }
 
-/// The paths of every file and symlink below folder `path` of `commit`
-/// (relative to it, names that are not UTF-8 converted lossily), without
-/// reading any content: what skill discovery looks at. A `path` that is not a
-/// folder at `commit` is refused (exit 1).
-pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<String>, Failure> {
+/// The path and blob id of every file and symlink below folder `path` of
+/// `commit` (relative to it, names that are not UTF-8 converted lossily),
+/// without reading any content: what skill discovery looks at. A `path` that
+/// is not a folder at `commit` is refused (exit 1).
+pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, String)>, Failure> {
     let treeish = treeish(commit, path);
     let mut kind = cache.git();
     kind.args(["cat-file", "-t", &treeish]);
@@ -228,15 +228,21 @@ pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<String>, Fail
         .filter(|record| !record.starts_with(b"160000 "))
         .filter_map(|record| {
             let tab = record.iter().position(|b| *b == b'\t')?;
-            Some(String::from_utf8_lossy(&record[tab + 1..]).into_owned())
+            // `<mode> SP <type> SP <oid> TAB <path>`
+            let oid = std::str::from_utf8(&record[..tab])
+                .ok()?
+                .split(' ')
+                .nth(2)?;
+            let path = String::from_utf8_lossy(&record[tab + 1..]).into_owned();
+            Some((path, oid.to_owned()))
         })
         .collect())
 }
 
-/// The contents of the files at `paths` (relative to the root of `commit`).
-pub fn read_files(cache: &Cache, commit: &str, paths: &[String]) -> Result<Vec<Vec<u8>>, Failure> {
-    let names: Vec<String> = paths.iter().map(|p| format!("{commit}:{p}")).collect();
-    cat_blobs(cache.git(), names.iter().map(String::as_str))
+/// The contents of the blobs `oids`, in order. A path never goes into the
+/// request, so no name can break its line protocol.
+pub fn read_blobs(cache: &Cache, oids: &[&str]) -> Result<Vec<Vec<u8>>, Failure> {
+    cat_blobs(cache.git(), oids.iter().copied())
 }
 
 /// The paths of every non-folder entry below the local folder `dir`,

@@ -1,7 +1,7 @@
 //! Moves to a backup on another filesystem (spec Data formats, Machine
 //! state): copy, verify, then delete the original. The state folder sits on
 //! a small disk image (`hdiutil`, no sudo); where one cannot be attached, the
-//! test prints why and skips.
+//! test prints why and skips, except in CI (`CI` is set), where it fails.
 
 mod support;
 
@@ -93,6 +93,10 @@ fn a_file_and_a_symlink_move_to_a_backup_on_another_filesystem() {
     let sandbox = Sandbox::new();
     let disk = match DiskImage::attach(&sandbox) {
         Ok(disk) => disk,
+        Err(why) if std::env::var_os("CI").is_some() => {
+            panic!("no second filesystem in CI: {why}")
+        }
+        #[allow(clippy::print_stdout)]
         Err(why) => {
             println!("skipped: no second filesystem: {why}");
             return;

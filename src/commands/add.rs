@@ -5,11 +5,10 @@
 //! Never commits.
 
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::commands::{confirm, has_terminal};
+use crate::commands::{ask, confirm, has_terminal};
 use crate::discovery;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -188,7 +187,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         candidates.iter().collect()
     } else if args.dry_run {
         print_candidates(&source, &upstream, &candidates, false);
-        println!("dry run: nothing was written");
+        out!("dry run: nothing was written");
         return Ok(Exit::Success);
     } else if !terminal {
         return Err(Failure::usage(format!(
@@ -218,7 +217,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         print_file_list(install, &upstream);
     }
     if args.dry_run {
-        println!("dry run: nothing was written");
+        out!("dry run: nothing was written");
         return Ok(Exit::Success);
     }
     let names: Vec<&str> = installs.iter().map(|i| i.name.as_str()).collect();
@@ -379,7 +378,7 @@ fn print_candidates(
     } else {
         "; choose with --skill <name> or --all"
     };
-    println!(
+    out!(
         "{} {} holds {} skills{choose}:",
         source.url,
         upstream.version(),
@@ -391,9 +390,10 @@ fn print_candidates(
         } else {
             String::new()
         };
-        println!(
+        out!(
             "  {number}{}  ({})",
-            candidate.upstream_name, candidate.path
+            candidate.upstream_name,
+            candidate.path
         );
     }
 }
@@ -496,7 +496,7 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     } else {
         format!(" ({})", install.source.path)
     };
-    println!(
+    out!(
         "skill {}{upstream_name} from {}{path} {}:",
         install.name,
         install.source.url,
@@ -505,7 +505,7 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     if let Some(r) = upstream.resolved()
         && r.also_tag
     {
-        println!(
+        out!(
             "  note: `{}` is also a tag; the branch is installed",
             r.name
         );
@@ -519,16 +519,16 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
             flags.push("executable");
         }
         if flags.is_empty() {
-            println!("  {}", file.path);
+            out!("  {}", file.path);
         } else {
-            println!("  {}  [{}]", file.path, flags.join(", "));
+            out!("  {}  [{}]", file.path, flags.join(", "));
         }
     }
     for submodule in &install.snapshot.submodules {
-        println!("  {submodule}  [submodule, not fetched]");
+        out!("  {submodule}  [submodule, not fetched]");
     }
     if install.renamed_skill_md.is_some() {
-        println!(
+        out!(
             "the `name` line of skills/{0}/SKILL.md is set to `{0}` (a local modification; upstream/{0} keeps the upstream text)",
             install.name
         );
@@ -560,16 +560,6 @@ fn is_script(path: &str, content: &[u8]) -> bool {
         || tree::basename(path)
             .rsplit_once('.')
             .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
-}
-
-/// Asks `question` on stderr and reads one line of answer.
-fn ask(question: &str) -> Result<String, Failure> {
-    let io = |e: std::io::Error| Failure::operational(format!("cannot read the answer: {e}"));
-    eprint!("{question}");
-    std::io::stderr().flush().map_err(io)?;
-    let mut line = String::new();
-    std::io::stdin().read_line(&mut line).map_err(io)?;
-    Ok(line)
 }
 
 /// The new `skiman.toml` and `skiman.lock` texts.
@@ -726,7 +716,7 @@ fn write(
             let rel = format!("{root}/{}", install.name);
             let target = repo.root().join(&rel);
             staging::rename_into_place(&staging.dir().join(&rel), &target)?;
-            println!("created {}", target.display());
+            out!("created {}", target.display());
         }
     }
     let write_file = |path: &Path, text: &str| {
@@ -734,13 +724,13 @@ fn write(
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))
     };
     write_file(&repo.manifest_file(), &records.manifest)?;
-    println!("changed {}", repo.manifest_file().display());
+    out!("changed {}", repo.manifest_file().display());
     write_file(&repo.lockfile(), &records.lock)?;
     let verb = if records.lock_existed {
         "changed"
     } else {
         "created"
     };
-    println!("{verb} {}", repo.lockfile().display());
+    out!("{verb} {}", repo.lockfile().display());
     Ok(())
 }

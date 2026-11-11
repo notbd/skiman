@@ -92,8 +92,8 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     )?;
     write_atomic(&file, text.as_bytes())
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
-    println!("registered project root {id}: {}", dir.display());
-    println!(
+    out!("registered project root {id}: {}", dir.display());
+    out!(
         "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the skill repo is pushed; see what it holds with: {} --dry-run",
         repo.root().display(),
         command("adopt", std::slice::from_ref(&dir))
@@ -129,9 +129,10 @@ impl Context {
         for resolved in root::resolve(paths.home(), &repo, &manifest) {
             match resolved {
                 Ok(root) => roots.push(root),
-                Err(problem) => eprintln!(
+                Err(problem) => err!(
                     "warning: project root `{}` is skipped: {}",
-                    problem.id, problem.message
+                    problem.id,
+                    problem.message
                 ),
             }
         }
@@ -190,7 +191,7 @@ impl Context {
             ))
         })?;
         if let Some(dir) = backups.created() {
-            println!("replaced versions are in {}", dir.display());
+            out!("replaced versions are in {}", dir.display());
         }
         Ok(own.combine(self.sync()))
     }
@@ -403,13 +404,13 @@ impl<'a> Plan<'a> {
     /// there is nothing to write or it is a dry run.
     fn confirm(&self, verb: Verb, yes: bool, dry_run: bool) -> Result<bool, Failure> {
         for p in &self.writes {
-            println!("{} {}", p.what, p.item.disk(p.root).display());
+            out!("{} {}", p.what, p.item.disk(p.root).display());
         }
         for line in &self.skips {
-            eprintln!("{line}");
+            err!("{line}");
         }
         if self.writes.is_empty() {
-            println!("nothing to {}", verb.word());
+            out!("nothing to {}", verb.word());
             return Ok(false);
         }
         if dry_run {
@@ -441,10 +442,10 @@ fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) ->
             previous,
             late_write,
         }) => {
-            println!("{} {}", verb.done(), disk.display());
+            out!("{} {}", verb.done(), disk.display());
             match previous {
                 Previous::At(backup) if late_write => {
-                    eprintln!(
+                    err!(
                         "warning: a write landed while {} was replaced; that version is in {}",
                         disk.display(),
                         backup.display()
@@ -452,7 +453,7 @@ fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) ->
                     (true, Exit::NeedsAttention)
                 }
                 Previous::LeftInSwap { at, error } => {
-                    eprintln!(
+                    err!(
                         "error: the previous version of {} cannot be moved to the backup ({error}); it is kept at {}",
                         disk.display(),
                         at.display()
@@ -463,15 +464,15 @@ fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) ->
             }
         }
         Ok(Outcome::Conflict(why)) => {
-            eprintln!("warning: {why}; nothing was replaced, run the command again");
+            err!("warning: {why}; nothing was replaced, run the command again");
             (false, Exit::NeedsAttention)
         }
         Ok(Outcome::Failed(why)) => {
-            eprintln!("error: {why}");
+            err!("error: {why}");
             (false, Exit::OperationalError)
         }
         Err(e) => {
-            eprintln!("error: cannot write {}: {e}", disk.display());
+            err!("error: cannot write {}: {e}", disk.display());
             (false, Exit::OperationalError)
         }
     }
@@ -506,10 +507,10 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             None => {
                 let found = discover(target.root, &skip_dirs);
                 for e in found.errors {
-                    eprintln!("warning: {e}");
+                    err!("warning: {e}");
                 }
                 for leftover in found.swap_leftovers {
-                    eprintln!(
+                    err!(
                         "warning: {} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
                         leftover.display()
                     );
@@ -595,7 +596,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         },
         &mut backups,
     ) {
-        println!("{message}");
+        out!("{message}");
     }
     let mut exit = own;
     let mut written = Vec::new();
@@ -625,7 +626,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         }
     }
     for (path, rule) in ignored(ctx.repo.root(), &written) {
-        eprintln!(
+        err!(
             "warning: git ignores {path} in the skill repo ({rule}), so it never gets history; change that rule"
         );
     }
@@ -730,7 +731,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
         let anchor = p.item.anchor_dir(p.root);
         if recovered.insert(anchor.clone()) {
             for message in swap::recover(Place::Project { anchor: &anchor }, &mut backups) {
-                println!("{message}");
+                out!("{message}");
             }
         }
         let content = p
@@ -846,25 +847,25 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
     let mut anything = false;
     for ejection in &plan {
         for item in &ejection.items {
-            println!(
+            out!(
                 "stop managing {} (its mirror goes to a backup; the project file stays)",
                 item.mirror_rel()
             );
         }
         for rel in &ejection.forgotten {
-            println!(
+            out!(
                 "forget {rel} in project root {} (its mirror is already gone)",
                 ejection.root.id
             );
         }
         if ejection.rel.is_empty() {
-            println!("remove [projects.{}] from skiman.toml", ejection.root.id);
+            out!("remove [projects.{}] from skiman.toml", ejection.root.id);
         }
         anything |=
             !ejection.items.is_empty() || !ejection.forgotten.is_empty() || ejection.rel.is_empty();
     }
     if !anything {
-        println!("nothing to eject");
+        out!("nothing to eject");
         return Ok(Exit::Success);
     }
     if !yes && !confirm("Eject? [y/N] ")? {
@@ -880,7 +881,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             let mirror = ctx.repo.root().join(item.mirror_rel());
             // Never move or clean up through a link: it could lead out of the repo.
             if let Some(why) = swap::broken_chain(ctx.repo.root(), &mirror) {
-                eprintln!(
+                err!(
                     "error: {} is not ejected: its mirror cannot be used: {why}",
                     item.mirror_rel()
                 );
@@ -898,12 +899,12 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             };
             match backup.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {
-                    println!("moved {} to {}", item.mirror_rel(), to.display());
+                    out!("moved {} to {}", item.mirror_rel(), to.display());
                     synced.remove_under(&ejection.root.id, &item.rel);
                     remove_empty_parents(&mirror, &projects_dir);
                 }
                 Err(e) => {
-                    eprintln!("error: cannot move {} to the backup: {e}", mirror.display());
+                    err!("error: cannot move {} to the backup: {e}", mirror.display());
                     exit = exit.combine(Exit::OperationalError);
                     all_out = false;
                 }
@@ -915,7 +916,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         for rel in &ejection.forgotten {
             let mirror = projects_dir.join(&ejection.root.id).join(rel);
             if let Some(why) = swap::broken_chain(ctx.repo.root(), &mirror) {
-                eprintln!(
+                err!(
                     "error: {MIRROR_DIR}/{}/{rel} is not forgotten: its mirror cannot be used: {why}",
                     ejection.root.id
                 );
@@ -930,7 +931,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             // The same no-link rule as for every mirror item.
             match swap::broken_chain(ctx.repo.root(), &projects_dir.join(id).join("_")) {
                 Some(why) => {
-                    eprintln!("error: [projects.{id}] is not removed: {why}");
+                    err!("error: [projects.{id}] is not removed: {why}");
                     exit = exit.combine(Exit::NeedsAttention);
                 }
                 None => unregister.push(id.clone()),
@@ -950,11 +951,11 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         write_atomic(&file, text.as_bytes())
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
         for id in &unregister {
-            println!("removed [projects.{id}] from skiman.toml");
+            out!("removed [projects.{id}] from skiman.toml");
         }
     }
     if let Some(backup) = &backup {
-        println!("the mirrors are in {}", backup.dir().display());
+        out!("the mirrors are in {}", backup.dir().display());
     }
     ctx.finish(&mut synced, &ctx.backups(), exit)
 }

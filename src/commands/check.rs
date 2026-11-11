@@ -21,7 +21,7 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
     if staged && let Some(other) = hook_of_another_repo(&repo) {
-        println!(
+        out!(
             "skiman: {} is not the skill repo ({}), so its skiman pre-commit hook checks nothing",
             other.display(),
             repo.root().display()
@@ -41,16 +41,16 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
     let report = rules::check_repo(tree.as_ref()).map_err(io)?;
     for violation in &report.violations {
-        println!("{violation}");
+        out!("{violation}");
     }
     for unused in &report.unused_allows {
-        println!("{unused}");
+        out!("{unused}");
     }
     if let Some(hint) = rules::allow_hint(&report.violations) {
-        println!("\n{hint}");
+        out!("\n{hint}");
     }
     for warning in rules::warnings_all(tree.as_ref()).map_err(io)? {
-        eprintln!("warning: {warning}");
+        err!("warning: {warning}");
     }
     Ok(rules::exit_of(&report.violations))
 }

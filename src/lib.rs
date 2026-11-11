@@ -1,6 +1,24 @@
 //! skiman: keeps agent skills and global instruction files in one skill repo
 //! and distributes them to every agent tool.
 
+/// `println!` that ignores write errors: when stdout is closed early
+/// (`skiman add … | head`), a command still finishes its writes and returns
+/// its own exit status instead of panicking between two of them.
+macro_rules! out {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stdout(), $($arg)*);
+    }};
+}
+
+/// `eprintln!` that ignores write errors, for the same reason as `out!`.
+macro_rules! err {
+    ($($arg:tt)*) => {{
+        use std::io::Write as _;
+        let _ = writeln!(std::io::stderr(), $($arg)*);
+    }};
+}
+
 mod backup;
 mod cli;
 mod commands;

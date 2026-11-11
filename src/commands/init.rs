@@ -56,7 +56,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     if target == Target::Create {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
-        println!("created skill repo {}", path.display());
+        out!("created skill repo {}", path.display());
     } else {
         ignore_machine_state(&repo)?;
     }
@@ -104,18 +104,18 @@ fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
         .iter()
         .any(|item| item.kind == ItemKind::RefusedLocation);
     if (foreign || refused) && !has_skills(repo) {
-        eprintln!(
+        err!(
             "hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
         );
         return;
     }
     if foreign {
-        eprintln!(
+        err!(
             "hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`"
         );
     }
     if refused {
-        eprintln!(
+        err!(
             "hint: move each instruction file listed above away by hand (copy what you want to keep into {} first), then run `skiman sync`",
             repo.shared_body().display()
         );
@@ -127,29 +127,29 @@ fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
 fn install_git_hooks(repo: &SkillRepo, binary: &Path) -> Result<(), Failure> {
     let installed = git_hooks::install(repo.root(), binary)?;
     if installed.not_a_git_repo {
-        eprintln!(
+        err!(
             "warning: {} is not in a git repository, so skiman installed no git hooks; run `git init` there, then `skiman init` again",
             repo.root().display()
         );
     }
     for path in &installed.written {
-        println!("installed git hook {}", path.display());
+        out!("installed git hook {}", path.display());
     }
     for path in &installed.foreign {
         let name = path.file_name().expect("hook has a name").to_string_lossy();
-        eprintln!(
+        err!(
             "warning: {} is not skiman's git hook, so skiman left it unchanged; add this line to it:\n  {}",
             path.display(),
             git_hooks::line_to_add(&name, binary)
         );
     }
     if let Some(dir) = &installed.hooks_path_elsewhere {
-        eprintln!(
+        err!(
             "warning: core.hooksPath points to {}, so skiman installed no git hooks; add these lines to the hooks there:",
             dir.display()
         );
         for name in git_hooks::hook_names() {
-            eprintln!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
+            err!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
         }
     }
     Ok(())
@@ -255,7 +255,7 @@ fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
     };
     std::fs::write(&path, format!("{text}{separator}.skiman/\n"))
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
-    println!("added .skiman/ to {}", path.display());
+    out!("added .skiman/ to {}", path.display());
     Ok(())
 }
 

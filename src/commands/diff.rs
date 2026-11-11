@@ -5,6 +5,7 @@
 //! spawns no `git`.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 
 use similar::TextDiff;
 
@@ -54,7 +55,7 @@ fn diff(name: &str) -> Result<Exit, Failure> {
         if let (Some(o), Some(n)) = (old_file, new_file)
             && o.executable != n.executable
         {
-            println!(
+            out!(
                 "mode of {new_path} changed from {} to {}",
                 o.mode(),
                 n.mode()
@@ -82,13 +83,16 @@ fn diff(name: &str) -> Result<Exit, Failure> {
             "/dev/null".to_owned()
         };
         match (text(&old_content), text(&new_content)) {
-            (Some(o), Some(n)) => print!(
-                "{}",
-                TextDiff::from_lines(o, n)
-                    .unified_diff()
-                    .header(&old_label, &new_label)
-            ),
-            _ => println!("Binary files {old_label} and {new_label} differ"),
+            (Some(o), Some(n)) => {
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    TextDiff::from_lines(o, n)
+                        .unified_diff()
+                        .header(&old_label, &new_label)
+                );
+            }
+            _ => out!("Binary files {old_label} and {new_label} differ"),
         }
     }
     Ok(Exit::Success)

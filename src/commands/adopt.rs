@@ -48,9 +48,9 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     let entry = locate(&paths, &repo, &manifest, tool, name)?;
     let files = read_copy(&entry, name)?;
     if !yes {
-        println!("skill {name} from {}:", entry.display());
+        out!("skill {name} from {}:", entry.display());
         for file in &files {
-            println!("  {}", file.path);
+            out!("  {}", file.path);
         }
         if !confirm(&format!("Adopt skill {name}? [y/N] "))? {
             return Err(Failure::refused("not adopted; nothing was changed"));
@@ -73,7 +73,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         let _ = std::fs::remove_dir(backup.dir());
         return Err(failure);
     }
-    println!("created {}", copy.display());
+    out!("created {}", copy.display());
     let rel = Path::new(tool.id).join(name);
     let moved = backup.move_in(&entry, &rel).map_err(|e| {
         Failure::operational(format!(
@@ -83,7 +83,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
             backup.dir().join(&rel).display()
         ))
     })?;
-    println!("moved {} to {}", entry.display(), moved.display());
+    out!("moved {} to {}", entry.display(), moved.display());
     drop(staging);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }

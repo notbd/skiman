@@ -23,3 +23,7 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 sha2 = "0.11.1"
 snapbox = { version = "1.2", features = ["cmd"] }
 tempfile = "3.27"
+
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"

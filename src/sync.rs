@@ -172,7 +172,7 @@ pub fn run_with(
                 Change::Removed => "removed",
                 Change::Mirrored => "mirrored",
             };
-            println!("{verb} {}", entry.display());
+            out!("{verb} {}", entry.display());
         }
     }
     let last = Reported::load(paths);
@@ -180,9 +180,9 @@ pub fn run_with(
     for item in &report.items {
         let id = item.id();
         match output {
-            Output::Normal => eprintln!("warning: {}", item.message()),
+            Output::Normal => err!("warning: {}", item.message()),
             Output::Hook if !last.contains(&item.scope, &id) => {
-                println!("skiman: {}", item.message())
+                out!("skiman: {}", item.message())
             }
             Output::Hook => {}
         }
@@ -196,7 +196,7 @@ pub fn run_with(
             .push(format!("cannot write {}: {e}", paths.state_dir().display()));
     }
     for error in &report.errors {
-        eprintln!("error: {error}");
+        err!("error: {error}");
     }
     let exit = match output {
         Output::Normal => report.exit(),

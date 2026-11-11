@@ -43,11 +43,11 @@ fn doctor() -> Result<Exit, Failure> {
     let root = repo.root().display().to_string();
     let io = |e| Failure::operational(format!("cannot read {root}: {e}"));
 
-    println!("skill repo: {root}");
+    out!("skill repo: {root}");
     if config.binary.exists() {
-        println!("recorded binary: {}", config.binary.display());
+        out!("recorded binary: {}", config.binary.display());
     } else {
-        println!(
+        out!(
             "recorded binary: {} no longer exists; the git hooks and session-start hooks call it, so run `skiman init {root}` again with the skiman you use now",
             config.binary.display()
         );
@@ -68,28 +68,28 @@ fn doctor() -> Result<Exit, Failure> {
 fn report_git() {
     let (major, minor) = git::MIN_VERSION;
     match git::installed_version() {
-        Err(_) => println!("git: not found; skiman requires git {major}.{minor} or newer"),
+        Err(_) => out!("git: not found; skiman requires git {major}.{minor} or newer"),
         Ok((version, found)) if found < git::MIN_VERSION => {
-            println!("git: version {version} is too old; skiman requires {major}.{minor} or newer")
+            out!("git: version {version} is too old; skiman requires {major}.{minor} or newer")
         }
-        Ok((version, _)) => println!("git: version {version}"),
+        Ok((version, _)) => out!("git: version {version}"),
     }
 }
 
 fn report_git_hooks(repo: &SkillRepo, binary: &Path) {
     let root = repo.root().display();
     match git_hooks::status(repo.root(), binary) {
-        Err(failure) => println!("git hooks: unknown: {}", failure.message),
+        Err(failure) => out!("git hooks: unknown: {}", failure.message),
         Ok(git_hooks::Status::NotAGitRepo) => {
-            println!("git hooks: {root} is not in a git repo, so it has no git hooks")
+            out!("git hooks: {root} is not in a git repo, so it has no git hooks")
         }
-        Ok(git_hooks::Status::HooksPathElsewhere(dir)) => println!(
+        Ok(git_hooks::Status::HooksPathElsewhere(dir)) => out!(
             "git hooks: core.hooksPath points to {}, so skiman's git hooks do not run; add skiman's lines to the hooks there by hand",
             dir.display()
         ),
         Ok(git_hooks::Status::Hooks { dir, hooks }) => {
             if hooks.iter().all(|(_, hook)| *hook == Hook::Installed) {
-                println!("git hooks: installed in {}", dir.display());
+                out!("git hooks: installed in {}", dir.display());
             }
             for (path, hook) in hooks {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -97,16 +97,16 @@ fn report_git_hooks(repo: &SkillRepo, binary: &Path) {
                 match hook {
                     Hook::Installed => {}
                     Hook::Missing => {
-                        println!("git hook {path}: missing; run `skiman init {root}` again")
+                        out!("git hook {path}: missing; run `skiman init {root}` again")
                     }
-                    Hook::Outdated => println!(
+                    Hook::Outdated => out!(
                         "git hook {path}: skiman's, but not what `skiman init` writes now; run `skiman init {root}` again"
                     ),
-                    Hook::Foreign => println!(
+                    Hook::Foreign => out!(
                         "git hook {path}: not skiman's; add this line to it by hand: {}",
                         git_hooks::line_to_add(&name, binary)
                     ),
-                    Hook::Unreadable(e) => println!("git hook {path}: cannot read it: {e}"),
+                    Hook::Unreadable(e) => out!("git hook {path}: cannot read it: {e}"),
                 }
             }
         }
@@ -120,17 +120,17 @@ fn report_session_hooks(home: &Path, installed: &[&AgentTool], root: &str, binar
         let path = path.display();
         let prefix = format!("session-start hook for {id}:");
         match (status, tool.session_hook_unavailable) {
-            (session_hooks::Status::Installed, _) => println!("{prefix} installed in {path}"),
+            (session_hooks::Status::Installed, _) => out!("{prefix} installed in {path}"),
             (session_hooks::Status::Missing, Some(reason)) => {
-                println!("{prefix} not added: {reason}")
+                out!("{prefix} not added: {reason}")
             }
-            (session_hooks::Status::Missing, None) => println!(
+            (session_hooks::Status::Missing, None) => out!(
                 "{prefix} not installed in {path}; add it with `skiman init {root} --session-hooks {id}`"
             ),
-            (session_hooks::Status::Different, _) => println!(
+            (session_hooks::Status::Different, _) => out!(
                 "{prefix} {path} holds a skiman hook that differs from what `skiman init` writes now; rewrite it with `skiman init {root} --session-hooks {id}`"
             ),
-            (session_hooks::Status::Unusable(reason), _) => println!("{prefix} unknown: {reason}"),
+            (session_hooks::Status::Unusable(reason), _) => out!("{prefix} unknown: {reason}"),
         }
     }
 }
@@ -143,11 +143,11 @@ fn report_tools(home: &Path, manifest: &Manifest, installed: &[&AgentTool]) {
     let mut locations: Vec<(PathBuf, &str)> = Vec::new();
     for tool in TOOLS {
         if !enabled.iter().any(|id| id == tool.id) {
-            println!("{}: not enabled", tool.id);
+            out!("{}: not enabled", tool.id);
             continue;
         }
         if !installed.contains(&tool) {
-            println!(
+            out!(
                 "{}: enabled, but {} does not exist, so skiman skips it",
                 tool.id,
                 tool.presence_dir(home).display()
@@ -164,7 +164,7 @@ fn report_tools(home: &Path, manifest: &Manifest, installed: &[&AgentTool]) {
             Err(e) => format!(" (cannot resolve its folder: {e})"),
             Ok(location) => alias_note(&mut locations, location, tool.id, "location"),
         };
-        println!(
+        out!(
             "{}: installed; tool directory {}{dir_note}; instruction file {}{file_note}",
             tool.id,
             dir.display(),
@@ -230,19 +230,19 @@ fn report_entries(
                 (Entry::Owned(_), _) => {}
                 (_, Some(n)) => {
                     let kind = ItemKind::Occupied { name: n.to_owned() };
-                    println!("{}", item(path, kind).message());
+                    out!("{}", item(path, kind).message());
                 }
                 (Entry::Foreign, None) => {
                     let kind = ItemKind::Foreign {
                         name: name.to_string_lossy().into_owned(),
                         tool: tool.id,
                     };
-                    println!("{}", item(path, kind).message());
+                    out!("{}", item(path, kind).message());
                 }
                 (Entry::ManagedElsewhere, None) => {
                     managed.insert(path);
                 }
-                (Entry::NotASkill, None) if meta.is_symlink() && !path.exists() => println!(
+                (Entry::NotASkill, None) if meta.is_symlink() && !path.exists() => out!(
                     "dangling link {} -> {}: skiman does not own it and leaves it alone; delete it if nothing needs it",
                     path.display(),
                     std::fs::read_link(&path)?.display()
@@ -255,7 +255,7 @@ fn report_entries(
             let path = dir.join(name);
             if std::fs::symlink_metadata(&path).is_ok() {
                 let kind = ItemKind::Occupied { name: name.clone() };
-                println!("{}", item(path, kind).message());
+                out!("{}", item(path, kind).message());
             }
         }
         reconciled.push(real);
@@ -271,7 +271,7 @@ fn report_entries(
         }
     }
     for path in managed {
-        println!(
+        out!(
             "managed elsewhere: {}; skiman never touches it",
             path.display()
         );
@@ -302,7 +302,7 @@ fn report_instruction_locations(
     for tool in installed {
         let path = home.join(tool.instruction_file);
         match sync::instruction_location(&path) {
-            Err(e) => println!(
+            Err(e) => out!(
                 "instruction file {}: cannot resolve its folder: {e}",
                 path.display()
             ),
@@ -316,7 +316,7 @@ fn report_instruction_locations(
                         path: path.clone(),
                         kind: ItemKind::RefusedLocation,
                     };
-                    println!("{}", item.message());
+                    out!("{}", item.message());
                 }
                 seen.push(location);
             }
@@ -324,7 +324,7 @@ fn report_instruction_locations(
         for rel in tool.instruction_overrides {
             let file = home.join(rel);
             if std::fs::symlink_metadata(&file).is_ok() {
-                println!(
+                out!(
                     "{} exists, so {} loads it instead of {}; move it away to use the shared body",
                     file.display(),
                     tool.id,
@@ -341,7 +341,7 @@ fn report_skill_repo(repo: &SkillRepo) -> std::io::Result<()> {
     for name in repo.skill_folder_names()? {
         if tree.kind(&format!("skills/{name}"))? == Some(Kind::Dir) {
             for violation in rules::unresolved_conflicts(&tree, &name)? {
-                println!("{violation}");
+                out!("{violation}");
             }
         }
     }
@@ -351,7 +351,7 @@ fn report_skill_repo(repo: &SkillRepo) -> std::io::Result<()> {
     };
     for violation in rules::check(&tree, &scope)? {
         if violation.rule == rule::LEFTOVER_RECORD {
-            println!("{violation}");
+            out!("{violation}");
         }
     }
     Ok(())
@@ -374,12 +374,12 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
     let in_use = RepoLock::is_held(repo)?;
     for path in leftovers {
         if in_use {
-            println!(
+            out!(
                 "{} is in use: another skiman command holds the repo lock",
                 path.display()
             );
         } else {
-            println!(
+            out!(
                 "tmp leftover {}; the next write command moves it to a backup",
                 path.display()
             );
@@ -399,7 +399,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
         return;
     }
     if let Some(operation) = pgit::operation_in_progress(repo.root()) {
-        println!("project items: not synced while the skill repo {operation}");
+        out!("project items: not synced while the skill repo {operation}");
     }
     let synced = Synced::load(paths);
     let tree = WorkingTree::new(repo.root());
@@ -415,14 +415,14 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
         let root = match resolved {
             Ok(root) => root,
             Err(problem) => {
-                println!("project root {}: skipped: {}", problem.id, problem.message);
+                out!("project root {}: skipped: {}", problem.id, problem.message);
                 continue;
             }
         };
         let items = match item::managed(&tree, &root, &synced) {
             Ok(items) => items,
             Err(e) => {
-                println!("project root {}: cannot read its mirror: {e}", root.id);
+                out!("project root {}: cannot read its mirror: {e}", root.id);
                 continue;
             }
         };
@@ -430,7 +430,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
             .map(|m| m.items)
             .unwrap_or_default();
         mirror_paths.extend(in_mirror.iter().map(item::Item::mirror_rel));
-        println!(
+        out!(
             "project root {}: {} ({} item(s) in the mirror)",
             root.id,
             root.dir.display(),
@@ -440,7 +440,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
         for item in &items {
             let recorded = synced.get(&root, &item.rel).map(|(_, h)| h.clone());
             let Ok(evaluated) = classify(repo, &root, item, recorded.as_deref()) else {
-                println!("{}: cannot read it", item.disk(&root).display());
+                out!("{}: cannot read it", item.disk(&root).display());
                 continue;
             };
             if evaluated.disk_hash.is_some() {
@@ -450,18 +450,18 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
                 State::InSync | State::ProjectChanged => {}
                 State::NotHere => not_here += 1,
                 State::Forgotten | State::Nothing | State::New => {}
-                _ => println!("{}", evaluated.message(&root, item)),
+                _ => out!("{}", evaluated.message(&root, item)),
             }
         }
         if not_here > 0 {
-            println!(
+            out!(
                 "project root {}: {not_here} item(s) are only in the mirror: their project folders are not on this machine",
                 root.id
             );
         }
         for (disk, tracking) in pgit::tracking_repos(&on_disk) {
             if let Ok(Some(top)) = tracking {
-                println!(
+                out!(
                     "{}: now tracked by the git repo {}; leave it to that repo with: {}",
                     disk.display(),
                     top.display(),
@@ -481,14 +481,14 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
             .filter(|t| matches!(t, Ok(None)))
             .count();
         if new > 0 {
-            println!(
+            out!(
                 "project root {}: {new} project item(s) are not adopted yet; see them with: {} --dry-run",
                 root.id,
                 command("adopt", std::slice::from_ref(&root.dir))
             );
         }
         for leftover in found.swap_leftovers {
-            println!(
+            out!(
                 "{} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
                 leftover.display()
             );
@@ -498,18 +498,18 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
     for leftover in swap::leftovers(swap::Place::Mirror {
         swap_dir: &swap_dir,
     }) {
-        println!(
+        out!(
             "{} is left from an interrupted mirror write ({}); the next mirror write moves what it holds to a backup",
             leftover.dir.display(),
             leftover.target.as_deref().unwrap_or("unknown item")
         );
     }
     for (path, rule) in pgit::ignored(repo.root(), &mirror_paths) {
-        println!("{path}: ignored by git ({rule}), so it never gets history; change that rule");
+        out!("{path}: ignored by git ({rule}), so it never gets history; change that rule");
     }
     match pgit::uncommitted_mirror_changes(repo.root()) {
         Some(0) | None => {}
-        Some(n) => println!(
+        Some(n) => out!(
             "{}: {n} uncommitted change(s); skiman never commits, so commit them to keep their history",
             item::MIRROR_DIR
         ),

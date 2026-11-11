@@ -449,11 +449,11 @@ pub fn validate_write_except(
     }
     for violation in check_all(tree).map_err(io)? {
         if !excused(&violation) {
-            eprintln!("warning: {violation}");
+            err!("warning: {violation}");
         }
     }
     for warning in warnings_all(tree).map_err(io)? {
-        eprintln!("warning: {warning}");
+        err!("warning: {warning}");
     }
     Ok(())
 }

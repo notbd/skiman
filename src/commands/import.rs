@@ -150,7 +150,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let mut record = record(&repo, &candidate, &plan, &repo_files, &backup);
     write_area(&paths, &candidate)?;
     record.save(&paths)?;
-    println!(
+    out!(
         "saved the import record to {}",
         import_record::file(&paths).display()
     );
@@ -197,7 +197,7 @@ fn resume(paths: &Paths, repo: &SkillRepo, folder: &Path) -> Result<Exit, Failur
     let todo = repo_todo(repo, &record)?;
     refuse_changed_locations(&record)?;
     let pieces = load_pieces(paths, &record, &content, todo)?;
-    println!(
+    out!(
         "resuming the import of {} that stopped part-way (record {})",
         folder.display(),
         import_record::file(paths).display()
@@ -236,12 +236,12 @@ fn complete(
     record.save(paths)?;
     let _ = std::fs::remove_dir_all(import_record::area(paths));
     let exit = sync::run(paths, repo, lock, Output::Normal);
-    println!(
+    out!(
         "imported {}; the originals are in {}",
         record.folder.display(),
         backup.dir().display()
     );
-    println!(
+    out!(
         "the import folder {} can be deleted",
         record.folder.display()
     );
@@ -1036,14 +1036,14 @@ fn print_preview(
     repo_files: &RepoFilesNow,
     paths: &Paths,
 ) {
-    println!(
+    out!(
         "import {} into the skill repo {}:",
         candidate.content.root.display(),
         repo.root().display()
     );
     for (name, skill) in &candidate.content.skills {
         match candidate.thirds.iter().find(|t| &t.name == name) {
-            None => println!("  add skill {name} (own)"),
+            None => out!("  add skill {name} (own)"),
             Some(third) => {
                 let changes = local_modifications(skill, &third.snapshot);
                 let summary = if changes.is_empty() {
@@ -1051,15 +1051,15 @@ fn print_preview(
                 } else {
                     "; files that differ from upstream:"
                 };
-                println!(
+                out!(
                     "  add skill {name} (third-party, from {}){summary}",
                     third.describe()
                 );
                 for change in changes {
-                    println!("      {change}");
+                    out!("      {change}");
                 }
                 for submodule in &third.snapshot.submodules {
-                    println!("      {submodule}  [submodule, not fetched]");
+                    out!("      {submodule}  [submodule, not fetched]");
                 }
             }
         }
@@ -1070,7 +1070,7 @@ fn print_preview(
         (repo.lockfile(), &repo_files.lock),
     ] {
         if now.is_some() {
-            println!(
+            out!(
                 "  move {} to the backup, then write the import's",
                 file.display()
             );
@@ -1078,31 +1078,31 @@ fn print_preview(
     }
     for location in &plan.moves {
         match &location.link {
-            Some(target) if target == &repo.shared_body() => println!(
+            Some(target) if target == &repo.shared_body() => out!(
                 "  move {} to the backup, then link it to the shared body",
                 location.path.display()
             ),
-            Some(_) => println!(
+            Some(_) => out!(
                 "  move {} to the backup, then link it to skill {}",
                 location.path.display(),
                 tree::basename(&location.backup.to_string_lossy())
             ),
-            None => println!(
+            None => out!(
                 "  move {} to the backup (no imported skill of that name is distributed)",
                 location.path.display()
             ),
         }
     }
     for path in &plan.skipped {
-        println!("  skip {}: managed elsewhere", path.display());
+        out!("  skip {}: managed elsewhere", path.display());
     }
     for (path, name) in &plan.staying {
-        println!(
+        out!(
             "  keep {}: it is not a skill, so skill {name} is not linked there",
             path.display()
         );
     }
-    println!(
+    out!(
         "originals go to a new folder in {}",
         paths.state_dir().join("backups").display()
     );
@@ -1439,11 +1439,11 @@ fn put_in_place(
                     target.display()
                 ))
             })?;
-        println!("moved {} to {}", target.display(), dest.display());
+        out!("moved {} to {}", target.display(), dest.display());
     }
     test_hook::at("import", &format!("rename:{rel}"));
     staging::rename_into_place(&stage.join(rel), &target)?;
-    println!("created {}", target.display());
+    out!("created {}", target.display());
     Ok(())
 }
 
@@ -1468,7 +1468,7 @@ fn take_over(paths: &Paths, record: &mut ImportRecord, backup: &Backup) -> Resul
                             location.path.display()
                         ))
                     })?;
-                println!("moved {} to {}", location.path.display(), dest.display());
+                out!("moved {} to {}", location.path.display(), dest.display());
             }
             test_hook::at("import", &format!("moved:{point}"));
             record.locations[i].state = LocationState::BackedUp;
@@ -1479,7 +1479,7 @@ fn take_over(paths: &Paths, record: &mut ImportRecord, backup: &Backup) -> Resul
             fsutil::symlink_atomic(target, &location.path).map_err(|e| {
                 Failure::operational(format!("cannot link {}: {e}", location.path.display()))
             })?;
-            println!("linked {}", location.path.display());
+            out!("linked {}", location.path.display());
         }
         record.locations[i].state = LocationState::TakenOver;
         record.save(paths)?;

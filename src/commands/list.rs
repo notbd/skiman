@@ -136,6 +136,6 @@ fn print_columns(rows: &[[String; 7]]) {
                 line.push_str(&format!("{cell:<width$}  ", width = widths[i]));
             }
         }
-        println!("{line}");
+        out!("{line}");
     }
 }

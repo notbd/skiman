@@ -200,7 +200,7 @@ fn settings_path(home: &Path, tool: &AgentTool) -> PathBuf {
 }
 
 fn warn_unavailable(home: &Path, tool: &AgentTool, reason: &str) {
-    eprintln!(
+    err!(
         "warning: {reason}; skiman adds no entry to {}",
         settings_path(home, tool).display()
     );
@@ -251,7 +251,7 @@ fn add(home: &Path, tool: &AgentTool, group: &Value) -> Exit {
         Ok(None) => Exit::Success,
         Ok(Some(settings)) => write_addition(&settings, group),
         Err(Unusable::NotInstalled(dir)) => {
-            eprintln!(
+            err!(
                 "warning: {} does not exist, so skiman adds no session-start hook entry for {}",
                 dir.display(),
                 tool.id
@@ -268,7 +268,7 @@ fn add(home: &Path, tool: &AgentTool, group: &Value) -> Exit {
 fn write_addition(settings: &Settings, group: &Value) -> Exit {
     match settings.save() {
         Ok(()) => {
-            println!(
+            out!(
                 "added the session-start hook entry to {}",
                 settings.path.display()
             );
@@ -285,7 +285,7 @@ fn write_addition(settings: &Settings, group: &Value) -> Exit {
 }
 
 fn print_by_hand(reason: &str, group: &Value) {
-    eprintln!(
+    err!(
         "error: {reason}, so skiman did not change it; add this entry to `hooks.SessionStart` by hand:\n{}",
         pretty(group)
     );
@@ -298,7 +298,7 @@ fn pretty(value: &Value) -> String {
 fn remove(home: &Path, tool: &AgentTool) -> Exit {
     let path = settings_path(home, tool);
     let by_hand = |reason: String| {
-        eprintln!(
+        err!(
             "error: {reason}, so skiman did not change it; remove by hand every hook whose command contains `{MARKER}`"
         );
         Exit::OperationalError
@@ -314,7 +314,7 @@ fn remove(home: &Path, tool: &AgentTool) -> Exit {
     }
     match settings.save() {
         Ok(()) => {
-            println!(
+            out!(
                 "removed the session-start hook entries from {}",
                 settings.path.display()
             );
@@ -350,7 +350,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value) -> Exit {
         return exit;
     }
     for (_, settings) in &planned {
-        eprintln!(
+        err!(
             "skiman can add this session-start hook entry to `hooks.SessionStart` in {}, so a new or resumed session refreshes distribution:\n{}",
             settings.path.display(),
             pretty(group)
@@ -371,7 +371,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value) -> Exit {
         }
     } else {
         let ids: Vec<&str> = planned.iter().map(|(id, _)| *id).collect();
-        eprintln!(
+        err!(
             "hint: no session-start hook entry added; add it later with `skiman init <path> --session-hooks {}`",
             ids.join(",")
         );

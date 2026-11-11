@@ -108,7 +108,7 @@ fn move_tmp_leftovers(paths: &Paths, tmp: &Path) -> Result<(), Failure> {
             .move_in(leftover, &rel.join(name))
             .map_err(|e| stop(e, leftover))?;
     }
-    println!(
+    out!(
         "moved tmp leftovers to {}",
         backup.dir().join(rel).display()
     );

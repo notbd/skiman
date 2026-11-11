@@ -115,6 +115,35 @@ impl Tree for StagedTree {
     }
 }
 
+/// Which of `places` (paths relative to `root`) have an entry at or below
+/// them in the repo's own index. Unlike [`StagedTree`] this ignores
+/// `GIT_INDEX_FILE`: the hook of `git commit -a` checks a temporary index,
+/// which git throws away when the commit fails.
+pub fn in_real_index<'a>(root: &Path, places: &[&'a str]) -> io::Result<Vec<&'a str>> {
+    let output = git(root)
+        .env_remove("GIT_INDEX_FILE")
+        .args(["ls-files", "-z", "--"])
+        .args(places)
+        .output()?;
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let paths: Vec<&[u8]> = output.stdout.split(|b| *b == 0).collect();
+    Ok(places
+        .iter()
+        .copied()
+        .filter(|place| {
+            paths.iter().any(|path| {
+                path.strip_prefix(place.as_bytes())
+                    .is_some_and(|rest| rest.is_empty() || rest[0] == b'/')
+            })
+        })
+        .collect())
+}
+
 /// One `git cat-file --batch` process for every blob read.
 struct CatFile {
     child: Child,

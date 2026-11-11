@@ -29,6 +29,7 @@ use std::io;
 
 use crate::Exit;
 use crate::failure::Failure;
+use crate::project::item::MIRROR_DIR;
 use crate::tree::{Kind, Tree};
 
 pub use config::{LOCKFILE, MANIFEST};
@@ -241,6 +242,17 @@ impl Scope {
         })
     }
 }
+
+/// Every top-level path of the skill repo that the rules read: everything
+/// [`Scope::all`] names lives below one of them.
+pub const TOP_LEVEL_PATHS: [&str; 6] = [
+    MANIFEST,
+    LOCKFILE,
+    "skills",
+    "upstream",
+    "instructions",
+    MIRROR_DIR,
+];
 
 /// Names of the entries directly in `dir`, except `.DS_Store` and `Thumbs.db`.
 fn folder_names(tree: &dyn Tree, dir: &str) -> io::Result<BTreeSet<String>> {

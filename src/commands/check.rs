@@ -74,7 +74,7 @@ fn stage_hint(root: &Path) -> Option<String> {
     if !rules::check_all(&WorkingTree::new(root)).ok()?.is_empty() {
         return None;
     }
-    let indexed = staged::in_real_index(root, &rules::TOP_LEVEL_PATHS).ok()?;
+    let indexed = staged::in_real_index(root, &rules::TOP_LEVEL_PATHS)?;
     let paths: Vec<&str> = rules::TOP_LEVEL_PATHS
         .into_iter()
         .filter(|p| indexed.contains(p) || root.join(p).symlink_metadata().is_ok())

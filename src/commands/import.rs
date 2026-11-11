@@ -138,6 +138,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         }
     };
     let plan = Plan::make(&paths, &repo, &manifest, &content)?;
+    refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     refuse_special_files(&plan)?;
 
     out!(
@@ -194,6 +195,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         ));
     }
     refuse_special_files(&plan)?;
+    refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     let backup = Backup::create(&paths, "nothing was changed")?;
     let done = match &writes {
@@ -948,6 +950,69 @@ fn refuse_special_files(plan: &Plan) -> Result<(), Failure> {
     let lines: Vec<String> = found.iter().map(|p| format!("  {}", p.display())).collect();
     Err(Failure::refused(format!(
         "refusing to import: these special files (FIFO, socket or device) are in entries the import would move to the backup; move them away by hand, nothing was changed:\n{}",
+        lines.join("\n")
+    )))
+}
+
+/// Refuses (exit 1) when the local folder a third-party skill is read from
+/// would be gone after the takeover, so that neither `update` nor this
+/// import run again could read it: its path, resolved like [`resolution`],
+/// passes through an entry that moves (a link included), or it is in, or
+/// holds, the real folder of one. Moving a link that leads to a source
+/// elsewhere leaves the source where it is; a source whose path passes
+/// through that link is refused all the same. Entries compare by their real
+/// path, byte for byte. The sources come from `manifest`, the `skiman.toml`
+/// the takeover plan follows; a source folder that does not exist is
+/// skipped.
+fn refuse_moving_sources(
+    paths: &Paths,
+    content: &Folder,
+    manifest: &Manifest,
+    plan: &Plan,
+) -> Result<(), Failure> {
+    let mut lines = Vec::new();
+    for (name, record) in Folder::sources(manifest) {
+        if !matches!(check_url(&record.url), Ok(UrlKind::Local)) {
+            continue;
+        }
+        let dir = match record.url.strip_prefix('~') {
+            None => PathBuf::from(&record.url),
+            Some("") => paths.home().to_path_buf(),
+            Some(rest) => match rest.strip_prefix('/') {
+                Some(rest) => paths.home().join(rest),
+                None => continue,
+            },
+        };
+        let written = dir.join(&record.path);
+        let Ok(source) = written.canonicalize() else {
+            continue;
+        };
+        let hops = resolution(&written);
+        for entry in &plan.moves {
+            let folder = std::fs::symlink_metadata(&entry.real).is_ok_and(|meta| meta.is_dir());
+            if source.starts_with(&entry.real)
+                || hops.iter().any(|hop| hop.starts_with(&entry.real))
+                || (folder && entry.real.starts_with(&source))
+            {
+                let path = if record.path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", record.path)
+                };
+                lines.push(format!(
+                    "  skill {name}: source {}{path}, entry {}",
+                    record.url,
+                    entry.path.display()
+                ));
+            }
+        }
+    }
+    if lines.is_empty() {
+        return Ok(());
+    }
+    Err(Failure::refused(format!(
+        "refusing to import {}: the local folder a third-party skill is read from is in, holds or is reached through an entry the takeover moves to the backup, after which the skill cannot be read from it again; in the import folder's skiman.toml, point the source at a copy of that upstream outside the tool directories, or drop the skill's source table to import it as an own skill; nothing was changed:\n{}",
+        content.root.display(),
         lines.join("\n")
     )))
 }

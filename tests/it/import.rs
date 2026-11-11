@@ -888,6 +888,205 @@ fn a_failure_during_takeover_stops_the_import_and_the_same_command_finishes_it()
     assert_eq!(tree(&folder), folder_before);
 }
 
+/// An import folder holding own skill `notes` and third-party skill `pdf`
+/// read from the local folder `url` (`path` below it).
+fn local_pdf_folder(sandbox: &Sandbox, url: &str, path: &str) -> PathBuf {
+    let folder = import_folder(
+        sandbox,
+        &format!("{TOOLS}\n[skills.pdf.source]\nurl = \"{url}\"\npath = \"{path}\"\n"),
+    );
+    write(folder.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+    folder
+}
+
+/// The import is refused before anything changes, naming skill `pdf`, its
+/// source as `skiman.toml` writes it, and `entry` as the preview shows it;
+/// the source at `source` is still there.
+#[track_caller]
+fn assert_source_refused(
+    sandbox: &Sandbox,
+    folder: &Path,
+    written: &str,
+    entry: &Path,
+    source: &Path,
+) {
+    assert_refused(
+        sandbox,
+        folder,
+        1,
+        &[
+            "in the import folder's skiman.toml, point the source at a copy",
+            &format!("\n  skill pdf: source {written}, entry {}", entry.display()),
+        ],
+    );
+    assert!(source.join("SKILL.md").is_file());
+}
+
+#[test]
+fn a_local_source_the_takeover_would_move_or_reach_through_refuses_the_import_naming_it() {
+    // The source is an entry to move.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    let folder = local_pdf_folder(&sandbox, "~/.claude/skills/pdf", "");
+    assert_source_refused(&sandbox, &folder, "~/.claude/skills/pdf", &source, &source);
+
+    // The tool directory is a link, and the source is written through it.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let real = sandbox.home().join("real-skills");
+    std::fs::rename(&claude, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &claude).unwrap();
+    write(real.join("pdf/SKILL.md"), skill_md("pdf"));
+    let folder = local_pdf_folder(&sandbox, "~/.claude/skills/pdf", "");
+    assert_source_refused(
+        &sandbox,
+        &folder,
+        "~/.claude/skills/pdf",
+        &claude.join("pdf"),
+        &real.join("pdf"),
+    );
+
+    // The source is reached through a link to move.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let pack = sandbox.home().join("src/pack");
+    write(pack.join("SKILL.md"), skill_md("pack"));
+    write(pack.join("pdf/SKILL.md"), skill_md("pdf"));
+    std::os::unix::fs::symlink(&pack, claude.join("pack")).unwrap();
+    let folder = local_pdf_folder(&sandbox, "~/.claude/skills/pack/pdf", "");
+    assert_source_refused(
+        &sandbox,
+        &folder,
+        "~/.claude/skills/pack/pdf",
+        &claude.join("pack"),
+        &pack.join("pdf"),
+    );
+
+    // The source holds a real folder to move: the tool directory is a link
+    // into it. (The link init made there is gone, as upstreams hold no links.)
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let stuff = sandbox.home().join("stuff");
+    std::fs::create_dir_all(&stuff).unwrap();
+    std::fs::rename(&claude, stuff.join("claude-skills")).unwrap();
+    std::os::unix::fs::symlink(stuff.join("claude-skills"), &claude).unwrap();
+    std::fs::remove_file(stuff.join("claude-skills/managing-skills")).unwrap();
+    write(stuff.join("SKILL.md"), skill_md("pdf"));
+    write(
+        stuff.join("claude-skills/notes/SKILL.md"),
+        skill_md("notes"),
+    );
+    let folder = local_pdf_folder(&sandbox, "~/stuff", "");
+    assert_source_refused(&sandbox, &folder, "~/stuff", &claude.join("notes"), &stuff);
+
+    // The source is a link outside the tool directories whose target takes
+    // forty `..` steps, then a link to a link to move.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let src = home.join("src");
+    write(src.join("SKILL.md"), skill_md("pack"));
+    write(src.join("pdf/SKILL.md"), skill_md("pdf"));
+    std::fs::create_dir_all(home.join("pad")).unwrap();
+    std::os::unix::fs::symlink(&src, claude.join("pdf-src")).unwrap();
+    std::os::unix::fs::symlink(claude.join("pdf-src"), home.join("bridge")).unwrap();
+    let target = format!("{}/{}bridge", home.display(), "pad/../".repeat(40));
+    std::os::unix::fs::symlink(target, home.join("source-ref")).unwrap();
+    let folder = local_pdf_folder(&sandbox, "~/source-ref", "pdf");
+    assert_source_refused(
+        &sandbox,
+        &folder,
+        "~/source-ref (pdf)",
+        &claude.join("pdf-src"),
+        &src.join("pdf"),
+    );
+}
+
+#[test]
+fn a_local_source_added_before_the_import_is_refused_when_the_skill_repo_already_holds_the_import()
+{
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    sandbox
+        .skiman()
+        .args(["add", "~/.claude/skills/pdf", "--yes"])
+        .output()
+        .unwrap();
+    let repo = sandbox.skill_repo();
+    assert!(repo.join("skills/pdf/SKILL.md").is_file());
+    // The import folder holds what the skill repo does.
+    let folder = sandbox.root().join("import");
+    write(
+        folder.join("skills/pdf/SKILL.md"),
+        read(repo.join("skills/pdf/SKILL.md")),
+    );
+    write(
+        folder.join("instructions/shared.md"),
+        read(repo.join("instructions/shared.md")),
+    );
+    write(folder.join("skiman.toml"), read(repo.join("skiman.toml")));
+
+    assert_source_refused(&sandbox, &folder, "~/.claude/skills/pdf", &source, &source);
+}
+
+#[test]
+fn a_local_source_outside_the_entries_that_move_is_imported_and_updated_afterwards() {
+    // The tool directory holds a link to the source.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.home().join("src/pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    std::os::unix::fs::symlink(&source, sandbox.tool_dir(Tool::ClaudeCode).join("pdf")).unwrap();
+    let folder = local_pdf_folder(&sandbox, "~/src/pdf", "");
+    let folders = vec![(sandbox, folder)];
+
+    // The source is in the tool directory of a tool that is not enabled.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(
+        sandbox.tool_dir(Tool::Antigravity).join("pdf/SKILL.md"),
+        skill_md("pdf"),
+    );
+    let folder = local_pdf_folder(&sandbox, "~/.gemini/config/skills/pdf", "");
+    write(
+        folder.join("skiman.toml"),
+        read(folder.join("skiman.toml")).replace(", \"antigravity\"", ""),
+    );
+    let mut folders = folders;
+    folders.push((sandbox, folder));
+
+    // The source is below an entry that is not a skill, which stays.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(
+        sandbox
+            .tool_dir(Tool::ClaudeCode)
+            .join("vendor/skills/pdf/SKILL.md"),
+        skill_md("pdf"),
+    );
+    let folder = local_pdf_folder(&sandbox, "~/.claude/skills/vendor", "skills/pdf");
+    folders.push((sandbox, folder));
+
+    for (sandbox, folder) in folders {
+        sandbox
+            .skiman()
+            .arg("import")
+            .arg(&folder)
+            .arg("--yes")
+            .assert()
+            .code(0);
+        sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    }
+}
+
 #[test]
 fn the_default_import_folder_inside_the_skill_repo_works_and_is_left_in_place() {
     let sandbox = Sandbox::new();

@@ -20,6 +20,16 @@ pub struct Detector {
     /// Extra conditions on a match (`content` is the whole file, so the
     /// byte before the match can be looked at).
     pub accept: fn(content: &[u8], m: &Captures) -> bool,
+    /// Where the search goes on after a match `accept` rejects.
+    pub on_reject: Resume,
+}
+
+/// Where the search for a detector's next match starts after a rejected one.
+pub enum Resume {
+    /// One byte after its start: a later match may start inside it.
+    AfterStart,
+    /// At its end: every match that starts inside it is rejected too.
+    AtEnd,
 }
 
 /// The v1 detectors, with the patterns and conditions of the spec.
@@ -29,36 +39,42 @@ pub const DETECTORS: &[Detector] = &[
         pattern: r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
         case_insensitive: false,
         accept: always,
+        on_reject: Resume::AtEnd,
     },
     Detector {
         id: "aws-access-key",
         pattern: r"AKIA[0-9A-Z]{16}",
         case_insensitive: false,
         accept: always,
+        on_reject: Resume::AtEnd,
     },
     Detector {
         id: "github-token",
         pattern: r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}",
         case_insensitive: false,
         accept: always,
+        on_reject: Resume::AtEnd,
     },
     Detector {
         id: "openai-key",
         pattern: r"sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}",
         case_insensitive: false,
         accept: openai_key,
+        on_reject: Resume::AtEnd,
     },
     Detector {
         id: "slack-token",
         pattern: r"xox[abprs]-[A-Za-z0-9-]{10,}",
         case_insensitive: false,
         accept: always,
+        on_reject: Resume::AtEnd,
     },
     Detector {
         id: "secret-assignment",
         pattern: r#"(password|secret|token)\s*[:=]\s*["']([^"'\s]{8,})["']"#,
         case_insensitive: true,
         accept: secret_assignment,
+        on_reject: Resume::AfterStart,
     },
 ];
 
@@ -67,7 +83,9 @@ fn always(_: &[u8], _: &Captures) -> bool {
 }
 
 /// Only when not preceded by `[A-Za-z0-9_-]`, and when the part after `sk-`
-/// holds at least one uppercase letter and one digit.
+/// holds at least one uppercase letter and one digit. Every byte of a match
+/// is such a character, so a match that starts inside a rejected one is
+/// preceded by one and rejected too.
 fn openai_key(content: &[u8], m: &Captures) -> bool {
     let whole = m.get(0).expect("group 0 is the match");
     let preceded = whole.start() > 0 && is_key_byte(content[whole.start() - 1]);
@@ -119,23 +137,29 @@ pub struct Found {
 pub fn scan(path: &str, content: &[u8], found: &mut Vec<Found>) {
     for (detector, regex) in DETECTORS.iter().zip(COMPILED.iter()) {
         let mut at = 0;
+        // Line numbers are counted on from the previous match, never from
+        // the start of the file again.
+        let (mut line, mut counted) = (1, 0);
         while let Some(m) = regex.captures_at(content, at) {
             let whole = m.get(0).expect("group 0 is the match");
             if (detector.accept)(content, &m) {
+                line += content[counted..whole.start()]
+                    .iter()
+                    .filter(|b| **b == b'\n')
+                    .count();
+                counted = whole.start();
                 found.push(Found {
                     path: path.to_owned(),
-                    line: content[..whole.start()]
-                        .iter()
-                        .filter(|b| **b == b'\n')
-                        .count()
-                        + 1,
+                    line,
                     rule: detector.id,
                     fingerprint: format!("sha256:{}", hex(&Sha256::digest(whole.as_bytes()))),
                 });
                 at = whole.end();
             } else {
-                // A later match may start inside a rejected one.
-                at = whole.start() + 1;
+                at = match detector.on_reject {
+                    Resume::AfterStart => whole.start() + 1,
+                    Resume::AtEnd => whole.end(),
+                };
             }
         }
     }

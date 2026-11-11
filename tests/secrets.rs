@@ -8,6 +8,7 @@ mod support;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 use support::Sandbox;
@@ -315,6 +316,41 @@ fn openai_key_detector_needs_no_key_character_before_it_and_an_uppercase_letter_
             sk(&body[..19]),
         ],
     );
+}
+
+/// Five times the slowest debug run of the tests below on a busy machine
+/// (under 10 s), and far below a scan that rescans the file per match
+/// (over 300 s).
+const SCAN_TIMEOUT: Duration = Duration::from_secs(50);
+
+#[test]
+fn check_scans_a_long_run_of_rejected_openai_key_prefixes_in_linear_time() {
+    let sandbox = repo();
+    write(&sandbox, "skills/pdf/blob.txt", "sk-".repeat(20_000));
+
+    sandbox
+        .skiman()
+        .arg("check")
+        .timeout(SCAN_TIMEOUT)
+        .assert()
+        .code(0)
+        .stdout_eq("");
+}
+
+#[test]
+fn check_numbers_the_lines_of_many_matches_in_linear_time() {
+    let sandbox = repo();
+    let header = format!("-----{} RSA{} KEY-----\n", "BEGIN", " PRIVATE");
+    write(&sandbox, "skills/pdf/headers.txt", header.repeat(40_000));
+
+    let output = run(sandbox.skiman().arg("check").timeout(SCAN_TIMEOUT));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let lines: Vec<usize> = reported(&stdout, "skills/pdf/headers.txt")
+        .into_iter()
+        .map(|(line, _, _)| line)
+        .collect();
+    assert_eq!(lines, (1..=40_000).collect::<Vec<_>>());
 }
 
 #[test]

@@ -59,10 +59,7 @@ fn replace_atomic(
     })?;
     let result = file
         .write_all(contents)
-        .and_then(|()| match permissions {
-            Some(permissions) => file.set_permissions(permissions),
-            None => Ok(()),
-        })
+        .and_then(|()| permissions.map_or(Ok(()), |p| file.set_permissions(p)))
         .and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);

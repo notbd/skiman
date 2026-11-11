@@ -14,6 +14,7 @@ use crate::backup::Backup;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil;
+use crate::manifest::Manifest;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -43,7 +44,8 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         .expect("clap accepts only known tool ids");
     let entry = tool.tool_dir(paths.home()).join(name);
     check_name(&repo, name, &entry)?;
-    let entry = locate(&paths, &repo, tool, name)?;
+    let manifest = Manifest::load(&repo)?;
+    let entry = locate(&paths, &repo, &manifest, tool, name)?;
     let files = read_copy(&entry, name)?;
     if !yes {
         println!("skill {name} from {}:", entry.display());
@@ -105,6 +107,7 @@ fn check_name(repo: &SkillRepo, name: &str, entry: &Path) -> Result<(), Failure>
 fn locate(
     paths: &Paths,
     repo: &SkillRepo,
+    manifest: &Manifest,
     tool: &AgentTool,
     name: &str,
 ) -> Result<PathBuf, Failure> {
@@ -113,7 +116,7 @@ fn locate(
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
-    let ownership = Ownership::new(paths.home(), repo, None);
+    let ownership = Ownership::new(paths.home(), repo, manifest, None);
     match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => Ok(entry),
         Entry::Owned(_) => Err(Failure::refused(format!(

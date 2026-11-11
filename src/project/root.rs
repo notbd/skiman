@@ -236,11 +236,8 @@ pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), Str
 
 /// Realpaths of every usable root's `skill_dirs` folders: links into them
 /// from a tool directory are managed elsewhere, not foreign.
-pub fn configured_skill_dirs(home: &Path, repo: &SkillRepo) -> Vec<PathBuf> {
-    let Ok(manifest) = Manifest::load(repo) else {
-        return Vec::new();
-    };
-    usable(home, repo, &manifest)
+pub fn configured_skill_dirs(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<PathBuf> {
+    usable(home, repo, manifest)
         .iter()
         .flat_map(|root| root.skill_dirs.iter().map(|d| root.dir.join(d)))
         .filter_map(|d| d.canonicalize().ok())

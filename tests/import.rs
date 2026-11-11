@@ -595,6 +595,32 @@ fn a_folder_without_tools_keeps_the_repo_tools_and_one_with_tools_uses_its_own()
     assert!(!sandbox.tool_dir(Tool::ClaudeCode).join("notes").exists());
 }
 
+/// The takeover judges entries by the `skiman.toml` the import writes, not
+/// the one it replaces.
+#[test]
+fn a_link_into_skill_dirs_that_only_the_import_folder_declares_is_left_in_place() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let target = sandbox.home().join("proj/skills/foo");
+    write(target.join("SKILL.md"), skill_md("foo"));
+    let link = sandbox.tool_dir(Tool::ClaudeCode).join("foo");
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let folder = import_folder(
+        &sandbox,
+        &format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\nskill_dirs = [\"skills\"]\n"),
+    );
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+}
+
 #[test]
 fn a_failure_during_takeover_stops_the_import_keeps_the_record_and_the_same_command_resumes_it() {
     let sandbox = Sandbox::new();

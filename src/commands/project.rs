@@ -110,6 +110,10 @@ struct Context {
     lock: RepoLock,
     manifest: Manifest,
     roots: Vec<Root>,
+    /// Realpaths no project command works in, though a root may hold them:
+    /// the skill repo and skiman's state folder. Discovery never enters
+    /// them, and a path given on the command line inside them is refused.
+    skip: [PathBuf; 2],
 }
 
 impl Context {
@@ -136,12 +140,20 @@ impl Context {
                 ),
             }
         }
+        let skip = [
+            repo.root().to_path_buf(),
+            paths
+                .state_dir()
+                .canonicalize()
+                .unwrap_or(paths.state_dir()),
+        ];
         Ok(Context {
             paths,
             repo,
             lock,
             manifest,
             roots,
+            skip,
         })
     }
 
@@ -152,10 +164,19 @@ impl Context {
     /// The root a path given on the command line is in, and the path
     /// relative to it (`""` for the root itself). The parents are resolved
     /// as far as they exist; the last component is not, so a path that is an
-    /// alias link names the link, not what it points to.
+    /// alias link names the link, not what it points to. A path in the skill
+    /// repo or the state folder is refused: adopting a mirror would mirror
+    /// it again.
     fn locate(&self, path: &Path) -> Result<(&Root, String), Failure> {
         let absolute = cwd_absolute(path)?;
         let real = realpath_of_parent(&absolute);
+        if let Some(dir) = self.skip.iter().find(|dir| real.starts_with(dir)) {
+            return Err(Failure::refused(format!(
+                "{} is inside {}, which project commands never read or write; name the item's path in its project",
+                path.display(),
+                dir.display()
+            )));
+        }
         let whole = realpath_as_far_as_exists(&absolute);
         self.roots
             .iter()
@@ -489,13 +510,6 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     let ctx = Context::open()?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
-    let skip_dirs = [
-        ctx.repo.root().to_path_buf(),
-        ctx.paths
-            .state_dir()
-            .canonicalize()
-            .unwrap_or(ctx.paths.state_dir()),
-    ];
     let mut plan = Plan::default();
     let mut seen = BTreeSet::new();
     for target in &targets {
@@ -505,7 +519,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                 vec![item.clone()]
             }
             None => {
-                let found = discover(target.root, &skip_dirs);
+                let found = discover(target.root, &ctx.skip);
                 for e in found.errors {
                     err!("warning: {e}");
                 }

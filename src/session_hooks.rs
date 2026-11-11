@@ -337,7 +337,9 @@ fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
     }
 }
 
-/// Previews the entries `init` would add, asks, and adds them on "y".
+/// Previews the entries `init` would add, asks, and adds them on "y". The
+/// question can stay open for a long time, so on "y" each file is read again
+/// and the entry is added to what it holds then.
 fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value, own: &str) -> Exit {
     let mut exit = Exit::Success;
     let mut planned = Vec::new();
@@ -352,7 +354,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value, own: &str) -> Exit {
         }
         match plan_addition(home, tool, group, own) {
             Ok(None) | Err(Unusable::NotInstalled(_)) => {}
-            Ok(Some(settings)) => planned.push((tool.id, settings)),
+            Ok(Some(settings)) => planned.push((tool, settings.path)),
             Err(Unusable::Broken(reason)) => {
                 print_by_hand(&reason, group);
                 exit = Exit::OperationalError;
@@ -362,10 +364,10 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value, own: &str) -> Exit {
     if planned.is_empty() {
         return exit;
     }
-    for (_, settings) in &planned {
+    for (_, path) in &planned {
         err!(
             "skiman can add this session-start hook entry to `hooks.SessionStart` in {}, so a new or resumed session refreshes distribution:\n{}",
-            settings.path.display(),
+            path.display(),
             pretty(group)
         );
     }
@@ -379,11 +381,11 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, group: &Value, own: &str) -> Exit {
         Err(failure) => return exit.combine(failure.report()),
     };
     if agreed {
-        for (_, settings) in &planned {
-            exit = exit.combine(write_addition(settings, group));
+        for (tool, _) in &planned {
+            exit = exit.combine(add(home, tool, group, own));
         }
     } else {
-        let ids: Vec<&str> = planned.iter().map(|(id, _)| *id).collect();
+        let ids: Vec<&str> = planned.iter().map(|(tool, _)| tool.id).collect();
         err!(
             "hint: no session-start hook entry added; add it later with `skiman init <path> --session-hooks {}`",
             ids.join(",")

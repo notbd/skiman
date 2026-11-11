@@ -471,3 +471,23 @@ fn init_through_a_renamed_link_keeps_one_entry_and_none_through_it_removes_it() 
     init_as_sk("none");
     assert_eq!(read_json(&claude_settings(&sandbox)), user_settings());
 }
+
+#[test]
+fn with_a_terminal_a_change_made_to_the_settings_while_the_question_is_open_is_kept() {
+    let sandbox = Sandbox::new();
+    write_json(&claude_settings(&sandbox), &user_settings());
+
+    let mut pty = init_pty(&sandbox);
+    pty.expect("Add this entry? [y/N] ");
+    let mut changed = user_settings();
+    changed["theme"] = json!("dark");
+    write_json(&claude_settings(&sandbox), &changed);
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 0, "{rest}");
+    assert_eq!(
+        read_json(&claude_settings(&sandbox)),
+        with_skiman_group(changed)
+    );
+}

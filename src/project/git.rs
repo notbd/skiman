@@ -32,11 +32,11 @@ pub fn operation_in_progress(root: &Path) -> Option<&'static str> {
         .map(|(_, phrase)| phrase)
 }
 
-/// The git dir of the work tree at `root`: `.git` itself, or what a `.git`
-/// file points to.
+/// The git dir of the work tree at `root`: `.git` itself (also when it is a
+/// link to a folder), or what a `.git` file points to.
 fn git_dir(root: &Path) -> Option<PathBuf> {
     let dot_git = root.join(".git");
-    let meta = std::fs::symlink_metadata(&dot_git).ok()?;
+    let meta = std::fs::metadata(&dot_git).ok()?;
     if meta.is_dir() {
         return Some(dot_git);
     }
@@ -196,4 +196,27 @@ pub fn uncommitted_mirror_changes(root: &Path) -> Option<usize> {
         .status
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).lines().count())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dot_git_link_to_a_folder_still_reports_the_operation_in_progress() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let git_dir = root.join("elsewhere.git");
+        std::fs::create_dir(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(git_dir.join("MERGE_HEAD"), "0123456789abcdef\n").unwrap();
+        let repo = root.join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        std::os::unix::fs::symlink(&git_dir, repo.join(".git")).unwrap();
+
+        assert_eq!(
+            operation_in_progress(&repo),
+            Some("is in the middle of a merge")
+        );
+    }
 }

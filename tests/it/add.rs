@@ -8,7 +8,7 @@ use snapbox::str;
 
 use crate::support::{
     PDF_SKILL_MD, Sandbox, Tool, Upstream, assert_symlink, backups, fingerprint, init,
-    is_executable, read, tree, tree_hash,
+    is_executable, read, skill_md, tree, tree_hash,
 };
 
 /// An upstream `acme/<repo>` whose root is one skill.
@@ -127,6 +127,89 @@ fn a_hand_edited_skiman_toml_keeps_every_byte_outside_the_new_table() {
         hand_edited,
         "everything outside the new table is unchanged:\n{text}"
     );
+}
+
+#[test]
+fn an_empty_skills_table_written_inline_is_replaced_by_the_new_table() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let tools = read(&manifest);
+    std::fs::write(&manifest, format!("skills = {{}}\n{tools}")).unwrap();
+
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+
+    assert_eq!(
+        read(&manifest),
+        format!(
+            "{tools}\n[skills.pdf.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n"
+        )
+    );
+    sandbox.skiman().arg("check").assert().code(0);
+}
+
+#[test]
+fn skills_tables_written_inline_become_standard_tables_keeping_every_value() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    sandbox
+        .skiman()
+        .args(["new", "notes", "-d", "Take notes"])
+        .assert()
+        .code(0);
+    single_skill(&sandbox, "docx", &skill_md("docx"));
+    sandbox
+        .skiman()
+        .args(["add", "acme/docx", "--yes"])
+        .assert()
+        .code(0);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let repo = sandbox.skill_repo();
+    let tools = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
+    let docx = "docx = { source = { url = \"https://github.com/acme/docx.git\", path = \"\" } }";
+    std::fs::write(
+        repo.join("skiman.toml"),
+        format!("skills = {{ notes = {{ enabled = false }}, {docx} }}\n{tools}"),
+    )
+    .unwrap();
+    let docx_entry = read(repo.join("skiman.lock"))
+        .strip_prefix("version = 1\n\n[skills.docx]\n")
+        .unwrap()
+        .trim_end()
+        .replace('\n', ", ");
+    std::fs::write(
+        repo.join("skiman.lock"),
+        format!("version = 1\nskills = {{ docx = {{ {docx_entry} }} }}\n"),
+    )
+    .unwrap();
+    sandbox.skiman().arg("check").assert().code(0);
+
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+
+    assert_eq!(
+        read(repo.join("skiman.toml")),
+        format!(
+            "{tools}\n[skills]\nnotes = {{ enabled = false }}\n{docx}\n\n\
+             [skills.pdf.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n"
+        )
+    );
+    let lock = read(repo.join("skiman.lock"));
+    assert!(
+        lock.starts_with(&format!(
+            "version = 1\n\n[skills]\ndocx = {{ {docx_entry} }}\n\n[skills.pdf]\n"
+        )),
+        "{lock}"
+    );
+    sandbox.skiman().arg("check").assert().code(0);
 }
 
 #[test]

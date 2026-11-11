@@ -188,6 +188,27 @@ fn add_under_a_linked_home_still_writes_a_tilde_path() {
     );
 }
 
+#[test]
+fn add_rewrites_a_projects_table_written_inline_as_a_standard_table_keeping_its_roots() {
+    let sandbox = initialised();
+    folder(sandbox.home().join("a"));
+    let b = folder(sandbox.home().join("b"));
+    let tools = manifest(&sandbox);
+    std::fs::write(
+        sandbox.skill_repo().join("skiman.toml"),
+        format!("projects = {{ a = {{ path = \"~/a\" }} }}\n{tools}"),
+    )
+    .unwrap();
+
+    add(&sandbox, &b);
+
+    assert_eq!(
+        manifest(&sandbox),
+        format!("{tools}\n[projects]\na = {{ path = \"~/a\" }}\n\n[projects.b]\npath = \"~/b\"\n")
+    );
+    sandbox.skiman().arg("check").assert().code(0);
+}
+
 // ------------------------------------------------------------ add: refusals
 
 #[test]

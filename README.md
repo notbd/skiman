@@ -62,9 +62,9 @@ Without a terminal, every flag that would otherwise be asked for is required
 error, 3 needs attention, 4 operational error.
 
 skiman adds no session-start hook for Codex yet: Codex runs only the hooks
-you have trusted with its `/hooks` command. After a change, run `skiman sync`,
-or rely on the skill repo's git hooks, which run it after each commit, merge,
-checkout and rebase there. Evidence:
+you have trusted with its `/hooks` command. After you change a skill or the
+shared body, run `skiman sync`, or rely on the skill repo's git hooks, which
+run it after each commit, merge, checkout and rebase there. Evidence:
 [docs/phase1-results.md](docs/phase1-results.md).
 
 ## Verify the install

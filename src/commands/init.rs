@@ -30,8 +30,11 @@ pub fn run(path: &Path, session_hooks: Option<&str>) -> Exit {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
-    /// Missing or empty: create the layout.
+    /// Missing or empty: `git init`, then create the layout.
     Create,
+    /// Holds only `.git` (a fresh `git init` or a clone of an empty repo):
+    /// create the layout in that repo.
+    CreateInRepo,
     /// Holds `skiman.toml`: reuse it as it is.
     Reuse,
 }
@@ -53,12 +56,12 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     }
     let repo = SkillRepo::at(&path)?;
     let lock = RepoLock::wait(&repo)?;
-    if target == Target::Create {
+    if target == Target::Reuse {
+        ignore_machine_state(&repo)?;
+    } else {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
         out!("created skill repo {}", path.display());
-    } else {
-        ignore_machine_state(&repo)?;
     }
     let previous_repo = UserConfig::load(&paths)
         .ok()
@@ -181,14 +184,17 @@ fn inspect(path: &Path) -> Result<Target, Failure> {
         }
     };
     if std::fs::symlink_metadata(path.join("skiman.toml")).is_ok() {
-        Ok(Target::Reuse)
-    } else if entries.next().is_none() {
-        Ok(Target::Create)
-    } else {
-        Err(Failure::refused(format!(
+        return Ok(Target::Reuse);
+    }
+    match entries.next() {
+        None => Ok(Target::Create),
+        Some(Ok(entry)) if entry.file_name() == ".git" && entries.next().is_none() => {
+            Ok(Target::CreateInRepo)
+        }
+        Some(_) => Err(Failure::refused(format!(
             "{} is not empty and holds no skiman.toml; choose an empty or missing folder, or an existing skill repo",
             path.display()
-        )))
+        ))),
     }
 }
 

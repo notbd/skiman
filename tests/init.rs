@@ -104,6 +104,35 @@ fn init_on_an_empty_folder_creates_the_layout_there() {
 }
 
 #[test]
+fn init_on_a_clone_of_an_empty_repo_creates_the_layout_and_keeps_its_git_folder() {
+    let sandbox = Sandbox::new();
+    sandbox.git(sandbox.root(), ["init", "--quiet", "--bare", "origin.git"]);
+    sandbox.git(
+        sandbox.root(),
+        ["clone", "--quiet", "origin.git", "skill-repo"],
+    );
+    let repo = sandbox.skill_repo();
+    let git_config = read(repo.join(".git/config"));
+    let head = read(repo.join(".git/HEAD"));
+
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&repo)
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+created skill repo [..]/skill-repo
+...
+"#]]);
+
+    assert!(repo.join("skills").is_dir());
+    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+    assert_eq!(read(repo.join(".git/config")), git_config);
+    assert_eq!(read(repo.join(".git/HEAD")), head);
+}
+
+#[test]
 fn init_on_a_folder_with_skiman_toml_reuses_it_and_leaves_tools_untouched() {
     let sandbox = Sandbox::builder()
         .tool(Tool::Codex, ToolSetup::Absent)

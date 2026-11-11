@@ -9,7 +9,7 @@ use crate::Exit;
 use crate::backup::Backup;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
-use crate::fsutil::{absolute_lexical, realpath_as_far_as_exists, write_atomic};
+use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::command;
@@ -880,7 +880,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         for item in &ejection.items {
             let mirror = ctx.repo.root().join(item.mirror_rel());
             // Never move or clean up through a link: it could lead out of the repo.
-            if let Some(why) = swap::broken_chain(ctx.repo.root(), &mirror) {
+            if let Some(why) = broken_chain(ctx.repo.root(), &mirror) {
                 err!(
                     "error: {} is not ejected: its mirror cannot be used: {why}",
                     item.mirror_rel()
@@ -915,7 +915,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         // A mirror that only looks gone because a link hides it is not.
         for rel in &ejection.forgotten {
             let mirror = projects_dir.join(&ejection.root.id).join(rel);
-            if let Some(why) = swap::broken_chain(ctx.repo.root(), &mirror) {
+            if let Some(why) = broken_chain(ctx.repo.root(), &mirror) {
                 err!(
                     "error: {MIRROR_DIR}/{}/{rel} is not forgotten: its mirror cannot be used: {why}",
                     ejection.root.id
@@ -929,7 +929,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         if ejection.rel.is_empty() && all_out {
             let id = &ejection.root.id;
             // The same no-link rule as for every mirror item.
-            match swap::broken_chain(ctx.repo.root(), &projects_dir.join(id).join("_")) {
+            match broken_chain(ctx.repo.root(), &projects_dir.join(id).join("_")) {
                 Some(why) => {
                     err!("error: [projects.{id}] is not removed: {why}");
                     exit = exit.combine(Exit::NeedsAttention);

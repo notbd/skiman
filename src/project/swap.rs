@@ -131,7 +131,7 @@ pub struct Replace<'a> {
 
 impl Replace<'_> {
     pub fn run(&self, backups: &mut Backups) -> io::Result<Outcome> {
-        if let Some(why) = broken_chain(self.inside, self.dest) {
+        if let Some(why) = fsutil::broken_chain(self.inside, self.dest) {
             return Ok(Outcome::Conflict(why));
         }
         let name = self
@@ -269,28 +269,6 @@ impl Replace<'_> {
             )),
         }
     }
-}
-
-/// Why `dest` cannot be written: a component between `inside` and `dest`'s
-/// parent that exists but is not a real folder. `None` when the way is clear
-/// (components that do not exist yet are created later).
-pub fn broken_chain(inside: &Path, dest: &Path) -> Option<String> {
-    let rel = dest.parent()?.strip_prefix(inside).ok()?;
-    let mut dir = inside.to_path_buf();
-    for part in rel.components() {
-        dir.push(part);
-        match std::fs::symlink_metadata(&dir) {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => {
-                return Some(format!(
-                    "{} is not a real folder (a link or a file is in the way)",
-                    dir.display()
-                ));
-            }
-            Err(_) => return None,
-        }
-    }
-    None
 }
 
 /// A hash of whatever is at `path`, links not followed (the tree hash of a

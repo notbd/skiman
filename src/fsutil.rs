@@ -1,4 +1,5 @@
-//! Small filesystem helpers: writes that appear in one step, and lexical paths.
+//! Small filesystem helpers: writes that appear in one step, lexical paths,
+//! and the check that a write's parent folders are real folders.
 
 use std::io;
 use std::os::unix::fs::PermissionsExt;
@@ -111,5 +112,81 @@ pub fn realpath_as_far_as_exists(path: &Path) -> PathBuf {
             }
             _ => return path.to_path_buf(),
         }
+    }
+}
+
+/// Why `dest` cannot be written: `dest` is not below `inside`, or a component
+/// between `inside` and `dest`'s parent exists but is not a real folder or
+/// cannot be read. `None` when the way is clear: only a component that does
+/// not exist (`NotFound`) counts as not created yet, and the write creates it.
+///
+/// `inside` is a trusted root the caller has already canonicalized; it is not
+/// checked itself. `dest` is compared with it lexically, so build `dest` by
+/// joining a relative path without `..` onto `inside`.
+pub fn broken_chain(inside: &Path, dest: &Path) -> Option<String> {
+    let Some(rel) = dest.parent().and_then(|p| p.strip_prefix(inside).ok()) else {
+        return Some(format!(
+            "{} is outside {}",
+            dest.display(),
+            inside.display()
+        ));
+    };
+    let mut dir = inside.to_path_buf();
+    for part in rel.components() {
+        dir.push(part);
+        match std::fs::symlink_metadata(&dir) {
+            Ok(meta) if meta.is_dir() => {}
+            Ok(_) => {
+                return Some(format!(
+                    "{} is not a real folder (a link or a file is in the way)",
+                    dir.display()
+                ));
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
+            Err(e) => return Some(format!("cannot read {}: {e}", dir.display())),
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn root() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        (temp, root)
+    }
+
+    #[test]
+    fn a_dest_outside_inside_is_refused() {
+        let (_temp, root) = root();
+        let inside = root.join("repo");
+        std::fs::create_dir(&inside).unwrap();
+        let dest = root.join("elsewhere/AGENTS.md");
+
+        assert_eq!(
+            broken_chain(&inside, &dest),
+            Some(format!(
+                "{} is outside {}",
+                dest.display(),
+                inside.display()
+            ))
+        );
+    }
+
+    #[test]
+    fn only_a_missing_component_counts_as_not_created_yet() {
+        let (_temp, inside) = root();
+        assert_eq!(
+            broken_chain(&inside, &inside.join("new/dir/AGENTS.md")),
+            None
+        );
+
+        // A name longer than the filesystem allows cannot be read: refused.
+        let dest = inside.join("a".repeat(300)).join("AGENTS.md");
+        let why = broken_chain(&inside, &dest).expect("refused");
+        assert!(why.starts_with("cannot read "), "{why}");
     }
 }

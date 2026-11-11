@@ -84,7 +84,7 @@ added the session-start hook entry to [..]/home/.claude/settings.json
 
 "#]])
         .stderr_eq(str![[r#"
-warning: Codex runs only the hooks you have trusted with `/hooks`; after you change a skill or the shared body, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json
+warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json
 
 "#]]);
 
@@ -101,7 +101,7 @@ warning: Codex runs only the hooks you have trusted with `/hooks`; after you cha
     init(&sandbox, "claude-code,codex")
         .code(0)
         .stdout_eq("")
-        .stderr_eq("warning: Codex runs only the hooks you have trusted with `/hooks`; after you change a skill or the shared body, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json\n");
+        .stderr_eq("warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json\n");
     assert_eq!(
         std::fs::read(claude_settings(&sandbox)).unwrap(),
         settings_bytes
@@ -394,7 +394,7 @@ fn with_a_terminal_init_previews_the_exact_entry_and_declining_changes_nothing()
     );
     assert!(
         shown.contains(&format!(
-            "warning: Codex runs only the hooks you have trusted with `/hooks`; after you change a skill or the shared body, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to {}\n",
+            "warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks; skiman adds no entry to {}\n",
             codex_hooks(&sandbox).display()
         )),
         "{shown}"

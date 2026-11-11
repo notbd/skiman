@@ -403,13 +403,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
     }
     let synced = Synced::load(paths);
     let tree = WorkingTree::new(repo.root());
-    let skip = [
-        repo.root().to_path_buf(),
-        paths
-            .state_dir()
-            .canonicalize()
-            .unwrap_or(paths.state_dir()),
-    ];
+    let skip = discover::never_entered(paths, repo);
     let mut mirror_paths = Vec::new();
     for resolved in root::resolve(paths.home(), repo, manifest) {
         let root = match resolved {

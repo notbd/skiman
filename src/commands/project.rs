@@ -14,7 +14,7 @@ use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::command;
 use crate::project::content::{self, Content, Side};
-use crate::project::discover::discover;
+use crate::project::discover::{discover, never_entered};
 use crate::project::git::{ignored, operation_in_progress, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
@@ -110,9 +110,8 @@ struct Context {
     lock: RepoLock,
     manifest: Manifest,
     roots: Vec<Root>,
-    /// Realpaths no project command works in, though a root may hold them:
-    /// the skill repo and skiman's state folder. Discovery never enters
-    /// them, and a path given on the command line inside them is refused.
+    /// [`never_entered`]: discovery never enters these, and [`Self::locate`]
+    /// refuses a path inside them.
     skip: [PathBuf; 2],
 }
 
@@ -140,13 +139,7 @@ impl Context {
                 ),
             }
         }
-        let skip = [
-            repo.root().to_path_buf(),
-            paths
-                .state_dir()
-                .canonicalize()
-                .unwrap_or(paths.state_dir()),
-        ];
+        let skip = never_entered(&paths, &repo);
         Ok(Context {
             paths,
             repo,

@@ -318,6 +318,140 @@ fn openai_key_detector_needs_no_key_character_before_it_and_an_uppercase_letter_
     );
 }
 
+fn pem_begin(label: &str) -> String {
+    format!("-----{} {label}{} KEY-----", "BEGIN", "PRIVATE")
+}
+
+fn pem_end(label: &str) -> String {
+    format!("-----END {label}PRIVATE KEY-----")
+}
+
+/// A private key block (`label` is `"RSA "`, `"EC "`, `""`, …): its BEGIN
+/// line, `body` and its END line joined by `eol`, with no `eol` at the end.
+fn pem_block(label: &str, body: &[&str], eol: &str) -> String {
+    let mut lines = vec![pem_begin(label)];
+    lines.extend(body.iter().map(|l| (*l).to_owned()));
+    lines.push(pem_end(label));
+    lines.join(eol)
+}
+
+const PEM_BODY: [&str; 2] = [
+    "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9wcXJzdHV2",
+    "d3h5ejAxMjM0NTY3ODkrL0FCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFla",
+];
+
+/// Writes `text` as one file and asserts `check` reports exactly
+/// `expected` (line, fingerprinted text) under `private-key`.
+fn assert_private_keys(text: &str, expected: &[(usize, &str)]) {
+    let sandbox = repo();
+    write(&sandbox, "skills/pdf/keys.txt", text);
+    let secrets: Vec<&str> = expected.iter().map(|(_, t)| *t).collect();
+
+    let checked = check(&sandbox, &secrets);
+    let expected: Vec<(usize, String, String)> = expected
+        .iter()
+        .map(|(line, t)| (*line, "private-key".to_owned(), fingerprint(t)))
+        .collect();
+    assert_eq!(
+        reported(&checked.stdout, "skills/pdf/keys.txt"),
+        expected,
+        "{}",
+        checked.stdout
+    );
+}
+
+#[test]
+fn a_lone_private_key_header_is_fingerprinted_as_the_header_and_a_whole_block_from_begin_to_end() {
+    let header = pem_begin("RSA ");
+    assert_private_keys(&format!("{header}\n"), &[(1, &header)]);
+
+    let block = pem_block("RSA ", &PEM_BODY, "\n");
+    assert_private_keys(&format!("Key:\n{block}\nDone.\n"), &[(2, &block)]);
+
+    let changed = block.replacen("QUJD", "QUJE", 1);
+    assert_ne!(fingerprint(&changed), fingerprint(&block));
+    assert_private_keys(&format!("Key:\n{changed}\nDone.\n"), &[(2, &changed)]);
+}
+
+#[test]
+fn an_entry_for_an_example_header_does_not_cover_a_whole_key_pasted_into_the_same_file() {
+    let sandbox = repo();
+    let header = pem_begin("RSA ");
+    write(
+        &sandbox,
+        "skills/pdf/notes.md",
+        format!("A key starts with:\n\n{header}\n"),
+    );
+    let entries = printed_entries(&check(&sandbox, &[&header]).stdout);
+    append(&sandbox, "skiman.toml", &format!("\n{entries}"));
+    assert_eq!(check(&sandbox, &[&header]).code, 0);
+
+    let block = pem_block("RSA ", &PEM_BODY, "\n");
+    append(&sandbox, "skills/pdf/notes.md", &format!("\n{block}\n"));
+
+    let checked = check(&sandbox, &[&block]);
+    assert_eq!(checked.code, 1, "{}", checked.stdout);
+    assert_eq!(
+        reported(&checked.stdout, "skills/pdf/notes.md"),
+        [(5, "private-key".to_owned(), fingerprint(&block))]
+    );
+}
+
+#[test]
+fn private_key_blocks_and_headers_are_each_reported_once_and_never_swallow_each_other() {
+    let block = pem_block("RSA ", &PEM_BODY, "\n");
+    let header = pem_begin("RSA ");
+    // Two whole blocks in a row.
+    assert_private_keys(&format!("{block}\n{block}\n"), &[(1, &block), (5, &block)]);
+    // An example header a few lines above a whole block.
+    assert_private_keys(
+        &format!("{header}\nsome\ntext\n{block}\n"),
+        &[(1, &header), (4, &block)],
+    );
+    // A block without its END line before a whole block.
+    assert_private_keys(
+        &format!("{header}\n{}\n{block}\n", PEM_BODY[0]),
+        &[(1, &header), (3, &block)],
+    );
+    // A BEGIN right after an END on the same line.
+    assert_private_keys(&format!("{block}{block}\n"), &[(1, &block), (4, &block)]);
+}
+
+#[test]
+fn a_block_whose_first_end_line_has_another_label_keeps_the_header_fingerprint() {
+    let header = pem_begin("RSA ");
+    assert_private_keys(
+        &format!("{header}\n{}\n{}\n", PEM_BODY[0], pem_end("EC ")),
+        &[(1, &header)],
+    );
+}
+
+#[test]
+fn a_block_with_encryption_headers_is_fingerprinted_whole() {
+    let block = pem_block(
+        "RSA ",
+        &[
+            "Proc-Type: 4,ENCRYPTED",
+            "DEK-Info: AES-256-CBC,0123456789ABCDEF0123456789ABCDEF",
+            "",
+            PEM_BODY[0],
+            PEM_BODY[1],
+        ],
+        "\n",
+    );
+    assert_private_keys(&format!("{block}\n"), &[(1, &block)]);
+}
+
+#[test]
+fn a_block_is_fingerprinted_up_to_its_end_line_with_lf_crlf_or_no_final_newline() {
+    let lf = pem_block("", &PEM_BODY, "\n");
+    assert_private_keys(&format!("{lf}\n"), &[(1, &lf)]);
+    let crlf = pem_block("", &PEM_BODY, "\r\n");
+    assert_private_keys(&format!("x\r\n{crlf}\r\nafter\r\n"), &[(2, &crlf)]);
+    let open = pem_block("OPENSSH ", &PEM_BODY, "\n");
+    assert_private_keys(&open, &[(1, &open)]);
+}
+
 /// Five times the slowest debug run of the tests below on a busy machine
 /// (under 10 s), and far below a scan that rescans the file per match
 /// (over 300 s).

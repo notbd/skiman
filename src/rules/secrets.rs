@@ -18,8 +18,10 @@ pub struct Detector {
     pub pattern: &'static str,
     pub case_insensitive: bool,
     /// Extra conditions on a match (`content` is the whole file, so the
-    /// byte before the match can be looked at).
-    pub accept: fn(content: &[u8], m: &Captures) -> bool,
+    /// bytes around the match can be looked at): `None` rejects it;
+    /// otherwise the end of the secret, the text its fingerprint covers,
+    /// which starts with the match.
+    pub accept: fn(content: &[u8], m: &Captures) -> Option<usize>,
     /// Where the search goes on after a match `accept` rejects.
     pub on_reject: Resume,
 }
@@ -38,7 +40,7 @@ pub const DETECTORS: &[Detector] = &[
         id: "private-key",
         pattern: r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
         case_insensitive: false,
-        accept: always,
+        accept: private_key,
         on_reject: Resume::AtEnd,
     },
     Detector {
@@ -78,19 +80,44 @@ pub const DETECTORS: &[Detector] = &[
     },
 ];
 
-fn always(_: &[u8], _: &Captures) -> bool {
-    true
+fn always(_: &[u8], m: &Captures) -> Option<usize> {
+    Some(m.get(0).expect("group 0 is the match").end())
+}
+
+/// The whole key block, from its BEGIN line to the last `-` of its END
+/// line, when the first `-----` after the header starts the END line of
+/// the same label: so an entry for an example header does not cover a key
+/// pasted below it. Otherwise (another BEGIN, an END of another label, no
+/// END) the header alone, as the block has no reliable end. PEM bodies and
+/// headers (`Proc-Type`, `DEK-Info`) hold no `-----`, and the next header
+/// starts with one, so the searches of all headers in a file never overlap.
+fn private_key(content: &[u8], m: &Captures) -> Option<usize> {
+    let header = m.get(0).expect("group 0 is the match");
+    let label = header
+        .as_bytes()
+        .strip_prefix(b"-----BEGIN ")
+        .and_then(|rest| rest.strip_suffix(b"PRIVATE KEY-----"))
+        .expect("the pattern has this shape");
+    let end_line = [b"-----END ".as_slice(), label, b"PRIVATE KEY-----"].concat();
+    let after = &content[header.end()..];
+    let block = after
+        .windows(5)
+        .position(|w| w == b"-----")
+        .filter(|&dashes| after[dashes..].starts_with(&end_line))
+        .map_or(0, |dashes| dashes + end_line.len());
+    Some(header.end() + block)
 }
 
 /// Only when not preceded by `[A-Za-z0-9_-]`, and when the part after `sk-`
 /// holds at least one uppercase letter and one digit. Every byte of a match
 /// is such a character, so a match that starts inside a rejected one is
 /// preceded by one and rejected too.
-fn openai_key(content: &[u8], m: &Captures) -> bool {
+fn openai_key(content: &[u8], m: &Captures) -> Option<usize> {
     let whole = m.get(0).expect("group 0 is the match");
     let preceded = whole.start() > 0 && is_key_byte(content[whole.start() - 1]);
     let rest = &whole.as_bytes()[3..];
-    !preceded && rest.iter().any(u8::is_ascii_uppercase) && rest.iter().any(u8::is_ascii_digit)
+    (!preceded && rest.iter().any(u8::is_ascii_uppercase) && rest.iter().any(u8::is_ascii_digit))
+        .then_some(whole.end())
 }
 
 fn is_key_byte(b: u8) -> bool {
@@ -99,14 +126,15 @@ fn is_key_byte(b: u8) -> bool {
 
 /// Skips values that start with `$`, `<`, `{` or `%`, or contain `example`,
 /// `your` or `xxx` (in any case, like the rest of the detector).
-fn secret_assignment(_: &[u8], m: &Captures) -> bool {
+fn secret_assignment(_: &[u8], m: &Captures) -> Option<usize> {
     let value = m.get(2).expect("the pattern has a value group").as_bytes();
     let lower = value.to_ascii_lowercase();
     let contains = |word: &[u8]| lower.windows(word.len()).any(|w| w == word);
-    !matches!(value[0], b'$' | b'<' | b'{' | b'%')
+    let real = !matches!(value[0], b'$' | b'<' | b'{' | b'%')
         && !contains(b"example")
         && !contains(b"your")
-        && !contains(b"xxx")
+        && !contains(b"xxx");
+    real.then(|| m.get(0).expect("group 0 is the match").end())
 }
 
 static COMPILED: LazyLock<Vec<Regex>> = LazyLock::new(|| {
@@ -129,7 +157,8 @@ pub struct Found {
     /// 1-based line of the start of the match.
     pub line: usize,
     pub rule: &'static str,
-    /// `sha256:<hex of the matched text>`.
+    /// `sha256:<hex of the secret's text>`: the matched text, or a whole
+    /// private key block.
     pub fingerprint: String,
 }
 
@@ -142,19 +171,20 @@ pub fn scan(path: &str, content: &[u8], found: &mut Vec<Found>) {
         let (mut line, mut counted) = (1, 0);
         while let Some(m) = regex.captures_at(content, at) {
             let whole = m.get(0).expect("group 0 is the match");
-            if (detector.accept)(content, &m) {
+            if let Some(end) = (detector.accept)(content, &m) {
                 line += content[counted..whole.start()]
                     .iter()
                     .filter(|b| **b == b'\n')
                     .count();
                 counted = whole.start();
+                let secret = &content[whole.start()..end];
                 found.push(Found {
                     path: path.to_owned(),
                     line,
                     rule: detector.id,
-                    fingerprint: format!("sha256:{}", hex(&Sha256::digest(whole.as_bytes()))),
+                    fingerprint: format!("sha256:{}", hex(&Sha256::digest(secret))),
                 });
-                at = whole.end();
+                at = end;
             } else {
                 at = match detector.on_reject {
                     Resume::AfterStart => whole.start() + 1,

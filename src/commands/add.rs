@@ -425,7 +425,7 @@ fn print_candidates(
 /// Asks which candidates to install: numbers separated by spaces, or `all`.
 fn pick(candidates: &[Candidate]) -> Result<Vec<&Candidate>, Failure> {
     let answer = ask("Install which skills? Numbers separated by spaces, or `all`: ")?;
-    if answer.trim() == "all" {
+    if answer == "all" {
         return Ok(candidates.iter().collect());
     }
     let mut picked = BTreeSet::new();

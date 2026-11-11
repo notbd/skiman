@@ -15,7 +15,6 @@
 //! `.skiman-conflicts/` when the record's path is taken.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -143,7 +142,7 @@ impl MergeRepo {
         let what = format!("committing the {side} side of the merge");
         let mut import = self.git();
         import.args(["fast-import", "--quiet"]);
-        run_with_input(import, &stream, &what)?;
+        git::run_with_input(import, &stream, &what)?;
         let mut parse = self.git();
         parse.args(["rev-parse", "--verify", &reference]);
         let out = git::run(parse, &what)?;
@@ -509,27 +508,4 @@ fn quote(path: &str) -> Vec<u8> {
     }
     out.push(b'"');
     out
-}
-
-fn run_with_input(mut cmd: Command, input: &[u8], what: &str) -> Result<(), Failure> {
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| Failure::operational(format!("cannot run git (skiman requires git): {e}")))?;
-    let mut stdin = child.stdin.take().expect("piped stdin");
-    let input = input.to_vec();
-    let writer = std::thread::spawn(move || stdin.write_all(&input));
-    let output = child
-        .wait_with_output()
-        .map_err(|e| Failure::operational(format!("{what} failed: {e}")))?;
-    let _ = writer.join();
-    if !output.status.success() {
-        return Err(Failure::operational(format!(
-            "{what} failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    Ok(())
 }

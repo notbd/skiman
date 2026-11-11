@@ -23,6 +23,7 @@ use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::reported::Reported;
+use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
 
 /// Who reads sync's output.
@@ -315,6 +316,7 @@ fn reconcile_instruction_locations(
         }
         match std::fs::symlink_metadata(&location) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                test_hook::at("sync", &format!("link:{}", location.display()));
                 match fsutil::symlink_atomic(&target, &location) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
                     Err(e) => report
@@ -522,6 +524,7 @@ fn reconcile_tool_dir(
         let path = dir.join(name);
         match std::fs::symlink_metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                test_hook::at("sync", &format!("link:{}", path.display()));
                 match fsutil::symlink_atomic(target, &path) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
                     Err(e) => report

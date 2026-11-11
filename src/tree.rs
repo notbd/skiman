@@ -13,9 +13,10 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 /// File names ignored by hashing, diffing and the rules (spec Data formats, Tree hash).
-pub const IGNORED_NAMES: &[&str] = &[".DS_Store", "Thumbs.db"];
+/// `Icon\r` is the file macOS writes into a folder that has a custom icon.
+pub const IGNORED_NAMES: &[&str] = &[".DS_Store", "Thumbs.db", "Icon\r"];
 
-/// Whether the last component of `path` is `.DS_Store` or `Thumbs.db`.
+/// Whether the last component of `path` is one of [`IGNORED_NAMES`].
 pub fn is_ignored(path: &str) -> bool {
     IGNORED_NAMES.contains(&basename(path))
 }
@@ -274,8 +275,8 @@ impl Tree for Overlay<'_> {
 /// The spec's **tree hash** of the folder `dir` in `tree`, as `sha256:<hex>`:
 /// sha256 over the regular files sorted by UTF-8 path bytes, each contributing
 /// `path \0 executable-bit \0 sha256(content) \n` with `path` relative to
-/// `dir`. Symlinks, special files, `.DS_Store`, `Thumbs.db` and empty folders
-/// do not take part. A missing folder hashes like an empty one.
+/// `dir`. Symlinks, special files, [`IGNORED_NAMES`] and empty folders do not
+/// take part. A missing folder hashes like an empty one.
 pub fn tree_hash(tree: &dyn Tree, dir: &str) -> io::Result<String> {
     let skip = if dir.is_empty() { 0 } else { dir.len() + 1 };
     let mut hasher = Sha256::new();
@@ -293,7 +294,7 @@ pub fn tree_hash(tree: &dyn Tree, dir: &str) -> io::Result<String> {
 }
 
 /// [`tree_hash`] of files held in memory: `(path relative to the folder,
-/// executable, content)`, in any order. `.DS_Store` and `Thumbs.db` are skipped.
+/// executable, content)`, in any order. [`IGNORED_NAMES`] are skipped.
 pub fn files_hash<'a>(files: impl IntoIterator<Item = (&'a str, bool, &'a [u8])>) -> String {
     let mut files: Vec<_> = files
         .into_iter()

@@ -24,7 +24,8 @@ pub struct SnapshotFile {
 }
 
 /// The files of one folder of an upstream commit, sorted by path bytes.
-/// `.DS_Store` and `Thumbs.db` are left out (never copied into the skill repo).
+/// Ignored names ([`tree::IGNORED_NAMES`]) are left out (never copied into the
+/// skill repo).
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub files: Vec<SnapshotFile>,
@@ -47,8 +48,8 @@ impl Snapshot {
     }
 
     /// The regular files of the folder `dir` on disk, read once (a missing
-    /// folder has none). `.DS_Store` and `Thumbs.db` are left out; a symlink
-    /// or a special file is refused (exit 1).
+    /// folder has none). Ignored names are left out; a symlink or a special
+    /// file is refused (exit 1).
     pub fn from_folder(dir: &Path) -> Result<Snapshot, Failure> {
         let io =
             |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", dir.display()));

@@ -74,7 +74,8 @@ skill passes the everyday rules:
   and quoted `password`, `secret` or `token` values. A secret that must stay
   (a test fixture) needs a `[[secrets.allow]]` entry in `skiman.toml`; the
   refusal prints the entry ready to paste.
-- `.DS_Store` and `Thumbs.db` files are ignored.
+- `.DS_Store`, `Thumbs.db` and `Icon\r` (a folder's custom icon on macOS)
+  files are ignored.
 
 ### instructions/shared.md
 

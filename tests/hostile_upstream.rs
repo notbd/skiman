@@ -182,6 +182,113 @@ fn a_tree_entry_whose_name_holds_a_slash_is_refused() {
     assert_refused(&sandbox, "acme/pdf", "docs/hidden.md");
 }
 
+/// Names that would make the file list lie: a terminal escape, a carriage
+/// return, a line feed, two direction controls and a line separator.
+const DECEPTIVE_NAMES: [&str; 6] = [
+    "steal.sh\u{1b}[8m",
+    "run.sh\r  README.md",
+    "a\nb.md",
+    "notes\u{202e}hs.md",
+    "x\u{61c}y.md",
+    "line\u{2028}break.md",
+];
+
+#[test]
+fn control_and_direction_changing_characters_in_a_name_are_refused_for_a_git_and_a_local_source() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    for name in DECEPTIVE_NAMES {
+        crafted_upstream(&sandbox, |up| {
+            let file = blob(&sandbox, up, b"#!/bin/sh\n");
+            vec![("100755", name.as_bytes().to_vec(), file)]
+        });
+        let stderr = assert_refused(&sandbox, "acme/pdf", &format!("{name:?}"));
+        assert!(!stderr.contains(name), "printed unescaped: {stderr}");
+    }
+
+    let dir = local_upstream(&sandbox);
+    for name in DECEPTIVE_NAMES {
+        write(dir.join("docs").join(name), "x\n");
+        let stderr = assert_refused(
+            &sandbox,
+            "~/src/pdf",
+            &format!("{:?}", format!("docs/{name}")),
+        );
+        assert!(!stderr.contains(name), "printed unescaped: {stderr}");
+        std::fs::remove_file(dir.join("docs").join(name)).unwrap();
+    }
+}
+
+/// Names in other scripts: Chinese, Arabic, a combining accent, and the
+/// zero-width non-joiner Persian spelling needs.
+const SCRIPT_NAMES: [&str; 4] = ["说明.md", "مرجع.md", "cafe\u{301}.md", "می\u{200c}خواهم.md"];
+
+#[test]
+fn names_in_other_scripts_and_with_combining_characters_are_installed_for_a_git_and_a_local_source()
+{
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    crafted_upstream(&sandbox, |up| {
+        SCRIPT_NAMES
+            .iter()
+            .map(|name| {
+                (
+                    "100644",
+                    name.as_bytes().to_vec(),
+                    blob(&sandbox, up, b"x\n"),
+                )
+            })
+            .collect()
+    });
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+    for name in SCRIPT_NAMES {
+        assert!(
+            sandbox.skill_repo().join("skills/pdf").join(name).is_file(),
+            "{name}"
+        );
+    }
+
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = local_upstream(&sandbox);
+    for name in SCRIPT_NAMES {
+        write(dir.join(name), "x\n");
+    }
+    sandbox
+        .skiman()
+        .args(["add", "~/src/pdf", "--yes"])
+        .assert()
+        .code(0);
+    for name in SCRIPT_NAMES {
+        assert!(
+            sandbox.skill_repo().join("skills/pdf").join(name).is_file(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_macos_folder_icon_file_is_ignored_rather_than_refused() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = local_upstream(&sandbox);
+    write(dir.join("Icon\r"), "");
+
+    sandbox
+        .skiman()
+        .args(["add", "~/src/pdf", "--yes"])
+        .assert()
+        .code(0);
+
+    let skill = sandbox.skill_repo().join("skills/pdf");
+    assert!(skill.join("SKILL.md").is_file());
+    assert!(!skill.join("Icon\r").exists());
+}
+
 #[test]
 fn a_case_collision_is_refused() {
     let sandbox = Sandbox::new();

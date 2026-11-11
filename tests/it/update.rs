@@ -7,45 +7,9 @@ use std::io::Write;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
-use crate::support::{Sandbox, Upstream, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, text: &str) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
-}
-
-/// Twenty numbered lines, so git sees edits far apart as separate hunks and
-/// detects renames.
-fn lines(edits: &[(usize, &str)]) -> String {
-    (1..=20)
-        .map(|n| {
-            let line = edits
-                .iter()
-                .find(|(at, _)| *at == n)
-                .map_or_else(|| format!("line {n}"), |(_, text)| (*text).to_owned());
-            format!("{line}\n")
-        })
-        .collect()
-}
-
-const PDF_SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
+use crate::support::{
+    PDF_SKILL_MD, Sandbox, Upstream, backup_dirs, init, lines, read, tree, tree_hash, write,
+};
 
 /// Upstream `acme/pdf` (one skill at its root), installed as `pdf`.
 fn installed(sandbox: &Sandbox) -> Upstream {
@@ -85,11 +49,11 @@ fn a_clean_merge_keeps_committed_and_uncommitted_local_edits_and_applies_the_ups
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
     let skill = sandbox.skill_repo().join("skills/pdf");
-    write(skill.join("reference.md"), &lines(&[(2, "committed edit")]));
+    write(skill.join("reference.md"), lines(&[(2, "committed edit")]));
     commit_skill_repo(&sandbox, "local edit");
     write(
         skill.join("reference.md"),
-        &lines(&[(2, "committed edit"), (10, "uncommitted edit")]),
+        lines(&[(2, "committed edit"), (10, "uncommitted edit")]),
     );
     up.write("reference.md", lines(&[(18, "upstream fix")]));
     let commit = up.commit("v2");
@@ -143,7 +107,7 @@ fn structural_changes_on_both_sides_merge_cleanly() {
     // Each side also edits the file the other side renames.
     write(
         skill.join("up-rename.md"),
-        &lines(&[(1, "up rename"), (10, "my edit")]),
+        lines(&[(1, "up rename"), (10, "my edit")]),
     );
     up.write("theirs.md", "added upstream\n")
         .remove("up-delete.md")
@@ -194,26 +158,13 @@ fn structural_changes_on_both_sides_merge_cleanly() {
     );
 }
 
-fn backups(sandbox: &Sandbox) -> PathBuf {
-    sandbox.state_home().join("skiman/backups")
-}
-
-fn backup_dirs(sandbox: &Sandbox) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = match std::fs::read_dir(backups(sandbox)) {
-        Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
-        Err(_) => Vec::new(),
-    };
-    dirs.sort();
-    dirs
-}
-
 #[test]
 fn after_an_update_the_snapshot_and_lock_match_upstream_and_the_old_state_sits_in_one_backup() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
     let repo = sandbox.skill_repo();
     let skill = repo.join("skills/pdf");
-    write(skill.join("forms.md"), &lines(&[(1, "uncommitted edit")]));
+    write(skill.join("forms.md"), lines(&[(1, "uncommitted edit")]));
     let old_skill = tree(&skill);
     let old_upstream = tree(repo.join("upstream/pdf"));
     let old_manifest = read(repo.join("skiman.toml"));
@@ -229,7 +180,7 @@ fn after_an_update_the_snapshot_and_lock_match_upstream_and_the_old_state_sits_i
         read(repo.join("skiman.lock")),
         format!(
             "version = 1\n\n[skills.pdf]\ncommit = \"{commit}\"\nsnapshot = \"{}\"\n",
-            expected_tree_hash(&up)
+            tree_hash(&repo.join("upstream/pdf"))
         )
     );
     assert_eq!(read(repo.join("skiman.toml")), old_manifest);
@@ -264,33 +215,6 @@ fn tree_at_head(up: &Upstream) -> BTreeMap<PathBuf, String> {
     let mut all = tree(up.path());
     all.retain(|path, _| !path.starts_with(".git"));
     all
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The spec's tree hash of the upstream's working tree, computed here
-/// independently of skiman.
-fn expected_tree_hash(up: &Upstream) -> String {
-    tree_hash_of(tree_at_head(up))
-}
-
-/// The spec's tree hash of the files of a `tree()` listing.
-fn tree_hash_of(entries: BTreeMap<PathBuf, String>) -> String {
-    let mut text = Vec::new();
-    for (path, value) in entries {
-        let Some(rest) = value.strip_prefix("file ") else {
-            continue;
-        };
-        let (mode, content) = rest.split_once(' ').unwrap();
-        let exec = u32::from_str_radix(mode, 8).unwrap() & 0o100 != 0;
-        text.extend_from_slice(path.to_str().unwrap().as_bytes());
-        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
-        text.extend_from_slice(hex(&Sha256::digest(content.as_bytes())).as_bytes());
-        text.push(b'\n');
-    }
-    format!("sha256:{}", hex(&Sha256::digest(&text)))
 }
 
 /// The whole skill repo (including `.git` and `.skiman`).
@@ -415,7 +339,7 @@ fn the_merge_ignores_the_users_git_config_drivers_and_hooks() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
     let skill = sandbox.skill_repo().join("skills/pdf");
-    write(skill.join("reference.md"), &lines(&[(2, "local edit")]));
+    write(skill.join("reference.md"), lines(&[(2, "local edit")]));
     up.write("reference.md", lines(&[(18, "upstream fix")]));
     up.commit("v2");
 
@@ -431,7 +355,7 @@ fn the_merge_ignores_the_users_git_config_drivers_and_hooks() {
     ] {
         write(
             hooks.join(hook),
-            &format!("#!/bin/sh\necho {hook} >> '{}'\n", marker.display()),
+            format!("#!/bin/sh\necho {hook} >> '{}'\n", marker.display()),
         );
         std::fs::set_permissions(hooks.join(hook), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
@@ -521,7 +445,7 @@ fn a_secret_in_a_local_file_the_merge_did_not_change_refuses_the_update() {
     let key = format!("AKIA{}", "ABCDEFGHIJKLMNOP");
     write(
         sandbox.skill_repo().join("skills/pdf/notes.md"),
-        &format!("key {key}\n"),
+        format!("key {key}\n"),
     );
     up.write("reference.md", lines(&[(5, "upstream fix")]));
     up.commit("v2");
@@ -593,7 +517,7 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
         assert_ne!(kept.len(), text.lines().count(), "no `{key}` in:\n{text}");
         kept.join("\n") + "\n"
     };
-    write(repo.join("skiman.toml"), &without(&manifest, "url"));
+    write(repo.join("skiman.toml"), without(&manifest, "url"));
     let before = skill_repo_tree(&sandbox);
     sandbox
         .skiman()
@@ -607,7 +531,7 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
     assert_eq!(skill_repo_tree(&sandbox), before);
 
     write(repo.join("skiman.toml"), &manifest);
-    write(repo.join("skiman.lock"), &without(&lock, "snapshot"));
+    write(repo.join("skiman.lock"), without(&lock, "snapshot"));
     let before = skill_repo_tree(&sandbox);
     sandbox
         .skiman()
@@ -630,7 +554,7 @@ fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
     let pwned = sandbox.home().join("PWNED");
     write(
         bin.join("git-remote-evil"),
-        &format!("#!/bin/sh\ntouch '{}'\n", pwned.display()),
+        format!("#!/bin/sh\ntouch '{}'\n", pwned.display()),
     );
     std::fs::set_permissions(
         bin.join("git-remote-evil"),
@@ -652,7 +576,7 @@ fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
             .to_owned();
         write(
             repo.join("skiman.toml"),
-            &manifest.replace(&line, &format!("url = \"{url}\"")),
+            manifest.replace(&line, &format!("url = \"{url}\"")),
         );
         let before = skill_repo_tree(&sandbox);
         sandbox
@@ -755,7 +679,10 @@ fn installed_with_a_gitignore(sandbox: &Sandbox) -> Upstream {
         .lines()
         .find_map(|line| line.strip_prefix("snapshot = "))
         .unwrap();
-    let lock = lock.replace(snapshot, &format!("\"{}\"", expected_tree_hash(&up)));
+    let lock = lock.replace(
+        snapshot,
+        &format!("\"{}\"", tree_hash(&repo.join("upstream/pdf"))),
+    );
     std::fs::write(repo.join("skiman.lock"), lock).unwrap();
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
     up
@@ -782,7 +709,7 @@ fn an_unchanged_upstream_gitignore_from_an_earlier_install_is_removed_by_the_nex
     let repo = sandbox.skill_repo();
     assert!(!repo.join("skills/pdf/.gitignore").exists());
     assert!(!repo.join("upstream/pdf/.gitignore").exists());
-    let snapshot = tree_hash_of(tree(repo.join("upstream/pdf")));
+    let snapshot = tree_hash(&repo.join("upstream/pdf"));
     assert!(
         read(repo.join("skiman.lock")).contains(&format!("snapshot = \"{snapshot}\"")),
         "the lock does not hold {snapshot}"

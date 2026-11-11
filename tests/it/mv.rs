@@ -5,33 +5,16 @@
 
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, assert_symlink, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
+use crate::support::{
+    Sandbox, Tool, assert_symlink, aws_key, check_is_clean, exists, fingerprint, init, read, tree,
+};
 
 fn append(path: impl AsRef<Path>, text: &str) {
     let mut old = read(&path);
     old.push_str(text);
     std::fs::write(path, old).unwrap();
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
 }
 
 /// The skill repo (without `.git`) and every tool directory.
@@ -50,28 +33,12 @@ fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> 
     world
 }
 
-fn check_is_clean(sandbox: &Sandbox) {
-    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
-}
-
 fn assert_linked_only_as(sandbox: &Sandbox, new: &str, old: &str) {
     let target = sandbox.skill_repo().join("skills").join(new);
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join(new), &target, &target);
         assert!(!exists(sandbox.tool_dir(tool).join(old)), "{old} link left");
     }
-}
-
-fn aws_key() -> String {
-    ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat()
-}
-
-fn fingerprint(matched: &str) -> String {
-    let hex: String = Sha256::digest(matched.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    format!("sha256:{hex}")
 }
 
 /// A third-party skill `pdf` from `acme/pdf`, installed by `add`.

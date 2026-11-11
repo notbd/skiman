@@ -2,35 +2,17 @@
 //! URLs, local folders), `--ref`, and skill discovery and selection in an
 //! upstream that holds several skills.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, Upstream, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
+use crate::support::{Sandbox, Tool, Upstream, init, read, skill_md, tree};
 
 /// The whole skill repo and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
     let mut world = vec![tree(sandbox.skill_repo())];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: The {name} skill\n---\n\n# {name}\n")
 }
 
 /// `acme/skills` with skills `pdf` and `docx` side by side under `skills/`.

@@ -2,22 +2,10 @@
 //! against its upstream snapshot, as a unified diff. Read-only.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
 
 use snapbox::{IntoData, str};
 
-use crate::support::Sandbox;
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-const PDF_SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
+use crate::support::{PDF_SKILL_MD, Sandbox, init, write};
 
 /// Installs `acme/pdf` (`SKILL.md`, `reference.md`, `fill.sh`), with extra `add` args.
 fn add_pdf(sandbox: &Sandbox, extra: &[&str]) {
@@ -34,10 +22,6 @@ fn add_pdf(sandbox: &Sandbox, extra: &[&str]) {
         .code(0);
 }
 
-fn write(path: impl AsRef<Path>, contents: &str) {
-    std::fs::write(path, contents).unwrap();
-}
-
 #[test]
 fn diff_after_a_local_edit_shows_exactly_that_edit() {
     let sandbox = Sandbox::new();
@@ -46,7 +30,7 @@ fn diff_after_a_local_edit_shows_exactly_that_edit() {
     let skill = sandbox.skill_repo().join("skills/pdf");
     write(
         skill.join("SKILL.md"),
-        &PDF_SKILL_MD.replace("# pdf\n", "# pdf, edited\n"),
+        PDF_SKILL_MD.replace("# pdf\n", "# pdf, edited\n"),
     );
 
     sandbox

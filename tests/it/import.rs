@@ -5,31 +5,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: The {name} skill\n---\n\n# {name}\n")
-}
+use crate::support::{Sandbox, Tool, init, read, skill_md, tree, write};
 
 /// An import folder outside the skill repo holding own skill `notes`, a
 /// shared body and a `skiman.toml` with `manifest` as its text.

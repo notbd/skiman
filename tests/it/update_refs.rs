@@ -7,29 +7,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Upstream, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, text: &str) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
-}
-
-const PDF_SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
+use crate::support::{PDF_SKILL_MD, Sandbox, Upstream, init, read, tree, write};
 
 /// `acme/pdf` (one skill at its root) with `VERSION` = 1 at the first commit.
 fn upstream(sandbox: &Sandbox) -> (Upstream, String) {
@@ -84,7 +62,7 @@ fn edit_manifest(sandbox: &Sandbox, from: &str, to: &str) {
     let path = repo(sandbox).join("skiman.toml");
     let text = read(&path);
     assert!(text.contains(from), "{text}");
-    write(&path, &text.replace(from, to));
+    write(&path, text.replace(from, to));
 }
 
 fn inodes(dir: impl AsRef<Path>) -> BTreeMap<PathBuf, u64> {

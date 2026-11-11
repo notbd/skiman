@@ -6,16 +6,7 @@ use std::path::PathBuf;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, assert_symlink};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{Sandbox, Tool, assert_symlink, init};
 
 fn shared_body(sandbox: &Sandbox) -> PathBuf {
     sandbox.skill_repo().join("instructions/shared.md")

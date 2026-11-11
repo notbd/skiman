@@ -6,21 +6,7 @@ use std::path::Path;
 
 use snapbox::str;
 
-use crate::support::Sandbox;
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
+use crate::support::{Sandbox, init, read};
 
 /// Replaces the first occurrence of `from` in the file at `path`.
 fn edit(path: impl AsRef<Path>, from: &str, to: &str) {

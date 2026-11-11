@@ -1,29 +1,11 @@
 //! `skiman remove <name>`: move a skill's folders to a backup, drop its
 //! records and its tool-directory links.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
+use crate::support::{Sandbox, Tool, check_is_clean, exists, init, only_backup, read, tree};
 
 /// The skill repo (without `.git` and `.skiman`) and every tool directory.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
@@ -38,21 +20,6 @@ fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> 
     ];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
-}
-
-/// The only folder under `backups/`.
-fn only_backup(sandbox: &Sandbox) -> PathBuf {
-    let backups = sandbox.state_home().join("skiman/backups");
-    let dirs: Vec<PathBuf> = std::fs::read_dir(&backups)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(dirs.len(), 1, "one backup folder: {dirs:?}");
-    dirs.into_iter().next().unwrap()
-}
-
-fn check_is_clean(sandbox: &Sandbox) {
-    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
 /// A third-party skill `pdf` from `acme/pdf`, installed by `add`.

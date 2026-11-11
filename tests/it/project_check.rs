@@ -7,29 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
-use crate::support::Sandbox;
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
+use crate::support::{Sandbox, aws_key, fingerprint, init, read, write};
 
 fn append(path: impl AsRef<Path>, text: &str) {
     let mut old = read(&path);
@@ -106,18 +84,6 @@ fn git_commit_all(sandbox: &Sandbox, dir: &Path) {
             "mirror",
         ],
     );
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-fn fingerprint(matched: &str) -> String {
-    format!("sha256:{}", hex(&Sha256::digest(matched.as_bytes())))
-}
-
-fn aws_key() -> String {
-    ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat()
 }
 
 const GIT_CONFLICT: &str = "intro\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\n";

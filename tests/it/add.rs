@@ -2,30 +2,14 @@
 //! upstream (reached through the sandbox's `insteadOf` rule, no network).
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use sha2::{Digest, Sha256};
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, Upstream, assert_symlink, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn is_executable(path: impl AsRef<Path>) -> bool {
-    std::fs::metadata(path).unwrap().permissions().mode() & 0o100 != 0
-}
+use crate::support::{
+    PDF_SKILL_MD, Sandbox, Tool, Upstream, assert_symlink, backups, fingerprint, init,
+    is_executable, read, tree, tree_hash,
+};
 
 /// An upstream `acme/<repo>` whose root is one skill.
 fn single_skill(sandbox: &Sandbox, repo: &str, skill_md: &str) -> Upstream {
@@ -37,47 +21,12 @@ fn single_skill(sandbox: &Sandbox, repo: &str, skill_md: &str) -> Upstream {
     up
 }
 
-const PDF_SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
-
 /// The whole skill repo (including `.git` and `.skiman`) and every tool
 /// directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
     let mut world = vec![tree(sandbox.skill_repo())];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The spec's tree hash, computed here independently of skiman: regular
-/// files only, sorted by path bytes, `path \0 x \0 sha256 \n`.
-fn expected_tree_hash(dir: &Path) -> String {
-    fn files(root: &Path, dir: &Path, out: &mut Vec<(String, bool, Vec<u8>)>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            let meta = std::fs::symlink_metadata(&path).unwrap();
-            if meta.is_dir() {
-                files(root, &path, out);
-            } else if meta.is_file() {
-                let rel = path.strip_prefix(root).unwrap().to_str().unwrap();
-                let exec = meta.permissions().mode() & 0o100 != 0;
-                out.push((rel.to_owned(), exec, std::fs::read(&path).unwrap()));
-            }
-        }
-    }
-    let mut list = Vec::new();
-    files(dir, dir, &mut list);
-    list.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let mut text = Vec::new();
-    for (rel, exec, content) in list {
-        text.extend_from_slice(rel.as_bytes());
-        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
-        text.extend_from_slice(hex(&Sha256::digest(&content)).as_bytes());
-        text.push(b'\n');
-    }
-    format!("sha256:{}", hex(&Sha256::digest(&text)))
 }
 
 fn has_commit(sandbox: &Sandbox) -> bool {
@@ -135,7 +84,7 @@ linked [..]/home/.gemini/config/skills/pdf
         format!(
             "version = 1\n\n[skills.pdf]\ncommit = \"{}\"\nsnapshot = \"{}\"\n",
             up.head(),
-            expected_tree_hash(&repo.join("upstream/pdf"))
+            tree_hash(&repo.join("upstream/pdf"))
         )
     );
     let target = repo.join("skills/pdf");
@@ -427,10 +376,6 @@ fn plant_tmp_leftover(sandbox: &Sandbox) -> PathBuf {
     std::fs::create_dir_all(&leftover).unwrap();
     std::fs::write(leftover.join("SKILL.md"), "an edit worth keeping\n").unwrap();
     sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z")
-}
-
-fn backups(sandbox: &Sandbox) -> PathBuf {
-    sandbox.state_home().join("skiman/backups")
 }
 
 #[test]
@@ -778,10 +723,6 @@ fn add_ignores_the_git_environment_of_a_calling_git_process() {
         .code(0);
 
     assert!(sandbox.skill_repo().join("upstream/pdf/SKILL.md").is_file());
-}
-
-fn fingerprint(matched: &str) -> String {
-    format!("sha256:{}", hex(&Sha256::digest(matched.as_bytes())))
 }
 
 #[test]

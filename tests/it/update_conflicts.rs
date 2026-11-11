@@ -5,42 +5,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Upstream, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{PDF_SKILL_MD, Sandbox, Upstream, init, lines, tree, tree_hash, write};
 
 fn read(path: impl AsRef<Path>) -> Vec<u8> {
     std::fs::read(path.as_ref()).unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
 }
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-/// Twenty numbered lines, so git sees edits far apart as separate hunks and
-/// detects renames.
-fn lines(edits: &[(usize, &str)]) -> String {
-    (1..=20)
-        .map(|n| {
-            let line = edits
-                .iter()
-                .find(|(at, _)| *at == n)
-                .map_or_else(|| format!("line {n}"), |(_, text)| (*text).to_owned());
-            format!("{line}\n")
-        })
-        .collect()
-}
-
-const PDF_SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
 
 /// Upstream `acme/pdf` holding `SKILL.md` plus `files`, installed as `pdf`.
 fn installed_with(sandbox: &Sandbox, files: &[(&str, &[u8])]) -> Upstream {
@@ -181,26 +150,6 @@ fn owned(files: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
         .iter()
         .map(|(p, c)| ((*p).to_owned(), c.to_vec()))
         .collect()
-}
-
-/// The spec's tree hash of the regular files below `dir`, computed here
-/// independently of skiman.
-fn tree_hash(dir: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
-    let mut text = Vec::new();
-    for (path, value) in tree(dir) {
-        let Some(rest) = value.strip_prefix("file ") else {
-            continue;
-        };
-        let (mode, content) = rest.split_once(' ').unwrap();
-        let exec = u32::from_str_radix(mode, 8).unwrap() & 0o100 != 0;
-        text.extend_from_slice(path.to_str().unwrap().as_bytes());
-        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
-        text.extend_from_slice(hex(&Sha256::digest(content.as_bytes())).as_bytes());
-        text.push(b'\n');
-    }
-    format!("sha256:{}", hex(&Sha256::digest(&text)))
 }
 
 /// `pdf` from an upstream whose root holds a `.gitignore`, laid out the way

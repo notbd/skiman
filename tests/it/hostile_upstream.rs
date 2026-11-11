@@ -2,21 +2,12 @@
 //! "Path safety", and Merge semantics): nothing outside the skill repo is
 //! written, no upstream code runs, and `--yes` bypasses none of it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::support::{Sandbox, Tool, Upstream, tree};
+use crate::support::{Sandbox, Tool, Upstream, init, tree, write};
 
 const SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
 const MIB: usize = 1024 * 1024;
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
 
 /// The whole skill repo and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
@@ -128,12 +119,6 @@ fn local_upstream(sandbox: &Sandbox) -> PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("SKILL.md"), SKILL_MD).unwrap();
     dir
-}
-
-fn write(path: impl AsRef<Path>, content: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, content).unwrap();
 }
 
 fn lfs_pointer() -> String {

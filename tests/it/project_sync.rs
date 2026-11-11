@@ -5,31 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
+use crate::support::{Sandbox, Tool, backups, exists, init, read, skill_md, tree, write};
 
 fn stdout_of(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
@@ -72,12 +48,8 @@ fn synced_file(sandbox: &Sandbox) -> PathBuf {
     sandbox.state_home().join("skiman/projects-synced.toml")
 }
 
-fn backups_dir(sandbox: &Sandbox) -> PathBuf {
-    sandbox.state_home().join("skiman/backups")
-}
-
 fn backup_count(sandbox: &Sandbox) -> usize {
-    std::fs::read_dir(backups_dir(sandbox)).map_or(0, |dirs| dirs.count())
+    std::fs::read_dir(backups(sandbox)).map_or(0, |dirs| dirs.count())
 }
 
 fn sync(sandbox: &Sandbox) -> std::process::Output {
@@ -86,10 +58,6 @@ fn sync(sandbox: &Sandbox) -> std::process::Output {
 
 fn hook(sandbox: &Sandbox) -> std::process::Output {
     sandbox.skiman().args(["sync", "--hook"]).output().unwrap()
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
 }
 
 /// A registered root with `proj/AGENTS.md` ("v1") adopted: sides equal,
@@ -159,7 +127,7 @@ fn a_project_edit_is_copied_into_the_mirror_with_the_old_mirror_in_a_backup() {
     );
     assert_eq!(stderr_of(&out), "");
     assert_sides(&sandbox, &dir, "proj/AGENTS.md", Some("v2\n"), Some("v2\n"));
-    let backups: Vec<PathBuf> = std::fs::read_dir(backups_dir(&sandbox))
+    let backups: Vec<PathBuf> = std::fs::read_dir(backups(&sandbox))
         .unwrap()
         .map(|e| e.unwrap().path())
         .collect();
@@ -1075,17 +1043,13 @@ fn a_backup_that_cannot_be_written_still_records_what_was_mirrored() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let dir = adopted_file(&sandbox);
-    std::fs::create_dir_all(backups_dir(&sandbox)).unwrap();
+    std::fs::create_dir_all(backups(&sandbox)).unwrap();
     let locked = std::fs::Permissions::from_mode(0o500);
-    std::fs::set_permissions(backups_dir(&sandbox), locked).unwrap();
+    std::fs::set_permissions(backups(&sandbox), locked).unwrap();
     write(dir.join("proj/AGENTS.md"), "v2\n");
 
     let out = sync(&sandbox);
-    std::fs::set_permissions(
-        backups_dir(&sandbox),
-        std::fs::Permissions::from_mode(0o700),
-    )
-    .unwrap();
+    std::fs::set_permissions(backups(&sandbox), std::fs::Permissions::from_mode(0o700)).unwrap();
 
     assert_eq!(out.status.code(), Some(4), "{}", stderr_of(&out));
     assert!(

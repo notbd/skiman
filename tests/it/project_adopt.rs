@@ -11,18 +11,12 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use crate::support::{Sandbox, tree};
+use crate::support::{
+    Sandbox, aws_key, backups, exists, hex, init, only_backup, read, skill_md, tree, tree_hash,
+    write,
+};
 
 // ---------------------------------------------------------------- helpers
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
 
 /// The project root every test uses.
 fn root(sandbox: &Sandbox) -> PathBuf {
@@ -52,25 +46,6 @@ fn setup(extra: &str) -> Sandbox {
     sandbox
 }
 
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
-}
-
 /// A project skill folder holding a valid `SKILL.md`.
 fn skill(dir: impl AsRef<Path>) {
     let dir = dir.as_ref();
@@ -89,20 +64,6 @@ fn state_dir(sandbox: &Sandbox) -> PathBuf {
 
 fn synced_file(sandbox: &Sandbox) -> PathBuf {
     state_dir(sandbox).join("projects-synced.toml")
-}
-
-fn backups(sandbox: &Sandbox) -> PathBuf {
-    state_dir(sandbox).join("backups")
-}
-
-/// The only folder under `backups/`.
-fn only_backup(sandbox: &Sandbox) -> PathBuf {
-    let dirs: Vec<PathBuf> = std::fs::read_dir(backups(sandbox))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(dirs.len(), 1, "one backup folder: {dirs:?}");
-    dirs.into_iter().next().unwrap()
 }
 
 /// The skill repo (without `.git`) and skiman's machine state, to prove a
@@ -148,49 +109,9 @@ fn set(paths: &[&str]) -> BTreeSet<String> {
     paths.iter().map(|p| p.to_string()).collect()
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
 /// `sha256:<hex>` of `bytes`, the form skiman records for a file item.
 fn sha256(bytes: &[u8]) -> String {
-    format!("sha256:{}", sha256_hex(bytes))
-}
-
-/// The spec's tree hash of a folder, computed independently of skiman.
-fn tree_hash(dir: &Path) -> String {
-    fn files(root: &Path, dir: &Path, out: &mut Vec<(String, bool, Vec<u8>)>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            let meta = std::fs::symlink_metadata(&path).unwrap();
-            if meta.is_dir() {
-                files(root, &path, out);
-            } else {
-                let rel = path.strip_prefix(root).unwrap().to_str().unwrap();
-                let exec = meta.permissions().mode() & 0o100 != 0;
-                out.push((rel.to_owned(), exec, std::fs::read(&path).unwrap()));
-            }
-        }
-    }
-    let mut list = Vec::new();
-    files(dir, dir, &mut list);
-    list.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let mut text = Vec::new();
-    for (rel, exec, content) in list {
-        text.extend_from_slice(rel.as_bytes());
-        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
-        text.extend_from_slice(sha256_hex(&content).as_bytes());
-        text.push(b'\n');
-    }
-    sha256(&text)
-}
-
-/// Builds an AWS-key-like value at runtime, so the source never holds one.
-fn aws_key() -> String {
-    ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat()
+    format!("sha256:{}", hex(&Sha256::digest(bytes)))
 }
 
 // ---------------------------------------------------------------- discovery

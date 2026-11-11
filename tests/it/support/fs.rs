@@ -1,3 +1,4 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 /// Asserts that `link` is a symlink whose link text is exactly `lexical`
@@ -53,4 +54,28 @@ pub fn assert_dangling_symlink(link: impl AsRef<Path>, lexical: impl AsRef<Path>
         link.display(),
         link.canonicalize()
     );
+}
+
+/// The UTF-8 contents of `path`; the panic names the path.
+#[track_caller]
+pub fn read(path: impl AsRef<Path>) -> String {
+    std::fs::read_to_string(path.as_ref())
+        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
+}
+
+/// Writes `contents` at `path`, creating missing parent folders.
+pub fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
+    let path = path.as_ref();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, contents).unwrap();
+}
+
+/// Whether anything (a dangling symlink too) is at `path`.
+pub fn exists(path: impl AsRef<Path>) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+/// Whether the file at `path` has the owner's execute bit.
+pub fn is_executable(path: impl AsRef<Path>) -> bool {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o100 != 0
 }

@@ -6,16 +6,7 @@ use std::path::{Path, PathBuf};
 
 use snapbox::cmd::Command;
 
-use crate::support::{Sandbox, Tool, ToolSetup};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{Sandbox, Tool, ToolSetup, exists, init};
 
 fn initialised() -> Sandbox {
     let sandbox = Sandbox::new();
@@ -46,10 +37,6 @@ fn project(sandbox: &Sandbox, rel: &str) -> PathBuf {
     let dir = folder(sandbox.home().join(rel));
     std::fs::write(dir.join("AGENTS.md"), format!("# {rel}\n")).unwrap();
     dir
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
 }
 
 /// `skiman project add <path>`.

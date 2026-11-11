@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::support::Sandbox;
+use crate::support::{Sandbox, init};
 
 /// A disk image attached at `mount`, detached on drop.
 struct DiskImage {
@@ -77,15 +77,6 @@ fn attached(disk: Result<DiskImage, String>) -> Option<DiskImage> {
             None
         }
     }
-}
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
 }
 
 fn the_only_backup(state: &Path) -> PathBuf {

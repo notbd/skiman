@@ -6,16 +6,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use snapbox::str;
 
-use crate::support::Sandbox;
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{Sandbox, hex, init, skill_md, tree_hash};
 
 /// Writes `contents` at `rel` in the skill repo, creating folders, as a user editing by hand.
 fn write(sandbox: &Sandbox, rel: &str, contents: impl AsRef<[u8]>) -> PathBuf {
@@ -32,10 +23,6 @@ fn append(sandbox: &Sandbox, rel: &str, text: &str) {
     std::fs::write(path, old).unwrap();
 }
 
-fn valid_skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
-}
-
 /// A skill repo holding `skills/<name>/SKILL.md` with `skill_md`.
 fn repo_with_skill(name: &str, skill_md: &str) -> Sandbox {
     let sandbox = Sandbox::new();
@@ -44,58 +31,12 @@ fn repo_with_skill(name: &str, skill_md: &str) -> Sandbox {
     sandbox
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The spec's tree hash, computed here independently of skiman: regular
-/// files only, sorted by path bytes, `path \0 x \0 sha256 \n`, `.DS_Store`,
-/// `Thumbs.db` and `Icon\r` ignored.
-fn expected_tree_hash(dir: &Path) -> String {
-    fn files(root: &Path, dir: &Path, out: &mut Vec<(String, bool, Vec<u8>)>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            let meta = std::fs::symlink_metadata(&path).unwrap();
-            if meta.is_dir() {
-                files(root, &path, out);
-            } else if meta.is_file() {
-                let name = path.file_name().unwrap().to_str().unwrap();
-                if ![".DS_Store", "Thumbs.db", "Icon\r"].contains(&name) {
-                    let rel = path
-                        .strip_prefix(root)
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_owned();
-                    let exec = meta.permissions().mode() & 0o100 != 0;
-                    out.push((rel, exec, std::fs::read(&path).unwrap()));
-                }
-            }
-        }
-    }
-    let mut list = Vec::new();
-    files(dir, dir, &mut list);
-    list.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let mut text = Vec::new();
-    for (rel, exec, content) in list {
-        text.extend_from_slice(rel.as_bytes());
-        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
-        text.extend_from_slice(hex(&Sha256::digest(&content)).as_bytes());
-        text.push(b'\n');
-    }
-    format!("sha256:{}", hex(&Sha256::digest(&text)))
-}
-
 /// A third-party skill built by hand: `skills/<name>` and `upstream/<name>`
 /// with the same files, a `source` table and a lock entry whose snapshot is
 /// the tree hash of the upstream snapshot.
 fn third_party(sandbox: &Sandbox, name: &str) {
     for root in ["skills", "upstream"] {
-        write(
-            sandbox,
-            &format!("{root}/{name}/SKILL.md"),
-            valid_skill_md(name),
-        );
+        write(sandbox, &format!("{root}/{name}/SKILL.md"), skill_md(name));
         write(
             sandbox,
             &format!("{root}/{name}/scripts/run.sh"),
@@ -109,7 +50,7 @@ fn third_party(sandbox: &Sandbox, name: &str) {
             "\n[skills.{name}.source]\nurl = \"https://github.com/acme/skills.git\"\npath = \"{name}\"\n"
         ),
     );
-    let hash = expected_tree_hash(&sandbox.skill_repo().join("upstream").join(name));
+    let hash = tree_hash(&sandbox.skill_repo().join("upstream").join(name));
     let lock = sandbox.skill_repo().join("skiman.lock");
     if !lock.exists() {
         std::fs::write(&lock, "version = 1\n").unwrap();
@@ -223,7 +164,7 @@ skills/pdf/SKILL.md:3: name-format: `PDF` is not a valid skill name: use 1 to 64
 
 #[test]
 fn a_name_that_differs_from_the_folder_name_is_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("docx"));
+    let sandbox = repo_with_skill("pdf", &skill_md("docx"));
     check(&sandbox).code(1).stdout_eq(str![[r#"
 skills/pdf/SKILL.md:2: name-folder: `name` is `docx` but the folder is `pdf`; they must be equal
 
@@ -232,7 +173,7 @@ skills/pdf/SKILL.md:2: name-folder: `name` is `docx` but the folder is `pdf`; th
 
 #[test]
 fn a_reserved_name_in_the_frontmatter_is_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("synced"));
+    let sandbox = repo_with_skill("pdf", &skill_md("synced"));
     check(&sandbox).code(1).stdout_eq(str![[r#"
 skills/pdf/SKILL.md:2: name-folder: `name` is `synced` but the folder is `pdf`; they must be equal
 skills/pdf/SKILL.md:2: name-reserved: `synced` is a reserved skill name
@@ -246,11 +187,7 @@ fn skill_folders_with_reserved_invalid_or_too_long_names_are_reported() {
     init(&sandbox);
     let long = "a".repeat(65);
     for name in ["managing-skills", ".hidden", "Bad_Name", long.as_str()] {
-        write(
-            &sandbox,
-            &format!("skills/{name}/SKILL.md"),
-            valid_skill_md(name),
-        );
+        write(&sandbox, &format!("skills/{name}/SKILL.md"), skill_md(name));
     }
     // Finder litter next to the skills is ignored.
     write(&sandbox, "skills/.DS_Store", "x");
@@ -289,11 +226,11 @@ skills/pdf/SKILL.md:3: description-length: `description` must be 1 to 1024 chara
 
 #[test]
 fn symlinks_inside_skills_are_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("pdf"));
+    let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
     let repo = sandbox.skill_repo();
     std::os::unix::fs::symlink("SKILL.md", repo.join("skills/pdf/alias.md")).unwrap();
     std::fs::create_dir_all(repo.join("elsewhere")).unwrap();
-    std::fs::write(repo.join("elsewhere/SKILL.md"), valid_skill_md("docx")).unwrap();
+    std::fs::write(repo.join("elsewhere/SKILL.md"), skill_md("docx")).unwrap();
     std::os::unix::fs::symlink(repo.join("elsewhere"), repo.join("skills/docx")).unwrap();
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
@@ -311,7 +248,7 @@ fn sparse(path: &Path, size: u64) {
 
 #[test]
 fn a_file_over_10_mib_is_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("pdf"));
+    let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
     let repo = sandbox.skill_repo();
     sparse(&repo.join("skills/pdf/assets/limit.bin"), 10 * 1024 * 1024);
     sparse(
@@ -327,7 +264,7 @@ skills/pdf/assets/big.bin: file-size: 10485761 bytes; a file in a skill may be a
 
 #[test]
 fn more_than_1000_files_in_a_skill_are_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("pdf"));
+    let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
     for i in 0..999 {
         write(&sandbox, &format!("skills/pdf/data/{i}.txt"), "x");
     }
@@ -344,7 +281,7 @@ skills/pdf: file-count: 1001 files; a skill may hold at most 1000
 
 #[test]
 fn more_than_50_mib_in_a_skill_is_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("pdf"));
+    let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
     let repo = sandbox.skill_repo();
     for i in 0..6 {
         sparse(
@@ -361,7 +298,7 @@ skills/pdf: skill-size: 56623[..] bytes in total; a skill may hold at most 50 Mi
 
 #[test]
 fn every_form_of_unresolved_conflict_is_reported() {
-    let sandbox = repo_with_skill("pdf", &valid_skill_md("pdf"));
+    let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
     write(
         &sandbox,
         "skills/pdf/guide.md",
@@ -471,14 +408,14 @@ fn the_tree_hash_follows_the_spec_ignoring_finder_files_and_empty_folders() {
     let upstream = sandbox.skill_repo().join("upstream/pdf");
 
     // Worked example: the hashed text written out by hand.
-    let skill_md = valid_skill_md("pdf");
+    let skill_md = skill_md("pdf");
     let by_hand = format!(
         "SKILL.md\x000\x00{}\nscripts/run.sh\x000\x00{}\n",
         hex(&Sha256::digest(skill_md.as_bytes())),
         hex(&Sha256::digest(b"echo run\n")),
     );
     let by_hand = format!("sha256:{}", hex(&Sha256::digest(by_hand.as_bytes())));
-    assert_eq!(expected_tree_hash(&upstream), by_hand);
+    assert_eq!(tree_hash(&upstream), by_hand);
     check(&sandbox).code(0).stdout_eq("");
 
     std::fs::write(upstream.join(".DS_Store"), "finder").unwrap();
@@ -488,7 +425,7 @@ fn the_tree_hash_follows_the_spec_ignoring_finder_files_and_empty_folders() {
 
     let script = upstream.join("scripts/run.sh");
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let flipped = expected_tree_hash(&upstream);
+    let flipped = tree_hash(&upstream);
     assert_ne!(flipped, by_hand);
     check(&sandbox).code(1).stdout_eq(format!(
         "upstream/pdf: snapshot-hash: tree hash {flipped} does not match the snapshot {by_hand} in skiman.lock; upstream snapshots are never edited by hand, so restore it\n"
@@ -518,7 +455,7 @@ fn renaming_a_third_party_skill_everywhere_by_hand_passes() {
     let repo = sandbox.skill_repo();
     std::fs::rename(repo.join("skills/pdf"), repo.join("skills/forms")).unwrap();
     std::fs::rename(repo.join("upstream/pdf"), repo.join("upstream/forms")).unwrap();
-    write(&sandbox, "skills/forms/SKILL.md", valid_skill_md("forms"));
+    write(&sandbox, "skills/forms/SKILL.md", skill_md("forms"));
     for file in ["skiman.toml", "skiman.lock"] {
         let text = std::fs::read_to_string(repo.join(file))
             .unwrap()
@@ -536,7 +473,7 @@ fn an_incomplete_hand_rename_is_reported_piece_by_piece() {
     third_party(&sandbox, "pdf");
     let repo = sandbox.skill_repo();
     std::fs::rename(repo.join("skills/pdf"), repo.join("skills/forms")).unwrap();
-    write(&sandbox, "skills/forms/SKILL.md", valid_skill_md("forms"));
+    write(&sandbox, "skills/forms/SKILL.md", skill_md("forms"));
     let text = std::fs::read_to_string(repo.join("skiman.toml"))
         .unwrap()
         .replace("[skills.pdf", "[skills.forms");
@@ -610,7 +547,7 @@ upstream/pdf: leftover-record: leftover upstream snapshot, but skills/pdf does n
 
 #[test]
 fn leftover_records_and_rule_violations_together_exit_3() {
-    let sandbox = repo_with_skill("docx", &valid_skill_md("pdf"));
+    let sandbox = repo_with_skill("docx", &skill_md("pdf"));
     third_party(&sandbox, "pdf");
     std::fs::remove_dir_all(sandbox.skill_repo().join("skills/pdf")).unwrap();
 

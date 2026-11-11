@@ -5,16 +5,7 @@ use std::path::{Path, PathBuf};
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, assert_symlink, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{Sandbox, Tool, assert_symlink, init, tree};
 
 fn write_skill(dir: &Path, name: &str) {
     std::fs::create_dir_all(dir.join(name)).unwrap();

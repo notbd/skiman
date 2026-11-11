@@ -11,40 +11,9 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, Upstream, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, text: &str) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
-}
-
-/// Twenty numbered lines, so edits far apart merge cleanly.
-fn lines(edits: &[(usize, &str)]) -> String {
-    (1..=20)
-        .map(|n| {
-            let line = edits
-                .iter()
-                .find(|(at, _)| *at == n)
-                .map_or_else(|| format!("line {n}"), |(_, text)| (*text).to_owned());
-            format!("{line}\n")
-        })
-        .collect()
-}
+use crate::support::{
+    Sandbox, Tool, Upstream, backup_dirs, backups, init, lines, read, tree, write,
+};
 
 /// Upstream `acme/<name>` (one skill at its root), installed as `<name>`.
 fn installed(sandbox: &Sandbox, name: &str) -> Upstream {
@@ -71,24 +40,11 @@ fn pdf_with_an_update(sandbox: &Sandbox) -> Upstream {
     let up = installed(sandbox, "pdf");
     write(
         sandbox.skill_repo().join("skills/pdf/forms.md"),
-        &lines(&[(1, "uncommitted edit")]),
+        lines(&[(1, "uncommitted edit")]),
     );
     up.write("reference.md", lines(&[(20, "upstream fix")]));
     up.commit("v2");
     up
-}
-
-fn backups(sandbox: &Sandbox) -> PathBuf {
-    sandbox.state_home().join("skiman/backups")
-}
-
-fn backup_dirs(sandbox: &Sandbox) -> Vec<PathBuf> {
-    let mut dirs: Vec<PathBuf> = match std::fs::read_dir(backups(sandbox)) {
-        Ok(entries) => entries.map(|e| e.unwrap().path()).collect(),
-        Err(_) => Vec::new(),
-    };
-    dirs.sort();
-    dirs
 }
 
 /// `skiman update <names>` with the test hook set to run `command` at
@@ -261,7 +217,7 @@ fn follow_recovery(sandbox: &Sandbox, stderr: &str, leftovers: Option<&Path>) {
             let (_, fragment) = rest.rsplit_once(" with ").unwrap();
             let name = file_skill(rest);
             let path = repo.join(file);
-            write(&path, &paste(&read(&path), &name, &read(fragment)));
+            write(&path, paste(&read(&path), &name, &read(fragment)));
         } else if step == "run `skiman sync`" {
             sandbox.skiman().arg("sync").assert().code(0);
         } else {
@@ -479,7 +435,7 @@ fn a_skill_that_failed_part_way_is_recovered_after_a_later_command_moved_the_tmp
     for name in ["docx", "pdf"] {
         write(
             repo.join(format!("skills/{name}/forms.md")),
-            &lines(&[(1, "uncommitted edit")]),
+            lines(&[(1, "uncommitted edit")]),
         );
     }
     for up in [&docx, &pdf] {

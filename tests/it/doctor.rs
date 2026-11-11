@@ -4,7 +4,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, ToolSetup, tree};
+use crate::support::{Sandbox, Tool, ToolSetup, read, tree, write};
 
 const BINARY: &str = env!("CARGO_BIN_EXE_skiman");
 
@@ -17,22 +17,11 @@ fn init(sandbox: &Sandbox, session_hooks: &str) {
         .code(0);
 }
 
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, contents: &str) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
 /// A folder holding a `SKILL.md`, as another installer would leave it.
 fn skill_folder(dir: impl AsRef<Path>, name: &str) {
     write(
         dir.as_ref().join("SKILL.md"),
-        &format!("---\nname: {name}\ndescription: d\n---\n"),
+        format!("---\nname: {name}\ndescription: d\n---\n"),
     );
 }
 
@@ -152,7 +141,7 @@ fn doctor_reports_each_problem_in_one_place() {
     let gone_binary = sandbox.root().join("old/skiman");
     write(
         &config,
-        &read(&config).replace(BINARY, gone_binary.to_str().unwrap()),
+        read(&config).replace(BINARY, gone_binary.to_str().unwrap()),
     );
     // A git hook was deleted.
     std::fs::remove_file(repo.join(".git/hooks/post-merge")).unwrap();
@@ -284,7 +273,7 @@ fn fake_git(sandbox: &Sandbox, version_line: Option<&str>) -> String {
     std::fs::create_dir_all(&bin).unwrap();
     if let Some(line) = version_line {
         let git = bin.join("git");
-        write(&git, &format!("#!/bin/sh\necho '{line}'\n"));
+        write(&git, format!("#!/bin/sh\necho '{line}'\n"));
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     format!("{}:/bin", bin.display())

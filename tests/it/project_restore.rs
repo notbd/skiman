@@ -9,37 +9,9 @@ use std::path::{Path, PathBuf};
 use snapbox::cmd::Command;
 use snapbox::str;
 
-use crate::support::{Sandbox, tree};
+use crate::support::{Sandbox, backups, exists, init, read, skill_md, tree, write};
 
 const AGENTS: &str = "# a\n\nUse pnpm.\n";
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
-}
 
 /// An AWS-shaped key, built at runtime so no literal token is committed.
 fn secret() -> String {
@@ -63,10 +35,6 @@ fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
 
 fn synced_file(sandbox: &Sandbox) -> PathBuf {
     sandbox.state_home().join("skiman/projects-synced.toml")
-}
-
-fn backups_dir(sandbox: &Sandbox) -> PathBuf {
-    sandbox.state_home().join("skiman/backups")
 }
 
 /// A skill repo with `~/work` registered; `files` are written under the
@@ -117,7 +85,7 @@ fn eject(sandbox: &Sandbox, paths: &[PathBuf]) -> Command {
 
 /// Every path `backups/<ts>/<rel>` that exists.
 fn in_backups(sandbox: &Sandbox, rel: &str) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(backups_dir(sandbox)) else {
+    let Ok(entries) = std::fs::read_dir(backups(sandbox)) else {
         return Vec::new();
     };
     entries
@@ -391,7 +359,7 @@ moved the previous version of [..]/home/work/a/AGENTS.md, left by an interrupted
 
     assert!(!exists(&leftover));
     // Each leftover gets a fresh folder of its own under `swap-leftovers/`.
-    let kept: Vec<String> = tree(backups_dir(&sandbox))
+    let kept: Vec<String> = tree(backups(&sandbox))
         .into_iter()
         .filter(|(path, entry)| {
             path.to_string_lossy().contains("swap-leftovers/") && entry.starts_with("file")
@@ -412,7 +380,7 @@ fn restore_dry_run_prints_the_plan_and_writes_nothing() {
     let world = || {
         (
             tree(root(&sandbox)),
-            tree(backups_dir(&sandbox)),
+            tree(backups(&sandbox)),
             synced_text(&sandbox),
         )
     };

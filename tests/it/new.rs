@@ -2,16 +2,7 @@
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, assert_symlink, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{Sandbox, Tool, assert_symlink, init, tree};
 
 /// The skill repo and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<std::path::PathBuf, String>> {

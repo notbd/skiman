@@ -7,16 +7,7 @@ use std::path::{Path, PathBuf};
 use snapbox::cmd::Command;
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, Upstream, assert_symlink};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{PDF_SKILL_MD, Sandbox, Tool, Upstream, assert_symlink, init, skill_md};
 
 /// git in the skill repo with a commit identity; the caller asserts the outcome.
 fn git(sandbox: &Sandbox) -> Command {
@@ -36,10 +27,6 @@ fn write(sandbox: &Sandbox, rel: &str, contents: &str) -> PathBuf {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, contents).unwrap();
     path
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
 }
 
 /// Stages everything and commits; asserts that git (and so pre-commit) succeeded.
@@ -487,8 +474,6 @@ skiman: [..]/skill-repo is not the skill repo ([..]/second-repo), so its skiman 
 }
 
 // ------------------------------------------------- staging what the index lacks
-
-const PDF_SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
 
 /// `skiman add` of upstream `acme/pdf`, one skill at its root.
 fn add_pdf(sandbox: &Sandbox) -> Upstream {

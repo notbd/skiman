@@ -2,39 +2,14 @@
 //! skill repo, move the original entry to a backup, link the copy.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, assert_symlink, tree};
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn exists(path: impl AsRef<Path>) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
-
-fn is_executable(path: impl AsRef<Path>) -> bool {
-    std::fs::metadata(path).unwrap().permissions().mode() & 0o100 != 0
-}
+use crate::support::{
+    Sandbox, Tool, assert_symlink, check_is_clean, exists, init, is_executable, only_backup, read,
+    skill_md, tree, write,
+};
 
 /// The whole skill repo except `.git`, every tool directory and the
 /// backups, to prove a command changed nothing.
@@ -54,30 +29,11 @@ fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> 
     world
 }
 
-/// The only folder under `backups/`.
-fn only_backup(sandbox: &Sandbox) -> PathBuf {
-    let backups = sandbox.state_home().join("skiman/backups");
-    let dirs: Vec<PathBuf> = std::fs::read_dir(&backups)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(dirs.len(), 1, "one backup folder: {dirs:?}");
-    dirs.into_iter().next().unwrap()
-}
-
-fn check_is_clean(sandbox: &Sandbox) {
-    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
-}
-
 fn assert_linked(sandbox: &Sandbox, name: &str) {
     let target = sandbox.skill_repo().join("skills").join(name);
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join(name), &target, &target);
     }
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
 }
 
 /// A foreign skill folder `notes` in Claude Code's tool directory, made

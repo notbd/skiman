@@ -4,22 +4,10 @@
 //! Secret-like fixtures are built at runtime from pieces, so no literal token
 //! is committed (GitHub push protection would block it).
 
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
-use sha2::{Digest, Sha256};
-
-use crate::support::Sandbox;
-
-fn init(sandbox: &Sandbox) {
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
-        .assert()
-        .code(0);
-}
+use crate::support::{Sandbox, aws_key, fingerprint, init, skill_md, tree_hash};
 
 fn write(sandbox: &Sandbox, rel: &str, contents: impl AsRef<[u8]>) -> PathBuf {
     let path = sandbox.skill_repo().join(rel);
@@ -35,53 +23,12 @@ fn append(sandbox: &Sandbox, rel: &str, text: &str) {
     std::fs::write(path, old).unwrap();
 }
 
-fn valid_skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: Does {name} things\n---\n\n# {name}\n")
-}
-
 /// A skill repo with one own skill `pdf`.
 fn repo() -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write(&sandbox, "skills/pdf/SKILL.md", valid_skill_md("pdf"));
+    write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
     sandbox
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// The spec's tree hash, computed independently of skiman.
-fn expected_tree_hash(dir: &Path) -> String {
-    fn files(root: &Path, dir: &Path, out: &mut Vec<(String, bool, Vec<u8>)>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            let meta = std::fs::symlink_metadata(&path).unwrap();
-            if meta.is_dir() {
-                files(root, &path, out);
-            } else if meta.is_file() {
-                let rel = path
-                    .strip_prefix(root)
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_owned();
-                let exec = meta.permissions().mode() & 0o100 != 0;
-                out.push((rel, exec, std::fs::read(&path).unwrap()));
-            }
-        }
-    }
-    let mut list = Vec::new();
-    files(dir, dir, &mut list);
-    list.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
-    let mut text = Vec::new();
-    for (rel, exec, content) in list {
-        text.extend_from_slice(rel.as_bytes());
-        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
-        text.extend_from_slice(hex(&Sha256::digest(&content)).as_bytes());
-        text.push(b'\n');
-    }
-    format!("sha256:{}", hex(&Sha256::digest(&text)))
 }
 
 /// Makes `skills/<name>` third-party: a `source` table, `upstream/<name>`
@@ -97,7 +44,7 @@ fn third_party(sandbox: &Sandbox, name: &str, upstream_files: &[(&str, &str)]) {
             "\n[skills.{name}.source]\nurl = \"https://github.com/acme/skills.git\"\npath = \"{name}\"\n"
         ),
     );
-    let hash = expected_tree_hash(&sandbox.skill_repo().join("upstream").join(name));
+    let hash = tree_hash(&sandbox.skill_repo().join("upstream").join(name));
     append(
         sandbox,
         "skiman.lock",
@@ -106,15 +53,6 @@ fn third_party(sandbox: &Sandbox, name: &str, upstream_files: &[(&str, &str)]) {
             "a".repeat(40)
         ),
     );
-}
-
-fn fingerprint(matched: &str) -> String {
-    format!("sha256:{}", hex(&Sha256::digest(matched.as_bytes())))
-}
-
-// Secret-like values, assembled so the source never holds one.
-fn aws_key() -> String {
-    ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat()
 }
 
 /// What `skiman check` printed.
@@ -593,7 +531,7 @@ fn one_entry_covers_the_skill_its_upstream_snapshot_and_its_conflict_records() {
         &sandbox,
         "pdf",
         &[
-            ("SKILL.md", &valid_skill_md("pdf")),
+            ("SKILL.md", &skill_md("pdf")),
             ("tests/fixture.env", &fixture),
         ],
     );
@@ -640,7 +578,7 @@ fn a_match_only_in_the_snapshot_gets_a_skill_path_entry_and_one_in_instructions_
         &sandbox,
         "pdf",
         &[
-            ("SKILL.md", &valid_skill_md("pdf")),
+            ("SKILL.md", &skill_md("pdf")),
             ("old/notes.txt", &format!("{key}\n")),
         ],
     );

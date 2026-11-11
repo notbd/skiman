@@ -4,7 +4,7 @@ use std::process::Stdio;
 
 use snapbox::str;
 
-use crate::support::Sandbox;
+use crate::support::{Sandbox, read};
 
 #[test]
 fn version_prints_the_version_and_exits_0() {
@@ -86,11 +86,6 @@ fn closed_pipe() -> std::io::PipeWriter {
     let (reader, writer) = std::io::pipe().unwrap();
     drop(reader);
     writer
-}
-
-fn read(path: impl AsRef<std::path::Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
 }
 
 #[test]

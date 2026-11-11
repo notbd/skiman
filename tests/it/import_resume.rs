@@ -13,22 +13,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, tree};
-
-fn write(path: impl AsRef<Path>, contents: impl AsRef<[u8]>) {
-    let path = path.as_ref();
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, contents).unwrap();
-}
-
-fn read(path: impl AsRef<Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
-
-fn skill_md(name: &str) -> String {
-    format!("---\nname: {name}\ndescription: The {name} skill\n---\n\n# {name}\n")
-}
+use crate::support::{Sandbox, Tool, read, skill_md, tree, write};
 
 /// A setup with instruction files that are regular files, a skill copied
 /// into one tool directory and linked from another, a copy the import

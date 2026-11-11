@@ -5,12 +5,7 @@ use std::path::PathBuf;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, ToolSetup};
-
-fn read(path: impl AsRef<std::path::Path>) -> String {
-    std::fs::read_to_string(path.as_ref())
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
-}
+use crate::support::{Sandbox, Tool, ToolSetup, read};
 
 #[test]
 fn init_on_a_missing_path_creates_the_skill_repo_layout_and_the_user_config() {

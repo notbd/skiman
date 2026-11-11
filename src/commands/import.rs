@@ -1413,9 +1413,9 @@ fn other_shared_body(repo: &SkillRepo, folder: &Path) -> Failure {
 }
 
 /// What to do with each piece. Refuses (exit 1, nothing changed), naming
-/// each, a `skills/<name>` that differs from the folder's, anything in
-/// `skills/`, `upstream/` or `skiman.lock` that the import does not write,
-/// and a piece that is not a regular file or folder.
+/// each with its ways out, a `skills/<name>` that differs from the folder's,
+/// anything in `skills/`, `upstream/` or `skiman.lock` that the import does
+/// not write, and a piece that is not a regular file or folder.
 fn repo_todo(repo: &SkillRepo, candidate: &Candidate) -> Result<Vec<(Piece, Step)>, Failure> {
     let mut todo = Vec::new();
     let mut lines = Vec::new();
@@ -1425,15 +1425,21 @@ fn repo_todo(repo: &SkillRepo, candidate: &Candidate) -> Result<Vec<(Piece, Step
             (Held::Nothing, _) => Step::Write,
             (Held::Same, _) => Step::Keep,
             (Held::WrongType, PieceContent::Folder(_)) => {
-                lines.push(format!("{rel} is not a folder"));
+                lines.push(format!(
+                    "{rel} is not a folder: replace it with one, or move it away"
+                ));
                 continue;
             }
             (Held::WrongType, PieceContent::File(_)) => {
-                lines.push(format!("{rel} is not a regular file"));
+                lines.push(format!(
+                    "{rel} is not a regular file: replace it with one, or move it away"
+                ));
                 continue;
             }
             (Held::Other(_), _) if matches!(piece, Piece::Skill(_)) => {
-                lines.push(format!("{rel} differs from the import folder's {rel}"));
+                lines.push(format!(
+                    "{rel} differs from the import folder's {rel}: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's"
+                ));
                 continue;
             }
             (Held::Other(old), _) => Step::Replace(old),
@@ -1449,16 +1455,18 @@ fn repo_todo(repo: &SkillRepo, candidate: &Candidate) -> Result<Vec<(Piece, Step
                 _ => !third(name),
             });
         lines.extend(names.map(|name| match root {
-            "skills" => format!("{root}/{name} is not in the import folder"),
+            "skills" => format!(
+                "{root}/{name} is not in the import folder: remove it from the skill repo, or put it in the import folder"
+            ),
             _ => format!(
-                "{root}/{name} is the snapshot of no third-party skill in the import folder"
+                "{root}/{name} is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put {name} in the import folder as a third-party skill"
             ),
         }));
     }
     for name in Lockfile::load(repo)?.skill_names() {
         if !third(&name) {
             lines.push(format!(
-                "skiman.lock has an entry for {name}, which is no third-party skill in the import folder"
+                "skiman.lock has an entry for {name}, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put {name} in the import folder as a third-party skill"
             ));
         }
     }
@@ -1467,7 +1475,7 @@ fn repo_todo(repo: &SkillRepo, candidate: &Candidate) -> Result<Vec<(Piece, Step
     }
     let lines: Vec<String> = lines.iter().map(|l| format!("  {l}")).collect();
     Err(Failure::refused(format!(
-        "the skill repo {} holds content that is not this import's; import works only on a skill repo that holds nothing else: remove each of these from the skill repo, or make the import folder hold the same; nothing was changed:\n{}",
+        "the skill repo {} holds content that is not this import's; nothing was changed:\n{}",
         repo.root().display(),
         lines.join("\n")
     )))

@@ -412,8 +412,8 @@ fn assert_pdf_records_refused(sandbox: &Sandbox, folder: &Path) {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     for text in [
-        "  upstream/pdf is the snapshot of no third-party skill in the import folder\n",
-        "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder\n",
+        "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
+        "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
     ] {
         assert!(stderr.contains(text), "{text:?} not in {stderr}");
     }

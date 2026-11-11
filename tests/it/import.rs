@@ -304,7 +304,9 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &sandbox,
         &folder,
         1,
-        &["  skills/mine is not in the import folder\n"],
+        &[
+            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+        ],
     );
     std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
 
@@ -313,7 +315,9 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &sandbox,
         &folder,
         1,
-        &["  upstream/pdf is the snapshot of no third-party skill in the import folder\n"],
+        &[
+            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
+        ],
     );
     std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
 
@@ -326,7 +330,7 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &folder,
         1,
         &[
-            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder\n",
+            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
         ],
     );
     std::fs::remove_file(repo.join("skiman.lock")).unwrap();

@@ -544,8 +544,8 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes\n",
-            "  skills/mine is not in the import folder\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
+            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
         ],
     );
     assert!(!stderr.contains("upstream/pdf"), "{stderr}");
@@ -595,8 +595,8 @@ fn during_the_takeover_hand_edits_to_skiman_toml_are_kept_and_a_changed_skill_re
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes\n",
-            "  skills/mine is not in the import folder\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
+            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
         ],
     );
     std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
@@ -753,8 +753,78 @@ fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_t
         &sandbox,
         &other,
         &[
-            "  upstream/pdf is the snapshot of no third-party skill in the import folder\n",
-            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder\n",
+            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
+            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
         ],
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_out_until_it_is_removed()
+ {
+    let sandbox = Sandbox::new();
+    let Setup { folder, .. } = setup(&sandbox);
+    import_killed_at(&sandbox, &folder, "rename:skills/notes");
+    sandbox
+        .skiman()
+        .args(["new", "mine", "-d", "Mine"])
+        .output()
+        .unwrap();
+
+    assert_run_refused(
+        &sandbox,
+        &folder,
+        &[
+            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+        ],
+    );
+    sandbox
+        .skiman()
+        .args(["remove", "mine", "--yes"])
+        .assert()
+        .code(3);
+    assert!(!sandbox.skill_repo().join("skills/mine").exists());
+    let output = import(&sandbox, &folder);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn after_a_kill_a_skill_changed_through_its_link_refuses_the_run_with_both_ways_out_until_it_is_changed_back()
+ {
+    let sandbox = Sandbox::new();
+    let Setup { folder, .. } = setup(&sandbox);
+    import_killed_at(&sandbox, &folder, "moved:claude-code/notes");
+    sandbox.skiman().arg("sync").output().unwrap();
+    let linked = sandbox.tool_dir(Tool::ClaudeCode).join("notes/SKILL.md");
+    let notes = read(&linked);
+    write(&linked, format!("{notes}\nMade in a session.\n"));
+
+    assert_run_refused(
+        &sandbox,
+        &folder,
+        &[
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
+        ],
+    );
+    write(&linked, &notes);
+    let output = import(&sandbox, &folder);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

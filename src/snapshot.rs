@@ -118,13 +118,10 @@ impl Snapshot {
 
     /// Moves the files named in [`GIT_FILES`] from `files` to `git_files`.
     fn without_git_files(mut self) -> Snapshot {
-        let (git_files, files) =
-            std::mem::take(&mut self.files)
-                .into_iter()
-                .partition(|file: &SnapshotFile| {
-                    let name = tree::basename(&file.path);
-                    GIT_FILES.iter().any(|g| name.eq_ignore_ascii_case(g))
-                });
+        let (git_files, files) = self.files.into_iter().partition(|file: &SnapshotFile| {
+            let name = tree::basename(&file.path);
+            GIT_FILES.iter().any(|g| name.eq_ignore_ascii_case(g))
+        });
         self.files = files;
         self.git_files = git_files.into_iter().map(|file| file.path).collect();
         self
@@ -267,12 +264,6 @@ pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, Stri
         .collect())
 }
 
-/// The contents of the blobs `oids`, in order. A path never goes into the
-/// request, so no name can break its line protocol.
-pub fn read_blobs(cache: &Cache, oids: &[&str]) -> Result<Vec<Vec<u8>>, Failure> {
-    cat_blobs(cache.git(), oids.iter().copied())
-}
-
 /// The paths of every non-folder entry below the local folder `dir`,
 /// skipping `.git` at any depth. A missing `dir` is refused (exit 1).
 pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
@@ -352,57 +343,44 @@ struct LocalFolder {
 impl LocalFolder {
     fn new(dir: &Path) -> std::io::Result<LocalFolder> {
         let tree = WorkingTree::new(dir);
-        let mut walk = Walk::default();
+        let mut entries = Vec::new();
+        let (mut files, mut bytes) = (0, 0);
+        // Folders still to read, each already listed before its content.
+        let mut folders = Vec::new();
         if tree.kind("")? == Some(Kind::Dir) {
-            walk.dir(dir, "")?;
+            folders.push(String::new());
         }
-        let mut entries = walk.entries;
+        'walk: while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(tree.path(&folder))? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.eq_ignore_ascii_case(".git") {
+                    continue;
+                }
+                let path = tree::join(&folder, &name);
+                let kind = tree::kind_of(&std::fs::symlink_metadata(entry.path())?);
+                entries.push(tree::Entry {
+                    path: path.clone(),
+                    kind,
+                });
+                match kind {
+                    Kind::Dir => folders.push(path),
+                    Kind::File { size, .. } if !is_ignored(&path) => {
+                        files += 1;
+                        bytes += size;
+                        if files > LIMITS.files
+                            || size > LIMITS.file_bytes
+                            || bytes > LIMITS.skill_bytes
+                        {
+                            break 'walk;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(LocalFolder { tree, entries })
-    }
-}
-
-/// The state of [`LocalFolder::new`]'s walk.
-#[derive(Default)]
-struct Walk {
-    entries: Vec<tree::Entry>,
-    files: usize,
-    bytes: u64,
-}
-
-impl Walk {
-    /// Adds what folder `rel` of `root` holds, each folder before its
-    /// content, skipping `.git`. `false` once a file took the folder over a
-    /// limit; the walk adds nothing after it.
-    fn dir(&mut self, root: &Path, rel: &str) -> std::io::Result<bool> {
-        for entry in std::fs::read_dir(root.join(rel))? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.eq_ignore_ascii_case(".git") {
-                continue;
-            }
-            let path = tree::join(rel, &name);
-            let kind = tree::kind_of(&std::fs::symlink_metadata(entry.path())?);
-            self.entries.push(tree::Entry {
-                path: path.clone(),
-                kind,
-            });
-            let within = match kind {
-                Kind::Dir => self.dir(root, &path)?,
-                Kind::File { size, .. } if !is_ignored(&path) => {
-                    self.files += 1;
-                    self.bytes += size;
-                    self.files <= LIMITS.files
-                        && size <= LIMITS.file_bytes
-                        && self.bytes <= LIMITS.skill_bytes
-                }
-                _ => true,
-            };
-            if !within {
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 }
 

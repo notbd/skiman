@@ -8,6 +8,10 @@
 //! A set-aside copy is only ever renamed, never copied and deleted: it keeps
 //! its inode, so a late write through a handle opened before the swap lands
 //! in it. Nothing replaced is deleted; an error never deletes the only copy.
+//!
+//! A file is put in place with a hard link, the one way here that never
+//! replaces what is there. Where hard links do not work (exFAT), a probe in
+//! the swap folder fails first, and the destination is never touched.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -146,6 +150,19 @@ impl Replace<'_> {
             remove_swap(&swap);
             return Err(e);
         }
+        if self.kind == Kind::File {
+            // Any error counts: exFAT answers ENOTSUP, which has no ErrorKind.
+            let probe = swap.join("link-probe");
+            let probed =
+                std::fs::hard_link(&staged, &probe).and_then(|()| std::fs::remove_file(&probe));
+            if let Err(e) = probed {
+                remove_swap(&swap);
+                return Ok(Outcome::Failed(format!(
+                    "cannot write {dest}: the hard-link probe failed ({e}); skiman puts a new file in place only with a hard link, which never replaces anything, so {dest} is unchanged",
+                    dest = self.dest.display()
+                )));
+            }
+        }
 
         let present = match std::fs::symlink_metadata(self.dest) {
             Ok(_) => true,
@@ -254,8 +271,8 @@ impl Replace<'_> {
     }
 
     /// Puts the set-aside copy back at `dest` without replacing anything,
-    /// and answers with `outcome`; when the path was taken meanwhile, both
-    /// versions stay and the answer says where.
+    /// and answers with `outcome`. When that fails, the copy stays in `old/`
+    /// and the answer says where, and whether something took its place.
     fn put_back(&self, old: &Path, swap: &Path, outcome: impl Fn(String) -> Outcome) -> Outcome {
         let dest = self.dest.display().to_string();
         match place_without_replacing(old, self.dest, self.kind) {
@@ -263,8 +280,14 @@ impl Replace<'_> {
                 remove_swap(swap);
                 outcome(dest)
             }
-            Err(e) => Outcome::Failed(format!(
+            // Told apart by looking, not by the error: a file in the way is
+            // `AlreadyExists`, a folder `DirectoryNotEmpty` or `NotADirectory`.
+            Err(e) if std::fs::symlink_metadata(self.dest).is_ok() => Outcome::Failed(format!(
                 "{dest} could not be put back ({e}): something took its place; both are kept: {dest} and {}",
+                old.display()
+            )),
+            Err(e) => Outcome::Failed(format!(
+                "{dest} could not be put back ({e}); the previous version is kept at {}",
                 old.display()
             )),
         }
@@ -531,6 +554,37 @@ mod tests {
         assert_eq!(std::fs::read_to_string(world.dest()).unwrap(), "new\n");
         assert_eq!(std::fs::read_to_string(at).unwrap(), "old\n");
         assert_eq!(world.swap_folders().len(), 1);
+    }
+
+    #[test]
+    fn a_previous_version_that_cannot_be_put_back_says_where_it_is_kept() {
+        let world = World::new();
+        std::fs::write(world.dest(), "old\n").unwrap();
+        let project = world.root.join("project");
+        // An ACL that denies adding a file to the project folder, but not
+        // taking one out or adding a folder: the set-aside works, and both
+        // placing the new version and putting the old one back fail.
+        let chmod = |args: &[&str]| {
+            let status = std::process::Command::new("/bin/chmod")
+                .args(args)
+                .arg(&project)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        };
+        chmod(&["+a", "everyone deny add_file"]);
+        let outcome = world.replace(&hash("old\n"), &mut world.backups());
+        chmod(&["-N"]);
+        let old = world.swap_folders()[0].dir.join("old/AGENTS.md");
+        assert_eq!(
+            outcome,
+            Outcome::Failed(format!(
+                "{} could not be put back (Permission denied (os error 13)); the previous version is kept at {}",
+                world.dest().display(),
+                old.display()
+            ))
+        );
+        assert_eq!(std::fs::read_to_string(old).unwrap(), "old\n");
     }
 
     #[test]

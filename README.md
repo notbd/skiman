@@ -15,10 +15,10 @@ go to a backup.
 
 ## Install
 
-skiman needs Rust and git 2.43 or later.
+skiman needs Rust 1.99 or later and git 2.43 or later.
 
 ```sh
-cargo install --path .
+cargo install --locked --path .
 ```
 
 ## Usage
@@ -61,8 +61,11 @@ Without a terminal, every flag that would otherwise be asked for is required
 (exit 2). Exit codes: 0 success, 1 rule violation or refused input, 2 usage
 error, 3 needs attention, 4 operational error.
 
-Codex session refresh is not available until Phase 1 experiment 4 is
-confirmed; see [docs/phase1-results.md](docs/phase1-results.md).
+skiman adds no session-start hook for Codex yet: Codex runs only the hooks
+you have trusted with its `/hooks` command. After a change, run `skiman sync`,
+or rely on the skill repo's git hooks, which run it after each commit, merge,
+checkout and rebase there. Evidence:
+[docs/phase1-results.md](docs/phase1-results.md).
 
 ## Verify the install
 

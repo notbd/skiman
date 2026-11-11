@@ -85,7 +85,7 @@ added the session-start hook entry to [..]/home/.claude/settings.json
 
 "#]])
         .stderr_eq(str![[r#"
-warning: session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4); skiman adds no entry to [..]/home/.codex/hooks.json
+warning: Codex runs only the hooks you have trusted with `/hooks`, so skiman does not add one yet; after a change, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json
 
 "#]]);
 
@@ -102,7 +102,7 @@ warning: session refresh for Codex is not available until it is confirmed (Phase
     init(&sandbox, "claude-code,codex")
         .code(0)
         .stdout_eq("")
-        .stderr_eq("warning: session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4); skiman adds no entry to [..]/home/.codex/hooks.json\n");
+        .stderr_eq("warning: Codex runs only the hooks you have trusted with `/hooks`, so skiman does not add one yet; after a change, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json\n");
     assert_eq!(
         std::fs::read(claude_settings(&sandbox)).unwrap(),
         settings_bytes
@@ -395,7 +395,7 @@ fn with_a_terminal_init_previews_the_exact_entry_and_declining_changes_nothing()
     );
     assert!(
         shown.contains(&format!(
-            "warning: session refresh for Codex is not available until it is confirmed (Phase 1 experiment 4); skiman adds no entry to {}\n",
+            "warning: Codex runs only the hooks you have trusted with `/hooks`, so skiman does not add one yet; after a change, run `skiman sync`, or rely on the skill repo's git hooks; skiman adds no entry to {}\n",
             codex_hooks(&sandbox).display()
         )),
         "{shown}"

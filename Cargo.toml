@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
 regex = "1.13.1"
-saphyr = "0.3.3"
+saphyr = { version = "0.3.3", default-features = false }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
 sha2 = "0.11.1"
 similar = "3.2.1"
@@ -18,11 +18,11 @@ unicode-normalization = "0.1.26"
 
 [dev-dependencies]
 rexpect = "0.7"
-saphyr = "0.3.3"
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
-sha2 = "0.11.1"
 snapbox = { version = "1.2", features = ["cmd"] }
 tempfile = "3.27"
+
+[lints.rust]
+unsafe_code = "forbid"
 
 [lints.clippy]
 print_stdout = "deny"

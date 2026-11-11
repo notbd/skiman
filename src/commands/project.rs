@@ -967,8 +967,8 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
     ctx.finish(&mut synced, &ctx.backups(), exit)
 }
 
-/// Removes `dir` when it holds nothing but empty folders and files every
-/// tool ignores (`.DS_Store`, `Thumbs.db`).
+/// Removes `dir` when it holds nothing but empty folders and files with an
+/// ignored name ([`crate::tree::IGNORED_NAMES`]).
 fn remove_if_empty(dir: &Path) {
     // A link is never followed: what it points to is not the repo's.
     if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {

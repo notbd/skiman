@@ -135,8 +135,9 @@ fn locate(
 }
 
 /// The files of the copy: the entry's resolved content as a local folder
-/// (path safety applies; `.git/`, `.DS_Store` and `Thumbs.db` are left out),
-/// with the `name` line of `SKILL.md` rewritten when it differs.
+/// (path safety applies; `.git/` and the ignored names in
+/// [`crate::tree::IGNORED_NAMES`] are left out), with the `name` line of
+/// `SKILL.md` rewritten when it differs.
 fn read_copy(entry: &Path, name: &str) -> Result<Vec<SnapshotFile>, Failure> {
     let resolved = entry
         .canonicalize()

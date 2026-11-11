@@ -62,7 +62,8 @@ pub struct Mirror {
 }
 
 /// Reads the mirror of `root` from `tree` (the skill repo or a view of it).
-/// Skill folders are not entered; `.DS_Store` and `Thumbs.db` are skipped.
+/// Skill folders are not entered; ignored names ([`tree::IGNORED_NAMES`]) are
+/// skipped.
 pub fn read_mirror(tree: &dyn Tree, root: &Root) -> std::io::Result<Mirror> {
     read_mirror_of(tree, &root.id, &root.skill_dirs)
 }

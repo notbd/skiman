@@ -254,7 +254,8 @@ pub const TOP_LEVEL_PATHS: [&str; 6] = [
     MIRROR_DIR,
 ];
 
-/// Names of the entries directly in `dir`, except `.DS_Store` and `Thumbs.db`.
+/// Names of the entries directly in `dir`, except ignored names
+/// ([`crate::tree::IGNORED_NAMES`]).
 fn folder_names(tree: &dyn Tree, dir: &str) -> io::Result<BTreeSet<String>> {
     Ok(tree
         .children(dir)?

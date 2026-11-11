@@ -1,8 +1,8 @@
 //! `skiman diff <name>`: the local modifications of a third-party skill, as a
 //! unified diff of `upstream/<name>` (the upstream snapshot) against
 //! `skills/<name>`. Like the tree hash, only regular files take part and
-//! `.DS_Store` and `Thumbs.db` are ignored. Read-only; takes no lock and
-//! spawns no `git`.
+//! ignored names ([`crate::tree::IGNORED_NAMES`]) are left out. Read-only;
+//! takes no lock and spawns no `git`.
 
 use std::collections::BTreeMap;
 use std::io::Write;

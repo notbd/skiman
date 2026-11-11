@@ -185,6 +185,90 @@ fn owned(files: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
+/// The spec's tree hash of the regular files below `dir`, computed here
+/// independently of skiman.
+fn tree_hash(dir: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let hex = |bytes: &[u8]| -> String { bytes.iter().map(|b| format!("{b:02x}")).collect() };
+    let mut text = Vec::new();
+    for (path, value) in tree(dir) {
+        let Some(rest) = value.strip_prefix("file ") else {
+            continue;
+        };
+        let (mode, content) = rest.split_once(' ').unwrap();
+        let exec = u32::from_str_radix(mode, 8).unwrap() & 0o100 != 0;
+        text.extend_from_slice(path.to_str().unwrap().as_bytes());
+        text.extend_from_slice(if exec { b"\x001\x00" } else { b"\x000\x00" });
+        text.extend_from_slice(hex(&Sha256::digest(content.as_bytes())).as_bytes());
+        text.push(b'\n');
+    }
+    format!("sha256:{}", hex(&Sha256::digest(&text)))
+}
+
+/// `pdf` from an upstream whose root holds a `.gitignore`, laid out the way
+/// skiman installed it before it left such files out: the file in
+/// `skills/pdf` and `upstream/pdf`, and in the lock's snapshot hash.
+fn installed_with_a_gitignore(sandbox: &Sandbox) -> Upstream {
+    let up = installed_with(sandbox, &[(".gitignore", b"*.log\n")]);
+    let repo = sandbox.skill_repo();
+    for dir in ["skills/pdf", "upstream/pdf"] {
+        write(repo.join(dir).join(".gitignore"), "*.log\n");
+    }
+    let lock = String::from_utf8(read(repo.join("skiman.lock"))).unwrap();
+    let snapshot = lock
+        .lines()
+        .find_map(|line| line.strip_prefix("snapshot = "))
+        .unwrap();
+    let new = format!("\"{}\"", tree_hash(&repo.join("upstream/pdf")));
+    std::fs::write(repo.join("skiman.lock"), lock.replace(snapshot, &new)).unwrap();
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+    up
+}
+
+#[test]
+fn a_changed_upstream_gitignore_from_an_earlier_install_stays_with_a_deletion_record() {
+    let sandbox = Sandbox::new();
+    installed_with_a_gitignore(&sandbox);
+    let mine = b"*.log\n*.tmp\n";
+    write(skill(&sandbox).join(".gitignore"), mine);
+
+    let assert = sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(3)
+        .stderr_eq("");
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert_eq!(
+        conflict_list(&stdout),
+        ["  .gitignore: deleted upstream; .gitignore.skiman-upstream-deleted marks it"]
+    );
+    let mut files = files(skill(&sandbox));
+    files.remove("SKILL.md");
+    assert_eq!(
+        files,
+        owned(&[
+            (".gitignore", mine),
+            (".gitignore.skiman-upstream-deleted", b"")
+        ])
+    );
+    assert!(
+        !sandbox
+            .skill_repo()
+            .join("upstream/pdf/.gitignore")
+            .exists()
+    );
+    sandbox
+        .skiman()
+        .arg("check")
+        .assert()
+        .code(1)
+        .stdout_eq(
+            "skills/pdf/.gitignore.skiman-upstream-deleted: unresolved-conflict: conflict record from an update; resolve the conflict, then delete it\n",
+        );
+}
+
 const BIN_BASE: &[u8] = b"\0base binary";
 const BIN_MINE: &[u8] = b"\0my binary";
 const BIN_THEIRS: &[u8] = b"\0their binary";

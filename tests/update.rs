@@ -274,8 +274,13 @@ fn hex(bytes: &[u8]) -> String {
 /// The spec's tree hash of the upstream's working tree, computed here
 /// independently of skiman.
 fn expected_tree_hash(up: &Upstream) -> String {
+    tree_hash_of(tree_at_head(up))
+}
+
+/// The spec's tree hash of the files of a `tree()` listing.
+fn tree_hash_of(entries: BTreeMap<PathBuf, String>) -> String {
     let mut text = Vec::new();
-    for (path, value) in tree_at_head(up) {
+    for (path, value) in entries {
         let Some(rest) = value.strip_prefix("file ") else {
             continue;
         };
@@ -725,6 +730,74 @@ fn tmp_leftovers_move_before_a_records_only_advance() {
         ))
         .stderr_eq("");
     assert!(!tmp.join("20260101T000000Z").exists());
+}
+
+/// `pdf` from an upstream whose root holds a `.gitignore`, laid out the way
+/// skiman installed it before it left such files out: the file in
+/// `skills/pdf` and `upstream/pdf`, and in the lock's snapshot hash.
+fn installed_with_a_gitignore(sandbox: &Sandbox) -> Upstream {
+    init(sandbox);
+    let up = sandbox.upstream("acme/pdf");
+    up.write("SKILL.md", PDF_SKILL_MD)
+        .write("reference.md", lines(&[]))
+        .write(".gitignore", "*.log\n");
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+    let repo = sandbox.skill_repo();
+    for dir in ["skills/pdf", "upstream/pdf"] {
+        write(repo.join(dir).join(".gitignore"), "*.log\n");
+    }
+    let lock = read(repo.join("skiman.lock"));
+    let snapshot = lock
+        .lines()
+        .find_map(|line| line.strip_prefix("snapshot = "))
+        .unwrap();
+    let lock = lock.replace(snapshot, &format!("\"{}\"", expected_tree_hash(&up)));
+    std::fs::write(repo.join("skiman.lock"), lock).unwrap();
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+    up
+}
+
+#[test]
+fn an_unchanged_upstream_gitignore_from_an_earlier_install_is_removed_by_the_next_update() {
+    let sandbox = Sandbox::new();
+    let up = installed_with_a_gitignore(&sandbox);
+    let commit = up.head();
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: updated to {commit}; changed files:\n  deleted .gitignore\n\
+             \x20 .gitignore  [not installed]\n\
+             saved the old folders and records of pdf to [..]\n"
+        ))
+        .stderr_eq("");
+
+    let repo = sandbox.skill_repo();
+    assert!(!repo.join("skills/pdf/.gitignore").exists());
+    assert!(!repo.join("upstream/pdf/.gitignore").exists());
+    let snapshot = tree_hash_of(tree(repo.join("upstream/pdf")));
+    assert!(
+        read(repo.join("skiman.lock")).contains(&format!("snapshot = \"{snapshot}\"")),
+        "the lock does not hold {snapshot}"
+    );
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: up to date at {commit}\n  .gitignore  [not installed]\n"
+        ))
+        .stderr_eq("");
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
 /// Spec Source fetching: submodules are not fetched and are listed in the

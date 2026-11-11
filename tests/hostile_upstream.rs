@@ -559,15 +559,75 @@ fn filter_drivers_hook_templates_and_fsmonitor_from_the_users_git_config_never_r
         .assert()
         .code(0);
 
-    assert!(
-        sandbox
-            .skill_repo()
-            .join("upstream/pdf/reference.md")
-            .is_file()
-    );
+    let repo = sandbox.skill_repo();
+    assert!(repo.join("upstream/pdf/reference.md").is_file());
+    for dir in ["skills/pdf", "upstream/pdf"] {
+        assert!(
+            !repo.join(dir).join(".gitattributes").exists(),
+            "the upstream's .gitattributes would apply to the skill repo"
+        );
+    }
     assert!(
         !markers.exists(),
         "upstream code ran: {:?}",
         std::fs::read_dir(&markers).map(|d| d.map(|e| e.unwrap().file_name()).collect::<Vec<_>>())
     );
+}
+
+/// Files that configure git, as an upstream may carry them.
+const GIT_FILES: [(&str, &str); 3] = [
+    (".gitignore", "*.log\n"),
+    ("docs/.gitattributes", "*.md text\n"),
+    (".gitmodules", "[submodule \"lib\"]\n\tpath = lib\n"),
+];
+
+#[test]
+fn adopted_skills_and_project_skills_keep_their_own_git_files() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let foreign = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
+    write(foreign.join("SKILL.md"), SKILL_MD);
+    for (path, content) in GIT_FILES {
+        write(foreign.join(path), content);
+    }
+    sandbox
+        .skiman()
+        .args(["adopt", "pdf", "--from", "claude-code", "--yes"])
+        .assert()
+        .code(0);
+    for (path, content) in GIT_FILES {
+        let copy = sandbox.skill_repo().join("skills/pdf").join(path);
+        assert_eq!(std::fs::read_to_string(copy).unwrap(), content, "{path}");
+    }
+
+    let project = sandbox.home().join("work");
+    let skill = project.join(".claude/skills/forms");
+    write(
+        skill.join("SKILL.md"),
+        "---\nname: forms\ndescription: Fill forms\n---\n",
+    );
+    for (path, content) in GIT_FILES {
+        write(skill.join(path), content);
+    }
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(&project)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    let mirror = sandbox
+        .skill_repo()
+        .join("projects/work/.claude/skills/forms");
+    for (path, content) in GIT_FILES {
+        assert_eq!(
+            std::fs::read_to_string(mirror.join(path)).unwrap(),
+            content,
+            "{path}"
+        );
+    }
 }

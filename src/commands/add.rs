@@ -102,7 +102,7 @@ impl Upstream {
     fn snapshot(&self, path: &str) -> Result<Snapshot, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => Snapshot::read(cache, commit, path),
-            Upstream::Local { dir } => Snapshot::read_local(&local_path(dir, path)),
+            Upstream::Local { dir } => Snapshot::read_local_upstream(&local_path(dir, path)),
         }
     }
 
@@ -551,6 +551,9 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     }
     for submodule in &install.snapshot.submodules {
         out!("  {submodule}  [submodule, not fetched]");
+    }
+    for path in &install.snapshot.git_files {
+        out!("  {path}  [not installed]");
     }
     if install.renamed_skill_md.is_some() {
         out!(

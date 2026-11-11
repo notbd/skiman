@@ -697,6 +697,72 @@ skill pdf from https://github.com/acme/pdf.git at [..] (default branch main):
     assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
 }
 
+/// `git add -A` and `git commit` in the skill repo, through its pre-commit
+/// hook; panics with git's output when either fails. Returns
+/// `git ls-files skills upstream`.
+fn commit_and_list(sandbox: &Sandbox) -> String {
+    let repo = sandbox.skill_repo();
+    sandbox.git(&repo, ["add", "-A"]);
+    sandbox.git(&repo, ["commit", "--quiet", "-m", "add pdf"]);
+    sandbox.git(&repo, ["ls-files", "skills", "upstream"])
+}
+
+#[test]
+fn an_upstream_gitignore_is_listed_as_not_installed_and_every_skill_file_reaches_git() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    up.write(".gitignore", "*\n");
+    up.git(["add", "--force", ".gitignore"]);
+    up.git(["commit", "--quiet", "-m", "ignore everything"]);
+
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+skill pdf from https://github.com/acme/pdf.git at [..] (default branch main):
+  SKILL.md
+  reference.md
+  scripts/fill.sh  [script, executable]
+  .gitignore  [not installed]
+...
+"#]]);
+    assert_eq!(
+        commit_and_list(&sandbox),
+        "skills/pdf/SKILL.md\nskills/pdf/reference.md\nskills/pdf/scripts/fill.sh\n\
+         upstream/pdf/SKILL.md\nupstream/pdf/reference.md\nupstream/pdf/scripts/fill.sh"
+    );
+
+    // A local folder, in another case.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("src/pdf");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SKILL.md"), PDF_SKILL_MD).unwrap();
+    std::fs::write(dir.join("reference.md"), "# Reference\n").unwrap();
+    std::fs::write(dir.join(".GITIGNORE"), "*\n").unwrap();
+
+    sandbox
+        .skiman()
+        .args(["add", "~/src/pdf", "--yes"])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+skill pdf from ~/src/pdf (local folder):
+  SKILL.md
+  reference.md
+  .GITIGNORE  [not installed]
+...
+"#]]);
+    assert_eq!(
+        commit_and_list(&sandbox),
+        "skills/pdf/SKILL.md\nskills/pdf/reference.md\n\
+         upstream/pdf/SKILL.md\nupstream/pdf/reference.md"
+    );
+}
+
 #[test]
 fn add_ignores_the_git_environment_of_a_calling_git_process() {
     let sandbox = Sandbox::new();

@@ -595,6 +595,33 @@ fn a_folder_without_tools_keeps_the_repo_tools_and_one_with_tools_uses_its_own()
     assert!(!sandbox.tool_dir(Tool::ClaudeCode).join("notes").exists());
 }
 
+#[test]
+fn an_upstream_gitignore_in_a_local_source_is_left_out_of_the_snapshot() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.home().join("src/pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    write(source.join(".gitignore"), "*\n");
+    let folder = import_folder(
+        &sandbox,
+        &format!("{TOOLS}\n[skills.pdf.source]\nurl = \"~/src/pdf\"\npath = \"\"\n"),
+    );
+    write(folder.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    let snapshot = sandbox.skill_repo().join("upstream/pdf");
+    assert_eq!(read(snapshot.join("SKILL.md")), skill_md("pdf"));
+    assert!(!snapshot.join(".gitignore").exists());
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+}
+
 /// The takeover judges entries by the `skiman.toml` the import writes, not
 /// the one it replaces.
 #[test]

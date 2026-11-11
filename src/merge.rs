@@ -339,6 +339,7 @@ impl MergeRepo {
         let merged = Snapshot {
             files,
             submodules: Vec::new(),
+            git_files: Vec::new(),
         };
         if conflicts.is_empty() {
             // Every stage entry merged (an exec-bit-only add/add keeps the local mode).

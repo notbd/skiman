@@ -274,7 +274,7 @@ fn update_to(
     if target.entry.snapshot == current.entry.snapshot {
         if target.entry == current.entry && target.manifest_text.is_none() {
             out!("skill {name}: up to date at {}", target.version);
-            print_submodules(&target.snapshot);
+            print_not_installed(&target.snapshot);
             return Ok(Exit::Success);
         }
         context.staging()?;
@@ -283,7 +283,7 @@ fn update_to(
             "skill {name}: now at {}; no file of the skill changed",
             target.version
         );
-        print_submodules(&target.snapshot);
+        print_not_installed(&target.snapshot);
         out!("saved the records of {name} to {}", backup.dir().display());
         return Ok(Exit::Success);
     }
@@ -329,7 +329,7 @@ fn update_to(
     for (change, path) in &changes {
         out!("  {} {path}", change.verb());
     }
-    print_submodules(&target.snapshot);
+    print_not_installed(&target.snapshot);
     let saved = if old_folders_saved {
         "the old folders and records"
     } else {
@@ -348,10 +348,14 @@ fn update_to(
     Ok(Exit::NeedsAttention)
 }
 
-/// The snapshot's submodules, which are not fetched (as `add` lists them).
-fn print_submodules(snapshot: &Snapshot) {
+/// The snapshot's submodules and git files, which are not installed (as
+/// `add` lists them).
+fn print_not_installed(snapshot: &Snapshot) {
     for submodule in &snapshot.submodules {
         out!("  {submodule}  [submodule, not fetched]");
+    }
+    for path in &snapshot.git_files {
+        out!("  {path}  [not installed]");
     }
 }
 
@@ -481,7 +485,7 @@ fn fetch_local(
             dir.display()
         )));
     }
-    let snapshot = Snapshot::read_local(&dir)?;
+    let snapshot = Snapshot::read_local_upstream(&dir)?;
     let entry = LockEntry {
         commit: None,
         git_ref: None,

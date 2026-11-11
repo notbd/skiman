@@ -738,7 +738,7 @@ fn fetch_sources(
                 dir.join(&source.path)
             };
             thirds.push(Third {
-                snapshot: Snapshot::read_local(&dir)?,
+                snapshot: Snapshot::read_local_upstream(&dir)?,
                 name,
                 source,
                 commit: None,

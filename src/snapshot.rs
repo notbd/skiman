@@ -1,6 +1,12 @@
 //! Reading a folder of an upstream commit from the git cache by objects
 //! (`ls-tree`, `cat-file`), never by checkout (spec Source fetching), so no
 //! filter, hook or attribute of the upstream can run.
+//!
+//! A third-party upstream's `.gitignore`, `.gitattributes` and `.gitmodules`
+//! configure the upstream's git; in the skill repo they would configure its
+//! git instead (hide skill files from commits, filter them). Reading such an
+//! upstream ([`Snapshot::read`], [`Snapshot::read_local_upstream`]) leaves
+//! them out of the files and lists them in [`Snapshot::git_files`].
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -31,7 +37,14 @@ pub struct Snapshot {
     pub files: Vec<SnapshotFile>,
     /// Submodules (gitlinks): not fetched, listed in the summary.
     pub submodules: Vec<String>,
+    /// The upstream's files that configure git: not installed, listed in the
+    /// summary.
+    pub git_files: Vec<String>,
 }
+
+/// Names of the files that configure a git repository, matched in any ASCII
+/// case at any depth, like `.git`.
+const GIT_FILES: &[&str] = &[".gitignore", ".gitattributes", ".gitmodules"];
 
 impl Snapshot {
     pub fn file(&self, path: &str) -> Option<&SnapshotFile> {
@@ -80,7 +93,7 @@ impl Snapshot {
     }
 
     /// Reads folder `path` (`""` = the root) of `commit`, which must be in
-    /// the cache, as upstream content.
+    /// the cache, as a third-party upstream: without its git files.
     pub fn read(cache: &Cache, commit: &str, path: &str) -> Result<Snapshot, Failure> {
         let origin = if path.is_empty() {
             cache.url().to_owned()
@@ -93,6 +106,27 @@ impl Snapshot {
             &origin,
             Content::Upstream,
         )
+        .map(Snapshot::without_git_files)
+    }
+
+    /// Reads the local folder `dir` as a third-party upstream:
+    /// [`Snapshot::read_local`] without its git files.
+    pub fn read_local_upstream(dir: &Path) -> Result<Snapshot, Failure> {
+        Snapshot::read_local(dir).map(Snapshot::without_git_files)
+    }
+
+    /// Moves the files named in [`GIT_FILES`] from `files` to `git_files`.
+    fn without_git_files(mut self) -> Snapshot {
+        let (git_files, files) =
+            std::mem::take(&mut self.files)
+                .into_iter()
+                .partition(|file: &SnapshotFile| {
+                    let name = tree::basename(&file.path);
+                    GIT_FILES.iter().any(|g| name.eq_ignore_ascii_case(g))
+                });
+        self.files = files;
+        self.git_files = git_files.into_iter().map(|file| file.path).collect();
+        self
     }
 
     /// Reads `treeish` from the repository `git` commands run on; `origin`

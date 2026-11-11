@@ -168,7 +168,7 @@ fn init_on_a_non_empty_folder_without_skiman_toml_is_refused_and_changes_nothing
         .code(1)
         .stdout_eq("")
         .stderr_eq(str![[r#"
-error: [..]/skill-repo is not empty and holds no skiman.toml; choose an empty or missing folder, or an existing skill repo
+error: [..]/skill-repo is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing skill repo
 
 "#]]);
 

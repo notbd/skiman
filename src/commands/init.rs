@@ -192,7 +192,7 @@ fn inspect(path: &Path) -> Result<Target, Failure> {
             Ok(Target::CreateInRepo)
         }
         Some(_) => Err(Failure::refused(format!(
-            "{} is not empty and holds no skiman.toml; choose an empty or missing folder, or an existing skill repo",
+            "{} is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing skill repo",
             path.display()
         ))),
     }

@@ -1,6 +1,6 @@
-//! The secret rule (spec Rules, "No secrets"): a versioned detector list
-//! shipped as data, matches reported by fingerprint (never by the matched
-//! text), and the `[[secrets.allow]]` exemptions that cover them.
+//! The secret rule (spec Rules, "No secrets"): a detector list shipped as
+//! data, matches reported by fingerprint (never by the matched text), and the
+//! `[[secrets.allow]]` exemptions that cover them.
 
 use std::fmt;
 use std::sync::LazyLock;
@@ -10,9 +10,6 @@ use sha2::{Digest, Sha256};
 
 use super::skill::{CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR};
 use crate::tree::hex;
-
-/// Version of [`DETECTORS`]; bump it whenever a detector is added or changed.
-pub const DETECTORS_VERSION: u32 = 1;
 
 /// One secret detector: the rule id printed with its matches, the pattern,
 /// and the extra conditions a match must meet.

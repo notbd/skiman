@@ -32,7 +32,7 @@ use crate::failure::Failure;
 use crate::tree::{Kind, Tree};
 
 pub use config::{LOCKFILE, MANIFEST};
-pub use secrets::{AllowEntry, DETECTORS, DETECTORS_VERSION, Detector};
+pub use secrets::AllowEntry;
 pub use skill::{CONFLICT_MARKERS, CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR};
 
 /// Rule ids, printed with every violation.

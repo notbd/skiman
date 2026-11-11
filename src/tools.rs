@@ -4,17 +4,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// How skiman puts a skill or the shared body into an agent tool's location.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// A symlink to the skill repo (the spec default).
-    Link,
-    /// A copy refreshed at every refresh point (for tools that cannot follow
-    /// symlinks). Not built: phase 1 found every location follows symlinks
-    /// (`docs/phase1-results.md`, Summary), so no tool uses it.
-    Copy,
-}
-
 /// Content in a tool directory that another manager owns; skiman never touches it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedElsewhere {
@@ -42,8 +31,6 @@ pub struct AgentTool {
     pub instruction_overrides: &'static [&'static str],
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
-    pub skill_mode: Mode,
-    pub instruction_mode: Mode,
     pub managed_elsewhere: &'static [ManagedElsewhere],
     /// Skill names this tool reserves (on top of [`crate::names::RESERVED`]).
     pub reserved_names: &'static [&'static str],
@@ -84,8 +71,6 @@ pub const TOOLS: &[AgentTool] = &[
         instruction_file: ".claude/CLAUDE.md",
         instruction_overrides: &[],
         instruction_size_limit: None,
-        skill_mode: Mode::Link,
-        instruction_mode: Mode::Link,
         managed_elsewhere: &[
             ManagedElsewhere::Path(".claude/skills/synced"),
             ManagedElsewhere::Path(".claude/skills/.trash"),
@@ -113,8 +98,6 @@ pub const TOOLS: &[AgentTool] = &[
         // Codex reads `AGENTS.override.md` instead of `AGENTS.md` when it exists.
         instruction_overrides: &[".codex/AGENTS.override.md"],
         instruction_size_limit: Some(32768),
-        skill_mode: Mode::Link,
-        instruction_mode: Mode::Link,
         managed_elsewhere: &[
             ManagedElsewhere::RealpathUnder(".codex/plugins"),
             ManagedElsewhere::Path(".codex/skills/.system"),
@@ -138,8 +121,6 @@ pub const TOOLS: &[AgentTool] = &[
         // Bytes, inclusive: phase 1 measured 24000 loads whole, 24001 is
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
-        skill_mode: Mode::Link,
-        instruction_mode: Mode::Link,
         managed_elsewhere: &[],
         reserved_names: &[],
         session_hook_file: None,

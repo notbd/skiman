@@ -98,6 +98,11 @@ fingerprint = "sha256:<hash of the matched text>"
 
 - A skill is third-party exactly when it has a `source` table.
 - Unknown keys are an error. Leave out `ref_kind`; skiman derives it.
+- skiman keeps the skill repo's project scope: every `[projects.<id>]` table
+  whose id the folder does not define, and every `[[secrets.allow]]` entry for
+  a path under `projects/`. A project root the folder adds must not contain,
+  or lie inside, a root the skill repo already has; otherwise skiman skips
+  both roots, and `skiman sync` and `skiman doctor` name them.
 
 ## Choose the canonical copy among diverged copies
 

@@ -622,6 +622,86 @@ fn an_upstream_gitignore_in_a_local_source_is_left_out_of_the_snapshot() {
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
+/// Registers `~/proj` as project root `proj` and adopts its `AGENTS.md`,
+/// which holds a sample key exempted for `projects/proj/AGENTS.md`. Returns
+/// that `[[secrets.allow]]` entry.
+fn project_with_an_exempted_key(sandbox: &Sandbox) -> String {
+    // Assembled at runtime so the source never holds a secret-like value.
+    let key = ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat();
+    write(
+        sandbox.home().join("proj/AGENTS.md"),
+        format!("# Proj\n\nSample: AWS_ACCESS_KEY_ID={key}\n"),
+    );
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(sandbox.home().join("proj"))
+        .assert()
+        .code(0);
+    let entry = format!(
+        "[[secrets.allow]]\npath = \"projects/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"{}\"\n",
+        file_hash(&key)
+    );
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    std::fs::write(&manifest, format!("{}\n{entry}", read(&manifest))).unwrap();
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    entry
+}
+
+#[test]
+fn import_keeps_the_repos_project_roots_and_their_secret_exemptions() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let entry = project_with_an_exempted_key(&sandbox);
+    let folder = import_folder(&sandbox, TOOLS);
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    assert_eq!(
+        read(sandbox.skill_repo().join("skiman.toml")),
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+}
+
+#[test]
+fn import_adds_the_folders_project_roots_to_the_repos_and_keeps_one_copy_of_each_exemption() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let entry = project_with_an_exempted_key(&sandbox);
+    write(sandbox.home().join("other/AGENTS.md"), "# Other\n");
+    let folder = import_folder(
+        &sandbox,
+        &format!("{TOOLS}\n[projects.other]\npath = \"~/other\"\n\n{entry}"),
+    );
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    assert_eq!(
+        read(sandbox.skill_repo().join("skiman.toml")),
+        format!(
+            "{TOOLS}\n[projects.other]\npath = \"~/other\"\n\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"
+        )
+    );
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+}
+
 /// The takeover judges entries by the `skiman.toml` the import writes, not
 /// the one it replaces.
 #[test]

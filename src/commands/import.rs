@@ -26,7 +26,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
-use toml_edit::{DocumentMut, Item, value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
@@ -102,7 +102,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     };
 
     let content = Folder::read(&folder)?;
-    let manifest_text = merge_tools(&content.manifest, repo_files.manifest_text())?;
+    let manifest_text = merge_repo_config(&content.manifest, repo_files.manifest_text())?;
     check_folder(&content, &manifest_text)?;
     let thirds = fetch_sources(&paths, &content, &manifest_text, prompts)?;
     let manifest_text = with_ref_kinds(&manifest_text, &thirds)?;
@@ -588,27 +588,93 @@ impl Folder {
     }
 }
 
-/// The folder's `skiman.toml`, with the repo's `[tools]` table added when
-/// the folder has none. Everything else keeps its bytes.
-fn merge_tools(folder: &str, repo: Option<String>) -> Result<String, Failure> {
+/// The folder's `skiman.toml` with the skill repo's configuration merged in
+/// by key, since an import brings skills and instructions only: the repo's
+/// `[tools]` when the folder has none, each repo `[projects.<id>]` whose id
+/// the folder does not define, and each repo `[[secrets.allow]]` entry for a
+/// path below `projects/` the folder does not hold already. The folder's own
+/// text keeps its bytes.
+fn merge_repo_config(folder: &str, repo: Option<String>) -> Result<String, Failure> {
     let Ok(mut doc) = folder.parse::<DocumentMut>() else {
         // The rules report the syntax error with its line.
         return Ok(folder.to_owned());
     };
-    if doc.contains_key("tools") {
-        return Ok(folder.to_owned());
-    }
-    let tools = repo
-        .and_then(|text| text.parse::<DocumentMut>().ok())
-        .and_then(|repo| repo.get("tools").cloned());
-    let Some(mut tools) = tools else {
+    let Some(repo) = repo.and_then(|text| text.parse::<DocumentMut>().ok()) else {
         return Ok(folder.to_owned());
     };
-    if let Some(table) = tools.as_table_mut() {
-        table.set_position(Some(-1));
+    let mut merged = false;
+    if !doc.contains_key("tools")
+        && let Some(mut tools) = repo.get("tools").cloned()
+    {
+        if let Some(table) = tools.as_table_mut() {
+            table.set_position(Some(-1));
+        }
+        doc.insert("tools", tools);
+        merged = true;
     }
-    doc.insert("tools", tools);
-    Ok(doc.to_string())
+    if let Some(projects) = repo.get("projects").and_then(Item::as_table)
+        && let Some(into) = implicit_table(&mut doc, "projects")
+    {
+        for (id, project) in projects.iter() {
+            if let Some(project) = project.as_table()
+                && !into.contains_key(id)
+            {
+                into.insert(id, Item::Table(appended(project)));
+                merged = true;
+            }
+        }
+    }
+    let allows = repo
+        .get("secrets")
+        .and_then(|secrets| secrets.get("allow"))
+        .and_then(Item::as_array_of_tables);
+    let in_projects = |allow: &&Table| {
+        allow
+            .get("path")
+            .and_then(Item::as_str)
+            .is_some_and(|path| path.starts_with("projects/"))
+    };
+    if let Some(allows) = allows
+        && allows.iter().any(|allow| in_projects(&allow))
+        && let Some(secrets) = implicit_table(&mut doc, "secrets")
+        && let Some(into) = secrets
+            .entry("allow")
+            .or_insert(Item::ArrayOfTables(ArrayOfTables::new()))
+            .as_array_of_tables_mut()
+    {
+        let same = |a: &Table, b: &Table| {
+            ["path", "rule", "fingerprint"]
+                .iter()
+                .all(|key| a.get(key).and_then(Item::as_str) == b.get(key).and_then(Item::as_str))
+        };
+        for allow in allows.iter().filter(in_projects) {
+            if !into.iter().any(|kept| same(kept, allow)) {
+                into.push(appended(allow));
+                merged = true;
+            }
+        }
+    }
+    Ok(if merged {
+        doc.to_string()
+    } else {
+        folder.to_owned()
+    })
+}
+
+/// The table `key` of `doc`, added without a header of its own when it is
+/// missing; `None` when `key` holds something else (the rules report it).
+fn implicit_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Option<&'a mut Table> {
+    let mut table = Table::new();
+    table.set_implicit(true);
+    doc.entry(key).or_insert(Item::Table(table)).as_table_mut()
+}
+
+/// A copy of `table` from another document, placed after the tables it
+/// joins instead of at its position there.
+fn appended(table: &Table) -> Table {
+    let mut table = table.clone();
+    table.set_position(None);
+    table
 }
 
 /// The folder as the skill repo would hold it, with `manifest` as its `skiman.toml`.

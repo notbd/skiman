@@ -248,15 +248,16 @@ set-aside copy (step 3), and `target` the destination path.
 
 1. Read the source into an in-memory snapshot and run the safety rules on it.
    Its hash becomes the new synced hash; the live source is not re-read.
-2. Write the snapshot into the swap folder.
+2. Write the snapshot into the swap folder. For a file, also make and remove
+   a hard link to it there: on a filesystem without hard links this probe
+   fails, and the destination is left untouched.
 3. If the destination exists, rename it into the swap folder (same
    filesystem, so it keeps its inode and a late write through an open handle
    lands in it) and hash it. If it no longer matches what the plan saw, put
    it back without replacing anything, and report a conflict.
 4. Put the new entry in place without replacing anything: a hard link for a
-   file (fails if something appeared; a filesystem without hard links fails
-   here too), `rename` for a folder (fails over a file or a non-empty
-   folder).
+   file (fails if something appeared), `rename` for a folder (fails over a
+   file or a non-empty folder).
 5. Rename the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
    for mirror content, `backups/<ts>/projects/<id>/…` for project content),
    then hash it again: a different hash means a late write landed there, and

@@ -278,10 +278,7 @@ mod tests {
 
     #[test]
     fn default_ids() {
-        assert_eq!(
-            default_id(Path::new("/x/Five-Continents")),
-            "five-continents"
-        );
+        assert_eq!(default_id(Path::new("/x/Acme-Corp")), "acme-corp");
         assert_eq!(default_id(Path::new("/x/My Projects_2")), "my-projects-2");
         let long = format!("/x/{} tail", "a".repeat(63));
         assert_eq!(default_id(Path::new(&long)), "a".repeat(63));

@@ -702,6 +702,96 @@ fn import_adds_the_folders_project_roots_to_the_repos_and_keeps_one_copy_of_each
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
+/// Imports a folder whose `skiman.toml` is `folder` into a skill repo set up
+/// by [`project_with_an_exempted_key`] whose `skiman.toml` is then `repo`
+/// (given that entry). `check` passes before and after, so the root and its
+/// exemption are kept, and the mirror stays. Returns the `skiman.toml` the
+/// import wrote and the entry.
+fn import_project_config(repo: impl FnOnce(&str) -> String, folder: &str) -> (String, String) {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let entry = project_with_an_exempted_key(&sandbox);
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    std::fs::write(&manifest, repo(&entry)).unwrap();
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+    let folder = import_folder(&sandbox, folder);
+
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+
+    sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
+    assert!(
+        sandbox
+            .skill_repo()
+            .join("projects/proj/AGENTS.md")
+            .is_file()
+    );
+    (read(manifest), entry)
+}
+
+#[test]
+fn import_keeps_the_repos_project_roots_written_as_an_inline_table() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("projects = {{ proj = {{ path = \"~/proj\" }} }}\n\n{TOOLS}\n{entry}"),
+        TOOLS,
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+#[test]
+fn import_keeps_the_repos_project_root_written_as_an_inline_entry_of_projects() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects]\nproj = {{ path = \"~/proj\" }}\n\n{entry}"),
+        TOOLS,
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+#[test]
+fn import_adds_the_repos_project_roots_to_an_empty_inline_projects_table_in_the_folder() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"),
+        &format!("projects = {{}}\n{TOOLS}"),
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
+#[test]
+fn a_project_root_the_folder_writes_inline_wins_over_the_repos_root_with_the_same_id() {
+    let projects = "projects = { proj = { path = \"~/proj\", exclude = [\"drafts\"] } }\n";
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"),
+        &format!("{projects}{TOOLS}"),
+    );
+    assert_eq!(manifest, format!("{projects}{TOOLS}\n{entry}"));
+}
+
+#[test]
+fn import_keeps_the_repos_project_exemptions_when_the_folder_has_an_empty_inline_secrets_table() {
+    let (manifest, entry) = import_project_config(
+        |entry| format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"),
+        &format!("secrets = {{}}\n{TOOLS}"),
+    );
+    assert_eq!(
+        manifest,
+        format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
+    );
+}
+
 /// The takeover judges entries by the `skiman.toml` the import writes, not
 /// the one it replaces.
 #[test]

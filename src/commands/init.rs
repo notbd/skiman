@@ -13,7 +13,7 @@ use crate::Exit;
 use crate::commands::has_terminal;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
-use crate::fsutil::absolute_lexical;
+use crate::fsutil::{absolute_lexical, rewrite_atomic, write_atomic};
 use crate::git_hooks;
 use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
@@ -227,18 +227,32 @@ fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
 
 /// A reused skill repo gets the `.gitignore` entry for `.skiman/` when no
 /// line ignores it yet (the file is created when missing); nothing else of
-/// it changes.
+/// it changes. The new content replaces the file in one step and keeps its
+/// mode. When `.gitignore` is a link (a repo managed with dotfiles), the
+/// file it points to is replaced and the link stays; a link to a missing
+/// file is refused.
 fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
     let path = repo.root().join(".gitignore");
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => {
-            return Err(Failure::operational(format!(
-                "cannot read {}: {e}",
-                path.display()
-            )));
+    let cannot_read =
+        |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", path.display()));
+    let (real, text, permissions) = match std::fs::symlink_metadata(&path) {
+        Ok(_) => {
+            let real = path.canonicalize().map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Failure::refused(format!(
+                        "{} is a link to a missing file; create that file or remove the link, then run `skiman init` again",
+                        path.display()
+                    ))
+                } else {
+                    cannot_read(e)
+                }
+            })?;
+            let text = std::fs::read_to_string(&real).map_err(cannot_read)?;
+            let permissions = std::fs::metadata(&real).map_err(cannot_read)?.permissions();
+            (real, text, Some(permissions))
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (path.clone(), String::new(), None),
+        Err(e) => return Err(cannot_read(e)),
     };
     if text.lines().any(|line| {
         matches!(
@@ -253,8 +267,12 @@ fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
     } else {
         "\n"
     };
-    std::fs::write(&path, format!("{text}{separator}.skiman/\n"))
-        .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
+    let new = format!("{text}{separator}.skiman/\n");
+    match permissions {
+        Some(permissions) => rewrite_atomic(&real, new.as_bytes(), permissions),
+        None => write_atomic(&real, new.as_bytes()),
+    }
+    .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
     out!("added .skiman/ to {}", path.display());
     Ok(())
 }

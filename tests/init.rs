@@ -2,6 +2,9 @@
 
 mod support;
 
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
+
 use snapbox::str;
 use support::{Sandbox, Tool, ToolSetup};
 
@@ -224,4 +227,85 @@ added .skiman/ to [..]/skill-repo/.gitignore
     std::fs::remove_file(repo.join(".gitignore")).unwrap();
     init();
     assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+}
+
+/// A skill repo `init` reuses: `skiman.toml` in a git repo, no `.gitignore`.
+fn reused_repo(sandbox: &Sandbox) -> PathBuf {
+    let repo = sandbox.skill_repo();
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("skiman.toml"), "[tools]\nenabled = []\n").unwrap();
+    sandbox.git(&repo, ["init", "--quiet"]);
+    repo
+}
+
+fn init_reused(sandbox: &Sandbox) -> snapbox::cmd::OutputAssert {
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.skill_repo())
+        .assert()
+}
+
+#[test]
+fn init_swaps_in_a_new_gitignore_that_keeps_its_mode_and_leaves_a_hard_link_with_the_old_content() {
+    let sandbox = Sandbox::new();
+    let repo = reused_repo(&sandbox);
+    let gitignore = repo.join(".gitignore");
+    std::fs::write(&gitignore, "target\n").unwrap();
+    std::fs::set_permissions(&gitignore, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let hard_link = sandbox.root().join("gitignore-hard-link");
+    std::fs::hard_link(&gitignore, &hard_link).unwrap();
+
+    init_reused(&sandbox).code(0);
+
+    assert_eq!(read(&gitignore), "target\n.skiman/\n");
+    assert_eq!(
+        read(&hard_link),
+        "target\n",
+        "the new content was written into the old file"
+    );
+    let mode = std::fs::metadata(&gitignore).unwrap().permissions().mode();
+    assert_eq!(mode & 0o7777, 0o640);
+}
+
+#[test]
+fn init_adds_the_skiman_entry_to_the_file_a_linked_gitignore_points_to_and_keeps_the_link() {
+    let sandbox = Sandbox::new();
+    let repo = reused_repo(&sandbox);
+    let dotfiles = sandbox.root().join("dotfiles");
+    std::fs::create_dir(&dotfiles).unwrap();
+    std::fs::write(dotfiles.join("gitignore"), "target\n").unwrap();
+    std::os::unix::fs::symlink(dotfiles.join("gitignore"), repo.join(".gitignore")).unwrap();
+
+    init_reused(&sandbox).code(0);
+
+    assert_eq!(
+        std::fs::read_link(repo.join(".gitignore")).unwrap(),
+        dotfiles.join("gitignore")
+    );
+    assert_eq!(read(dotfiles.join("gitignore")), "target\n.skiman/\n");
+}
+
+#[test]
+fn init_refuses_a_gitignore_that_links_to_a_missing_file_and_does_not_create_that_file() {
+    let sandbox = Sandbox::new();
+    let repo = reused_repo(&sandbox);
+    let dotfiles = sandbox.root().join("dotfiles");
+    std::fs::create_dir(&dotfiles).unwrap();
+    std::os::unix::fs::symlink(dotfiles.join("gitignore"), repo.join(".gitignore")).unwrap();
+
+    let assert = init_reused(&sandbox);
+
+    assert!(
+        std::fs::symlink_metadata(dotfiles.join("gitignore")).is_err(),
+        "init created the file the link points to"
+    );
+    assert_eq!(
+        std::fs::read_link(repo.join(".gitignore")).unwrap(),
+        dotfiles.join("gitignore")
+    );
+    assert.code(1).stdout_eq("").stderr_eq(str![[r#"
+error: [..]/skill-repo/.gitignore is a link to a missing file; create that file or remove the link, then run `skiman init` again
+
+"#]]);
 }

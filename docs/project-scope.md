@@ -4,10 +4,10 @@
 
 skiman manages global content only: `skills/<name>` linked into every tool
 directory, and `instructions/shared.md` linked into every global instruction
-file. Most of a real setup is per project: 76 `AGENTS.md` files under
-`~/Work/Five-Continents`, project skills such as
-`<project>/.claude/skills/fcusa-weekly-po`, company skills kept in
-`~/Work/Five-Continents/fivec-core/skills/`, the `AGENTS.md` of code projects
+file. Most of a real setup is per project: dozens of `AGENTS.md` files under
+a work folder such as `~/Work/Acme-Corp`, project skills such as
+`<project>/.claude/skills/weekly-report`, company skills kept in
+`~/Work/Acme-Corp/acme-core/skills/`, the `AGENTS.md` of code projects
 that their own git repo does not track. They have no history and no backup.
 
 The user registers one or more folders (project roots). skiman finds every
@@ -98,9 +98,9 @@ only. Project items are not per tool, so `[tools].enabled` does not apply.
 
 ```toml
 [projects.work]
-path = "~/Work/Five-Continents"
-exclude = ["_archive", "00_个人事务_me/五洲工作系统_work-system/05_working"]
-skill_dirs = ["fivec-core/skills"]
+path = "~/Work/Acme-Corp"
+exclude = ["_archive", "项目甲/草稿"]
+skill_dirs = ["acme-core/skills"]
 ```
 
 (An example: this change configures nothing on the user's machine.)
@@ -112,15 +112,14 @@ skill_dirs = ["fivec-core/skills"]
 - `exclude` (optional) limits discovery only: an entry without `/` matches a
   file or folder of that name at any depth; an entry with `/` is a
   root-relative path and everything under it. Real roots hold backup copies
-  (two of the three `fcusa-weekly-po` copies sit in backup folders;
-  `~/Developer/.agents-config/agent-setup-migration/backup-pre-import/` holds
-  an old `.codex/AGENTS.md`). An item adopted before its path was excluded
+  (copies of a project skill in backup folders, an old `.codex/AGENTS.md`
+  kept after a migration). An item adopted before its path was excluded
   keeps syncing; eject it to stop. An exact path given to `adopt` wins over
   `exclude`.
 - `skill_dirs` (optional): root-relative folders whose child folders holding
   `SKILL.md` are project skill items too, for skills kept in a folder of
-  their own and linked into the tools by other means (such as the company
-  skills in `fivec-core/skills/`, linked by the user's `harness-sync`). Same
+  their own and linked into the tools by other means (such as company
+  skills in `acme-core/skills/`, linked by another tool). Same
   item kind, gates and protocol; skiman never touches the tool directories
   for them, and a tool-directory link whose realpath lies under a configured
   `skill_dirs` folder counts as managed elsewhere, so global sync never
@@ -149,11 +148,11 @@ skill repo/
   projects/
     work/                                       [projects.work]
       AGENTS.md
-      30_美国业务_FiveC-USA/
+      项目甲/
         AGENTS.md
-        .claude/skills/fcusa-weekly-po/SKILL.md
+        .claude/skills/weekly-report/SKILL.md
     dev/
-      wec-hist/AGENTS.md
+      website/AGENTS.md
 <state dir>/projects-synced.toml                (per machine)
 ```
 
@@ -362,14 +361,13 @@ repo lock, staging, backups under machine state.
 
 - Mirrors live in the skill repo, not a second store: one source of truth,
   checked by the same rules and hooks. The user already keeps work-related
-  instructions there (`instructions/legacy-global-rules.md`). Registering a
-  root is an explicit act, and `project add` says where content goes.
-- The three company skills in `~/Work/Five-Continents/fivec-core/skills/`
-  are, by the user's rule in `fivec-core/AGENTS.md`, kept there, linked by
-  `harness-sync` and not managed by skiman, waiting for a backup system.
-  `skill_dirs` makes mirroring them possible without touching their links;
-  whether to use it is the user's call (it means changing that rule), so
-  this change does not configure it or edit that file.
+  instructions there. Registering a root is an explicit act, and
+  `project add` says where content goes.
+- Company skills kept in a folder of their own and linked into the tools by
+  another tool can stay outside skiman by a rule the user keeps in that
+  folder. `skill_dirs` makes mirroring them possible without touching their
+  links; whether to use it is the user's call (it means changing that rule),
+  so this change does not configure it or edit that rule.
 
 ## Not in scope
 

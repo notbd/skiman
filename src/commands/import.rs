@@ -142,12 +142,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         )));
     }
     let staging = Staging::begin(&paths, &repo, &lock)?;
-    let backup = Backup::create(&paths).map_err(|e| {
-        Failure::operational(format!(
-            "cannot create a backup folder in {}: {e}; nothing was changed",
-            paths.state_dir().join("backups").display()
-        ))
-    })?;
+    let backup = Backup::create(&paths, "nothing was changed")?;
     let mut record = record(&repo, &candidate, &plan, &repo_files, &backup);
     write_area(&paths, &candidate)?;
     record.save(&paths)?;

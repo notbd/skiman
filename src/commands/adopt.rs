@@ -62,12 +62,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     validate(&repo, name, &files)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     let staged = stage(&staging, name, &files)?;
-    let backup = Backup::create(&paths).map_err(|e| {
-        Failure::operational(format!(
-            "cannot create a backup folder in {}: {e}; nothing was changed",
-            paths.state_dir().join("backups").display()
-        ))
-    })?;
+    let backup = Backup::create(&paths, "nothing was changed")?;
     let copy = repo.skill_dir(name);
     if let Err(failure) = staging::rename_into_place(&staged, &copy) {
         let _ = std::fs::remove_dir(backup.dir());

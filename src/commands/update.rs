@@ -555,7 +555,7 @@ fn save_fragments(paths: &Paths, name: &str, current: &Current) -> Result<Backup
             "cannot save the records of {name} to a backup: {e}; nothing of {name} changed"
         ))
     };
-    let backup = Backup::create(paths).map_err(|e| failed(e.to_string()))?;
+    let backup = Backup::create(paths, &format!("nothing of {name} changed"))?;
     let repo_dir = backup.dir().join("repo");
     std::fs::create_dir_all(&repo_dir).map_err(|e| failed(e.to_string()))?;
     for (file, text) in [

@@ -537,9 +537,10 @@ fn an_unwritable_backups_directory_stops_the_skill_before_anything_is_swapped() 
 
     let assert = sandbox.skiman().args(["update", "pdf"]).assert();
     chmod(backups(&sandbox), 0o755);
-    assert.code(4).stdout_eq("").stderr_eq(
-        "error: skill pdf: cannot save the records of pdf to a backup: Permission denied (os error 13); nothing of pdf changed\n",
-    );
+    assert.code(4).stdout_eq("").stderr_eq(format!(
+        "error: skill pdf: cannot create a backup folder in {}: Permission denied (os error 13); nothing of pdf changed\n",
+        backups(&sandbox).display()
+    ));
 
     assert_eq!(tree(sandbox.skill_repo()), before);
     assert!(backup_dirs(&sandbox).is_empty());

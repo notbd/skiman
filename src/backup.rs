@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
+use crate::failure::Failure;
 use crate::paths::Paths;
 use crate::tree::{self, IGNORED_NAMES};
 
@@ -76,10 +77,18 @@ pub struct Backup {
 }
 
 impl Backup {
-    pub fn create(paths: &Paths) -> io::Result<Backup> {
-        Ok(Backup {
-            dir: fresh_dir(&paths.state_dir().join("backups"))?,
-        })
+    /// A fresh folder under `backups/`. The failure names where it could
+    /// not be created and ends with `then`: what the caller left as it was,
+    /// or what to do next.
+    pub fn create(paths: &Paths, then: &str) -> Result<Backup, Failure> {
+        let parent = paths.state_dir().join("backups");
+        let dir = fresh_dir(&parent).map_err(|e| {
+            Failure::operational(format!(
+                "cannot create a backup folder in {}: {e}; {then}",
+                parent.display()
+            ))
+        })?;
+        Ok(Backup { dir })
     }
 
     /// The backup folder `dir` an earlier run created (a resumed import

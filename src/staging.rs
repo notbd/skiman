@@ -94,19 +94,22 @@ fn move_tmp_leftovers(paths: &Paths, tmp: &Path) -> Result<(), Failure> {
     if leftovers.is_empty() {
         return Ok(());
     }
-    let stop = |e: io::Error, path: &Path| {
-        Failure::operational(format!(
-            "cannot move tmp leftovers to a backup: {e}; move {} out of the skill repo by hand, then run the command again",
+    let by_hand = |path: &Path| {
+        format!(
+            "move {} out of the skill repo by hand, then run the command again",
             path.display()
-        ))
+        )
     };
-    let backup = Backup::create(paths).map_err(|e| stop(e, tmp))?;
+    let backup = Backup::create(paths, &by_hand(tmp))?;
     let rel = Path::new("repo/.skiman/tmp");
     for leftover in &leftovers {
         let name = leftover.file_name().expect("entry has a name");
-        backup
-            .move_in(leftover, &rel.join(name))
-            .map_err(|e| stop(e, leftover))?;
+        backup.move_in(leftover, &rel.join(name)).map_err(|e| {
+            Failure::operational(format!(
+                "cannot move tmp leftovers to a backup: {e}; {}",
+                by_hand(leftover)
+            ))
+        })?;
     }
     out!(
         "moved tmp leftovers to {}",

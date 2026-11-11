@@ -556,6 +556,9 @@ mod tests {
         assert_eq!(world.swap_folders().len(), 1);
     }
 
+    /// macOS only: the folder that lets the old version out but not back in
+    /// is made with a macOS ACL (`chmod +a`), which other systems lack.
+    #[cfg(target_os = "macos")]
     #[test]
     fn a_previous_version_that_cannot_be_put_back_says_where_it_is_kept() {
         let world = World::new();

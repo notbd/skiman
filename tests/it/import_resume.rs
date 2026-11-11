@@ -259,6 +259,109 @@ fn with_a_link_through_an_alias_a_kill_after_any_move_then_the_same_command_ends
     assert_each_kill_ends_like_an_uninterrupted_import(alias, &moved(&originals), &[false, true]);
 }
 
+/// `~/.agents/skills/notes` leads to the copy through forty `..` steps and
+/// the link `~/bridge -> ~/.claude/skills`.
+fn dot_dots(sandbox: &Sandbox) {
+    let home = sandbox.home();
+    std::fs::create_dir_all(home.join("pad")).unwrap();
+    std::os::unix::fs::symlink(sandbox.tool_dir(Tool::ClaudeCode), home.join("bridge")).unwrap();
+    let codex = sandbox.tool_dir(Tool::Codex).join("notes");
+    std::fs::remove_file(&codex).unwrap();
+    let target = format!("{}/{}bridge/notes", home.display(), "pad/../".repeat(40));
+    std::os::unix::fs::symlink(target, codex).unwrap();
+}
+
+/// Claude Code's tool directory is a link to `~/dotfiles/claude-skills`;
+/// the Codex link still names the copy through it.
+fn claude_dir_linked(sandbox: &Sandbox) {
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let real = sandbox.home().join("dotfiles/claude-skills");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::rename(&claude, &real).unwrap();
+    std::os::unix::fs::symlink(&real, &claude).unwrap();
+}
+
+/// Codex's tool directory is a link to Claude Code's, where `notes` is a
+/// link to `notes-real`; Antigravity's `notes` links to Codex's.
+fn codex_dir_linked(sandbox: &Sandbox) {
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let codex = sandbox.tool_dir(Tool::Codex);
+    std::fs::remove_dir_all(&codex).unwrap();
+    std::os::unix::fs::symlink(&claude, &codex).unwrap();
+    std::fs::rename(claude.join("notes"), claude.join("notes-real")).unwrap();
+    std::os::unix::fs::symlink(claude.join("notes-real"), claude.join("notes")).unwrap();
+    std::os::unix::fs::symlink(
+        codex.join("notes"),
+        sandbox.tool_dir(Tool::Antigravity).join("notes"),
+    )
+    .unwrap();
+}
+
+/// `ddd` holds a nested skill `sub`, `mmm -> nnn -> ddd`, and Codex's `eee`
+/// links to `mmm/sub`.
+fn nested(sandbox: &Sandbox) {
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    write(claude.join("ddd/SKILL.md"), skill_md("ddd"));
+    write(claude.join("ddd/sub/SKILL.md"), skill_md("sub"));
+    std::os::unix::fs::symlink(claude.join("ddd"), claude.join("nnn")).unwrap();
+    std::os::unix::fs::symlink(claude.join("nnn"), claude.join("mmm")).unwrap();
+    std::os::unix::fs::symlink(
+        claude.join("mmm/sub"),
+        sandbox.tool_dir(Tool::Codex).join("eee"),
+    )
+    .unwrap();
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn with_links_through_tool_directories_and_other_links_a_kill_then_the_same_command_ends_like_an_uninterrupted_import()
+ {
+    let notes = ["moved:claude-code/notes".to_owned()];
+    assert_each_kill_ends_like_an_uninterrupted_import(dot_dots, &notes, &[false]);
+    assert_each_kill_ends_like_an_uninterrupted_import(claude_dir_linked, &notes, &[false]);
+    assert_each_kill_ends_like_an_uninterrupted_import(codex_dir_linked, &notes, &[false]);
+    let mmm = ["moved:claude-code/mmm".to_owned()];
+    assert_each_kill_ends_like_an_uninterrupted_import(nested, &mmm, &[false]);
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_original_a_move_across_file_systems_left_half_deleted_stays_in_place_and_is_named() {
+    let sandbox = Sandbox::new();
+    let Setup { folder, .. } = setup(&sandbox);
+    import_killed_at(&sandbox, &folder, "moved:claude-code/notes");
+    let backup = only_backup(&sandbox);
+    // As a move across file systems leaves it when killed while deleting
+    // the original: the copy in the backup is whole, and the original
+    // folder has lost its SKILL.md.
+    let left = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+    write(left.join("reference.md"), "left over\n");
+
+    let output = import(&sandbox, &folder);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
+    assert!(
+        stdout.contains(&format!("  keep {}: it is not a skill", left.display())),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(&format!("{} is occupied", left.display())),
+        "{stderr}"
+    );
+    assert_eq!(read(left.join("reference.md")), "left over\n");
+    assert_eq!(
+        read(backup.join("claude-code/notes/SKILL.md")),
+        skill_md("notes")
+    );
+}
+
 #[test]
 #[cfg_attr(
     not(debug_assertions),

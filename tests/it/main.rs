@@ -16,6 +16,7 @@ mod harness;
 mod hooks;
 mod hostile_upstream;
 mod import;
+mod import_again;
 mod import_guide;
 mod import_resume;
 mod init;

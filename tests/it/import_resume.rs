@@ -46,7 +46,7 @@ fn final_state(sandbox: &Sandbox) -> BTreeMap<String, String> {
 /// What an import that was never interrupted ends with.
 struct Uninterrupted {
     state: BTreeMap<String, String>,
-    /// Its one backup folder: every original and replaced repo file.
+    /// The backup folder it made: every original and replaced repo file.
     backup: BTreeMap<String, String>,
 }
 
@@ -55,6 +55,7 @@ fn uninterrupted(layout: fn(&Sandbox)) -> Uninterrupted {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
     layout(&sandbox);
+    let before = backup_dirs(&sandbox);
     let output = import(&sandbox, &folder);
     assert_eq!(
         output.status.code(),
@@ -62,9 +63,15 @@ fn uninterrupted(layout: fn(&Sandbox)) -> Uninterrupted {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let [backup] = backup_dirs(&sandbox)
+        .into_iter()
+        .filter(|dir| !before.contains(dir))
+        .collect::<Vec<_>>()
+        .try_into()
+        .expect("the import made one backup folder");
     Uninterrupted {
         state: final_state(&sandbox),
-        backup: normalised(&sandbox, "", &only_backup(&sandbox)),
+        backup: normalised(&sandbox, "", &backup),
     }
 }
 
@@ -469,6 +476,125 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
+fn during_the_takeover_hand_edits_to_skiman_toml_are_kept_and_a_changed_skill_refuses_the_run() {
+    let sandbox = Sandbox::new();
+    let Setup { folder, .. } = setup(&sandbox);
+    let repo = sandbox.skill_repo();
+    import_killed_at(&sandbox, &folder, "moved:claude-code/notes");
+
+    write(repo.join("skills/mine/SKILL.md"), skill_md("mine"));
+    let notes = read(repo.join("skills/notes/SKILL.md"));
+    write(
+        repo.join("skills/notes/SKILL.md"),
+        format!("{notes}\nMade by hand.\n"),
+    );
+    assert_run_refused(
+        &sandbox,
+        &folder,
+        &[
+            "  skills/notes differs from the import folder's skills/notes\n",
+            "  skills/mine is not in the import folder\n",
+        ],
+    );
+    std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
+    write(repo.join("skills/notes/SKILL.md"), &notes);
+
+    std::fs::create_dir_all(sandbox.home().join("x")).unwrap();
+    let manifest = format!(
+        "{}\n[projects.x]\npath = \"~/x\"\n\n[skills.notes]\nenabled = false\n",
+        read(repo.join("skiman.toml"))
+    );
+    write(repo.join("skiman.toml"), &manifest);
+    let output = import(&sandbox, &folder);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(read(repo.join("skiman.toml")), manifest);
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn during_the_takeover_a_snapshot_changed_by_hand_is_fetched_again_and_kept_in_a_backup() {
+    let sandbox = Sandbox::new();
+    let Setup { folder, .. } = setup(&sandbox);
+    let repo = sandbox.skill_repo();
+    import_killed_at(&sandbox, &folder, "moved:claude-code/notes");
+    let snapshot = tree(repo.join("upstream/pdf"));
+    write(repo.join("upstream/pdf/extra.md"), "hand edit\n");
+
+    let output = import(&sandbox, &folder);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(tree(repo.join("upstream/pdf")), snapshot);
+    assert!(
+        backup_dirs(&sandbox)
+            .iter()
+            .any(|dir| dir.join("repo/upstream/pdf/extra.md").is_file()),
+        "the changed snapshot is in no backup"
+    );
+}
+
+/// The skills already in the skill repo (none here), its shared body empty
+/// as `init` leaves it, and an import folder of instructions only with tools
+/// of its own.
+fn instructions_only(sandbox: &Sandbox) {
+    write(sandbox.skill_repo().join("instructions/shared.md"), "");
+    let folder = sandbox.root().join("import");
+    std::fs::remove_dir_all(folder.join("skills")).unwrap();
+    std::fs::create_dir_all(folder.join("skills")).unwrap();
+    write(
+        folder.join("skiman.toml"),
+        "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
+    );
+}
+
+/// `notes` adopted into the skill repo, its shared body empty as `init`
+/// leaves it, and an import folder holding the same `notes` with tools of
+/// its own.
+fn adopted(sandbox: &Sandbox) {
+    let repo = sandbox.skill_repo();
+    write(repo.join("instructions/shared.md"), "");
+    sandbox
+        .skiman()
+        .args(["adopt", "notes", "--from", "claude-code", "--yes"])
+        .output()
+        .unwrap();
+    assert!(repo.join("skills/notes/SKILL.md").is_file());
+    let folder = sandbox.root().join("import");
+    std::fs::remove_dir_all(folder.join("skills/pdf")).unwrap();
+    write(
+        folder.join("skiman.toml"),
+        "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
+    );
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn with_the_skills_already_in_the_skill_repo_a_kill_before_skiman_toml_then_the_same_command_ends_like_an_uninterrupted_import()
+ {
+    let point = ["rename:skiman.toml".to_owned()];
+    assert_each_kill_ends_like_an_uninterrupted_import(instructions_only, &point, &[false]);
+    assert_each_kill_ends_like_an_uninterrupted_import(adopted, &point, &[false]);
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn originals_backed_up_before_the_kill_are_still_in_their_backup_after_the_same_command_finishes() {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
@@ -490,10 +616,7 @@ fn originals_backed_up_before_the_kill_are_still_in_their_backup_after_the_same_
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let second = stdout
         .lines()
-        .find_map(|l| {
-            l.strip_prefix("imported ")
-                .and_then(|l| l.split_once("; the originals this run moved are in "))
-        })
+        .find_map(|l| l.split_once("; the originals this run moved are in "))
         .map(|(_, b)| PathBuf::from(b))
         .unwrap_or_else(|| panic!("no backup line in {stdout}"));
     assert_ne!(second, first);

@@ -142,8 +142,8 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
   add skill notes (own)
   add skill pdf (third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (commit)); files that differ from upstream:
       modified SKILL.md
-  move {repo}/instructions/shared.md to the backup, then write the import's
   move {repo}/skiman.toml to the backup, then write the import's
+  move {repo}/instructions/shared.md to the backup, then write the import's
   move {claude}/old-copy to the backup (no imported skill of that name is distributed)
   move {codex}/notes to the backup, then link it to skill notes
   move {claude}/notes to the backup, then link it to skill notes

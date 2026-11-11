@@ -5,12 +5,14 @@
 //! Order: no TTY and no `--yes` -> exit 2 -> config -> the skill repo is
 //! initialised, and its `skiman.toml`, `skiman.lock` and shared body are
 //! regular files -> phase 1 on the folder (layout, path safety, every rule
-//! except Consistency) -> fetch every declared source -> phase 2 on the
-//! complete result (Consistency, secrets, everything) -> what the skill repo
-//! holds against what the import writes ([`repo_todo`]) -> takeover plan ->
-//! preview -> confirm -> repo lock, checks again (the takeover plan
-//! included) -> tmp leftovers -> `upstream/`, `skiman.lock`,
-//! `instructions/shared.md`, `skiman.toml`, `skills/` (each staged under
+//! except Consistency) -> whether the skill repo already holds the whole
+//! import ([`progress`]; if so, nothing is fetched or written and the run
+//! goes on at the takeover plan) -> fetch every declared source -> phase 2
+//! on the complete result (Consistency, secrets, everything) -> what the
+//! skill repo holds against what the import writes ([`repo_todo`]) ->
+//! takeover plan -> preview -> confirm -> repo lock, checks again (the
+//! takeover plan included) -> tmp leftovers -> `upstream/`, `skiman.lock`,
+//! `skiman.toml`, `instructions/shared.md`, `skills/` (each staged under
 //! `.skiman/tmp/` and renamed into place) -> originals in tool directories
 //! and instruction locations to the backup -> sync, which creates every
 //! link. Never commits.
@@ -36,7 +38,7 @@ use crate::git::Prompts;
 use crate::import_guide;
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::managing_skills;
-use crate::manifest::{self, Manifest, SourceRecord};
+use crate::manifest::{self, Manifest, SkillEntry, SourceRecord};
 use crate::ownership::{Entry, Ownership};
 use crate::path_safety::{self, Content};
 use crate::paths::Paths;
@@ -107,19 +109,34 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let content = Folder::read(&folder)?;
     let manifest_text = merge_repo_config(&content.manifest, &repo_manifest)?;
     check_folder(&content, &manifest_text)?;
-    let thirds = fetch_sources(&paths, &content, &manifest_text, prompts)?;
-    let manifest_text = with_ref_kinds(&manifest_text, &thirds)?;
-    let lock_text = lock_text(&thirds)?;
-    check_result(&content, &manifest_text, &lock_text, &thirds)?;
-    let manifest = Manifest::parse(&manifest_text)
+    let folder_manifest = Manifest::parse(&manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
-    let candidate = Candidate {
-        content: &content,
-        manifest: manifest_text,
-        lock: lock_text,
-        thirds,
+    // `None` when the skill repo already holds the whole import (an earlier
+    // run wrote it): nothing is fetched or written, and the takeover follows
+    // the repo's own skiman.toml.
+    let (writes, manifest) = match progress(&repo, &content, &folder_manifest, &repo_manifest)? {
+        Progress::Done => (
+            None,
+            Manifest::parse(&repo_manifest).expect("parsed by progress"),
+        ),
+        Progress::OtherSharedBody => return Err(other_shared_body(&repo, &folder)),
+        Progress::NotDone => {
+            let thirds = fetch_sources(&paths, &content, &manifest_text, prompts)?;
+            let manifest_text = with_ref_kinds(&manifest_text, &thirds)?;
+            let lock_text = lock_text(&thirds)?;
+            check_result(&content, &manifest_text, &lock_text, &thirds)?;
+            let manifest = Manifest::parse(&manifest_text)
+                .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
+            let candidate = Candidate {
+                content: &content,
+                manifest: manifest_text,
+                lock: lock_text,
+                thirds,
+            };
+            let todo = repo_todo(&repo, &candidate)?;
+            (Some((candidate, todo)), manifest)
+        }
     };
-    let todo = repo_todo(&repo, &candidate)?;
     let plan = Plan::make(&paths, &repo, &manifest, &content)?;
     refuse_special_files(&plan)?;
 
@@ -128,7 +145,21 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         content.root.display(),
         repo.root().display()
     );
-    print_writes(&repo, &candidate, &todo);
+    match &writes {
+        Some((candidate, todo)) => print_writes(&repo, candidate, todo),
+        None => {
+            out!(
+                "  the skill repo already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is"
+            );
+            let differs = config_differences(&folder_manifest, &manifest, &content);
+            if !differs.is_empty() {
+                out!(
+                    "  the import folder's skiman.toml differs from the skill repo's in {}; the skill repo's are kept",
+                    differs.join(", ")
+                );
+            }
+        }
+    }
     print_plan(&repo, &plan, &paths);
     if !yes && !confirm(&format!("Import {}? [y/N] ", folder.display()))? {
         return Err(Failure::refused("not imported; nothing was changed"));
@@ -136,7 +167,16 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
 
     let lock = RepoLock::wait(&repo)?;
     refuse_irregular_files(&repo)?;
-    if repo_todo(&repo, &candidate)? != todo {
+    let changed = match &writes {
+        Some((candidate, todo)) => repo_todo(&repo, candidate)? != *todo,
+        // The takeover plan follows the repo's skiman.toml: any byte of it counts.
+        None => {
+            progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done
+                || std::fs::read(repo.manifest_file()).ok().as_deref()
+                    != Some(repo_manifest.as_bytes())
+        }
+    };
+    if changed {
         return Err(Failure::refused(
             "the skill repo changed after the preview; nothing was changed, run the import again",
         ));
@@ -156,8 +196,11 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_special_files(&plan)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     let backup = Backup::create(&paths, "nothing was changed")?;
-    let done = write_repo(&repo, &candidate, &todo, &staging, &backup)
-        .and_then(|()| take_over(&plan, &backup));
+    let done = match &writes {
+        Some((candidate, todo)) => write_repo(&repo, candidate, todo, &staging, &backup),
+        None => Ok(()),
+    }
+    .and_then(|()| take_over(&plan, &backup));
     drop(staging);
     // Only an empty backup folder goes: nothing this run moved is in it.
     let unused = std::fs::remove_dir(backup.dir()).is_ok();
@@ -179,7 +222,14 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         });
     }
     let exit = sync::run(&paths, &repo, &lock, Output::Normal);
-    out!("imported {}; {originals}", folder.display());
+    if writes.is_some() {
+        out!("imported {}; {originals}", folder.display());
+    } else {
+        out!(
+            "the skill repo {} already held this import; {originals}",
+            repo.root().display()
+        );
+    }
     out!("the import folder {} can be deleted", folder.display());
     Ok(exit)
 }
@@ -902,6 +952,35 @@ fn refuse_special_files(plan: &Plan) -> Result<(), Failure> {
     )))
 }
 
+/// Where the import folder's `skiman.toml` (`folder`, merged with the skill
+/// repo's as the import would write it) differs from the skill repo's
+/// (`repo`) in what is distributed: `[tools] enabled` as a set, `enabled` of
+/// each skill, and the `ref` of each source. Shown when the skill repo
+/// already holds the import, which keeps the repo's.
+fn config_differences(folder: &Manifest, repo: &Manifest, content: &Folder) -> Vec<String> {
+    let mut differs = Vec::new();
+    let tools = |m: &Manifest| m.enabled_tools().into_iter().collect::<BTreeSet<_>>();
+    if tools(folder) != tools(repo) {
+        differs.push("[tools] enabled".to_owned());
+    }
+    let (theirs, ours) = (folder.skills(), repo.skills());
+    let enabled = |entries: &BTreeMap<String, SkillEntry>, name: &str| {
+        entries.get(name).is_none_or(|entry| entry.enabled)
+    };
+    for name in content.skills.keys() {
+        if enabled(&theirs, name) != enabled(&ours, name) {
+            differs.push(format!("[skills.{name}] enabled"));
+        }
+    }
+    let ours = Folder::sources(repo);
+    for (name, source) in Folder::sources(folder) {
+        if ours.get(&name).map(|s| &s.git_ref) != Some(&source.git_ref) {
+            differs.push(format!("[skills.{name}.source] ref"));
+        }
+    }
+    differs
+}
+
 /// The files of skill `name` that differ from its upstream snapshot.
 fn local_modifications(skill: &Snapshot, upstream: &Snapshot) -> Vec<String> {
     let mut out = Vec::new();
@@ -1032,7 +1111,18 @@ enum PieceContent<'a> {
 }
 
 impl Candidate<'_> {
-    /// Every piece, in the order the import writes them.
+    /// Every piece, in the order the import writes them. [`progress`]
+    /// depends on that order:
+    /// - `skiman.toml` comes before the shared body, so a skill repo whose
+    ///   shared body is the import's holds the import's `skiman.toml` too.
+    ///   That holds for a run that starts with the skills, the source tables
+    ///   or the shared body to write (each comes with `skiman.toml` or after
+    ///   it), not for one that starts with only Consistency broken (a
+    ///   `skiman.lock` deleted after the import, say): stopped right before
+    ///   `skiman.toml`, it is taken as done when run again.
+    /// - The skills come last: written before a shared body that held
+    ///   something else, a run stopped between the two would be refused when
+    ///   run again.
     fn pieces(&self) -> Vec<(Piece, PieceContent<'_>)> {
         let mut pieces: Vec<(Piece, PieceContent)> = self
             .thirds
@@ -1047,12 +1137,12 @@ impl Candidate<'_> {
         pieces.extend([
             (Piece::Lock, PieceContent::File(self.lock.as_bytes())),
             (
-                Piece::SharedBody,
-                PieceContent::File(&self.content.shared_body),
-            ),
-            (
                 Piece::Manifest,
                 PieceContent::File(self.manifest.as_bytes()),
+            ),
+            (
+                Piece::SharedBody,
+                PieceContent::File(&self.content.shared_body),
             ),
         ]);
         pieces.extend(
@@ -1166,6 +1256,94 @@ fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
         repo.root().display(),
         lines.join("\n")
     )))
+}
+
+/// How far the skill repo is with this import, decided before anything is fetched.
+#[derive(Debug, PartialEq, Eq)]
+enum Progress {
+    /// The repo holds everything the import writes.
+    Done,
+    /// The repo holds everything but the import's shared body, and its own
+    /// holds more than whitespace.
+    OtherSharedBody,
+    /// Anything else: the whole import is worked out again ([`repo_todo`]).
+    NotDone,
+}
+
+/// Done when the repo's `skills/` holds exactly the folder's skills, each the
+/// same; the repo's `skiman.toml` has exactly the folder's source tables, with
+/// the same `url` and `path` (not `ref`, which `update --ref` changes after
+/// an import); Consistency holds in the repo; and the shared bodies are the
+/// same. Shared bodies of nothing but ASCII whitespace say the same, so a
+/// missing or blank one in the repo is the same as a blank one in the
+/// folder; a blank one in the repo holds nothing to keep against a folder's
+/// that holds something. `repo_manifest` is the repo's `skiman.toml`; one
+/// that does not parse is not done.
+fn progress(
+    repo: &SkillRepo,
+    content: &Folder,
+    folder_manifest: &Manifest,
+    repo_manifest: &str,
+) -> Result<Progress, Failure> {
+    if !names_in(&repo.skills_dir())?
+        .iter()
+        .eq(content.skills.keys())
+    {
+        return Ok(Progress::NotDone);
+    }
+    for (name, skill) in &content.skills {
+        if held(&repo.skill_dir(name), &PieceContent::Folder(skill))? != Held::Same {
+            return Ok(Progress::NotDone);
+        }
+    }
+    let Ok(repo_manifest) = Manifest::parse(repo_manifest) else {
+        return Ok(Progress::NotDone);
+    };
+    let sources = |manifest: &Manifest| -> Vec<_> {
+        Folder::sources(manifest)
+            .into_iter()
+            .map(|(name, s)| (name, s.url, s.path))
+            .collect()
+    };
+    if sources(&repo_manifest) != sources(folder_manifest) {
+        return Ok(Progress::NotDone);
+    }
+    let consistent = rules::consistent(&WorkingTree::new(repo.root()))
+        .map_err(|e| Failure::operational(format!("cannot read {}: {e}", repo.root().display())))?;
+    if !consistent {
+        return Ok(Progress::NotDone);
+    }
+    let blank = |bytes: &[u8]| bytes.iter().all(u8::is_ascii_whitespace);
+    Ok(
+        match held(
+            &repo.shared_body(),
+            &PieceContent::File(&content.shared_body),
+        )? {
+            Held::Same => Progress::Done,
+            Held::Nothing if blank(&content.shared_body) => Progress::Done,
+            Held::Other(old) if blank(&old) && blank(&content.shared_body) => Progress::Done,
+            Held::Other(old) if !blank(&old) => Progress::OtherSharedBody,
+            _ => Progress::NotDone,
+        },
+    )
+}
+
+/// The refusal for [`Progress::OtherSharedBody`]. The repo alone cannot tell
+/// an import that ran (finished or stopped part-way) from one that never
+/// did, so the way on depends on which it is.
+fn other_shared_body(repo: &SkillRepo, folder: &Path) -> Failure {
+    let theirs = folder.join(SHARED_BODY).display().to_string();
+    let ours = repo.shared_body().display().to_string();
+    Failure::refused(format!(
+        "refusing to import {}: the skill repo {} already holds everything this import writes except {SHARED_BODY}, which differs from the import folder's; nothing was changed.\n  \
+         If this import has run on this skill repo before (it finished or stopped part-way), make the two files the same and run it again: it finishes what is left and writes nothing else to the skill repo, whose skiman.toml stays as it is.\n    \
+         to keep the skill repo's shared body, copy {ours} over {theirs};\n    \
+         to use the import folder's, copy {theirs} over {ours} (skiman keeps no copy of the file you overwrite).\n  \
+         If it has never run on this skill repo, empty {ours} (put what it holds into the import folder's shared body first if you want to keep it) and run it again: it imports everything, the import folder's skiman.toml included.\n  \
+         If you cannot tell which, do the first.",
+        folder.display(),
+        repo.root().display(),
+    ))
 }
 
 /// What to do with each piece. Refuses (exit 1, nothing changed), naming

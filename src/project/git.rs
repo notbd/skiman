@@ -4,7 +4,9 @@
 //! skill repo ignores.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
 use crate::git::query_command;
 
@@ -163,18 +165,34 @@ pub fn ignored(root: &Path, paths: &[String]) -> Vec<(String, String)> {
     if paths.is_empty() {
         return Vec::new();
     }
-    let Ok(output) = query_command(root)
-        .args(["check-ignore", "-v", "--"])
-        .args(paths)
-        .output()
+    // `-z`, which git takes only with `--stdin`, keeps a non-ASCII path as it
+    // is (no quotes, no octal escapes): the paths go in NUL-terminated, and
+    // each ignored one comes out as four NUL-terminated fields: source, line,
+    // pattern, path.
+    let Ok(mut child) = query_command(root)
+        .args(["check-ignore", "-v", "-z", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
     else {
         return Vec::new();
     };
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let (rule, path) = line.split_once('\t')?;
-            Some((path.to_owned(), rule.to_owned()))
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let input: Vec<u8> = paths.iter().flat_map(|p| p.bytes().chain([0])).collect();
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let Ok(output) = child.wait_with_output() else {
+        return Vec::new();
+    };
+    let _ = writer.join();
+    let text = String::from_utf8_lossy(&output.stdout);
+    let fields: Vec<&str> = text.split_terminator('\0').collect();
+    fields
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|[source, line, pattern, path]| {
+            ((*path).to_owned(), format!("{source}:{line}:{pattern}"))
         })
         .collect()
 }

@@ -911,3 +911,23 @@ fn a_root_that_holds_the_skill_repo_skips_it() {
         "the skill repo is never discovered"
     );
 }
+
+#[test]
+fn the_warning_about_a_mirror_git_ignores_shows_a_non_ascii_path_as_it_is() {
+    let sandbox = setup("");
+    let gitignore = sandbox.skill_repo().join(".gitignore");
+    let mut rules = read(&gitignore);
+    rules.push_str("projects/work/美国/\n");
+    std::fs::write(&gitignore, &rules).unwrap();
+    write(root(&sandbox).join("美国/AGENTS.md"), "# 美国\n");
+
+    let (_, stderr) = run(adopt(&sandbox, ["--yes"]), 0);
+
+    assert!(
+        stderr.contains(&format!(
+            "warning: git ignores projects/work/美国/AGENTS.md in the skill repo (.gitignore:{}:projects/work/美国/), so it never gets history; change that rule\n",
+            rules.lines().count()
+        )),
+        "{stderr}"
+    );
+}

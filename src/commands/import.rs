@@ -30,6 +30,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
 use crate::backup::Backup;
+use crate::commands::update::print_not_installed;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind};
@@ -1097,9 +1098,7 @@ fn print_writes(repo: &SkillRepo, candidate: &Candidate, todo: &[(Piece, Step)])
                 for change in changes {
                     out!("      {change}");
                 }
-                for submodule in &third.snapshot.submodules {
-                    out!("      {submodule}  [submodule, not fetched]");
-                }
+                print_not_installed(&third.snapshot, "      ");
             }
         }
     }

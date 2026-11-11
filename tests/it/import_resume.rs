@@ -469,13 +469,18 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_is_fetched_again_and_t
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let repo = sandbox.skill_repo();
-    assert!(
-        stdout.contains(&format!(
-            "  move {} to the backup, then write the import's\n",
-            repo.join("upstream/pdf").display()
-        )),
-        "{stdout}"
-    );
+    for replaced in ["upstream/pdf", "skiman.lock"] {
+        assert!(
+            stdout.contains(&format!(
+                "  move {} to the backup, then write the import's\n",
+                repo.join(replaced).display()
+            )),
+            "{stdout}"
+        );
+    }
+    // Written before the kill and the same now: not listed.
+    assert!(!stdout.contains("skiman.toml to the backup"), "{stdout}");
+    assert!(!stdout.contains("shared.md to the backup"), "{stdout}");
     assert_eq!(
         read(repo.join("upstream/pdf/reference.md")),
         "# Reference v2\n"

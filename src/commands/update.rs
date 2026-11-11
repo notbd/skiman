@@ -274,7 +274,7 @@ fn update_to(
     if target.entry.snapshot == current.entry.snapshot {
         if target.entry == current.entry && target.manifest_text.is_none() {
             out!("skill {name}: up to date at {}", target.version);
-            print_not_installed(&target.snapshot);
+            print_not_installed(&target.snapshot, "  ");
             return Ok(Exit::Success);
         }
         context.staging()?;
@@ -283,7 +283,7 @@ fn update_to(
             "skill {name}: now at {}; no file of the skill changed",
             target.version
         );
-        print_not_installed(&target.snapshot);
+        print_not_installed(&target.snapshot, "  ");
         out!("saved the records of {name} to {}", backup.dir().display());
         return Ok(Exit::Success);
     }
@@ -329,7 +329,7 @@ fn update_to(
     for (change, path) in &changes {
         out!("  {} {path}", change.verb());
     }
-    print_not_installed(&target.snapshot);
+    print_not_installed(&target.snapshot, "  ");
     let saved = if old_folders_saved {
         "the old folders and records"
     } else {
@@ -349,13 +349,13 @@ fn update_to(
 }
 
 /// The snapshot's submodules and git files, which are not installed, as
-/// `add` and `update` list them.
-pub(crate) fn print_not_installed(snapshot: &Snapshot) {
+/// `add`, `update` and `import` list them, each line after `indent`.
+pub(crate) fn print_not_installed(snapshot: &Snapshot, indent: &str) {
     for submodule in &snapshot.submodules {
-        out!("  {submodule}  [submodule, not fetched]");
+        out!("{indent}{submodule}  [submodule, not fetched]");
     }
     for path in &snapshot.git_files {
-        out!("  {path}  [not installed]");
+        out!("{indent}{path}  [not installed]");
     }
 }
 

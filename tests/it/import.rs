@@ -60,7 +60,7 @@ fn without_a_terminal_import_needs_yes() {
 /// A messy setup: instruction files that are regular files, a skill copied
 /// into one tool directory and linked from another, a copy the import
 /// leaves out, a managed-elsewhere folder, a non-skill file at a skill's
-/// name, and an upstream `acme/skills` holding `pdf`.
+/// name, and an upstream `acme/skills` holding `pdf` with a `.gitignore`.
 struct Messy {
     folder: PathBuf,
     commit: String,
@@ -91,7 +91,8 @@ fn messy(sandbox: &Sandbox) -> Messy {
 
     let up = sandbox.upstream("acme/skills");
     up.write("skills/pdf/SKILL.md", skill_md("pdf"))
-        .write("skills/pdf/reference.md", "# Reference\n");
+        .write("skills/pdf/reference.md", "# Reference\n")
+        .write("skills/pdf/.gitignore", "*.tmp\n");
     let commit = up.commit("v1");
     up.write("skills/pdf/reference.md", "# Reference v2\n");
     up.commit("v2");
@@ -145,6 +146,7 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
   add skill notes (own)
   add skill pdf (third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (commit)); files that differ from upstream:
       modified SKILL.md
+      .gitignore  [not installed]
   move {repo}/skiman.toml to the backup, then write the import's
   move {repo}/instructions/shared.md to the backup, then write the import's
   move {claude}/old-copy to the backup (no imported skill of that name is distributed)
@@ -338,13 +340,17 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
     // The import's own skill, already in the skill repo as the import folder
     // holds it, is kept, and the rest is written.
     write(repo.join("skills/notes/SKILL.md"), skill_md("notes"));
-    sandbox
+    let output = sandbox
         .skiman()
         .arg("import")
         .arg(&folder)
         .arg("--yes")
         .assert()
-        .code(0);
+        .code(0)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\n  keep skill notes (own)\n"), "{stdout}");
     assert_eq!(
         read(repo.join("instructions/shared.md")),
         "# Shared\n\nBe brief.\n"

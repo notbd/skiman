@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
+use crate::commands::update::print_not_installed;
 use crate::commands::{ask, confirm, has_terminal};
 use crate::discovery;
 use crate::failure::{Failure, finish};
@@ -70,10 +71,7 @@ impl Upstream {
             Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
             Upstream::Local { dir } => Ok(snapshot::list_local(&local_path(dir, path))?
                 .into_iter()
-                .map(|file| {
-                    let from_root = discovery::join(path, &file);
-                    (file, from_root)
-                })
+                .map(|file| (file.clone(), discovery::join(path, &file)))
                 .collect()),
         }
     }
@@ -550,12 +548,7 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
             out!("  {}  [{}]", file.path, flags.join(", "));
         }
     }
-    for submodule in &install.snapshot.submodules {
-        out!("  {submodule}  [submodule, not fetched]");
-    }
-    for path in &install.snapshot.git_files {
-        out!("  {path}  [not installed]");
-    }
+    print_not_installed(&install.snapshot);
     if install.renamed_skill_md.is_some() {
         out!(
             "the `name` line of skills/{0}/SKILL.md is set to `{0}` (a local modification; upstream/{0} keeps the upstream text)",

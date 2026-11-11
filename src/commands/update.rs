@@ -348,9 +348,9 @@ fn update_to(
     Ok(Exit::NeedsAttention)
 }
 
-/// The snapshot's submodules and git files, which are not installed (as
-/// `add` lists them).
-fn print_not_installed(snapshot: &Snapshot) {
+/// The snapshot's submodules and git files, which are not installed, as
+/// `add` and `update` list them.
+pub(crate) fn print_not_installed(snapshot: &Snapshot) {
     for submodule in &snapshot.submodules {
         out!("  {submodule}  [submodule, not fetched]");
     }

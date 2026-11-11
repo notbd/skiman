@@ -99,7 +99,8 @@ impl WorkingTree {
     }
 }
 
-fn kind_of(meta: &std::fs::Metadata) -> Kind {
+/// The kind of the entry that `meta`, read with `symlink_metadata`, describes.
+pub fn kind_of(meta: &std::fs::Metadata) -> Kind {
     let file_type = meta.file_type();
     if file_type.is_symlink() {
         Kind::Symlink

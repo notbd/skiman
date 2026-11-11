@@ -116,16 +116,17 @@ pub fn check(tree: &dyn Tree, dir: &str, origin: &str, content: Content) -> Resu
             }
         }
     }
+    // A local folder stops being walked once it is over a limit, so these
+    // two name the limit rather than a total.
     if files.len() > LIMITS.files {
         problems.push(format!(
-            "{} files; a skill may hold at most {}",
-            files.len(),
+            "more than {0} files; a skill may hold at most {0}",
             LIMITS.files
         ));
     }
     if bytes > LIMITS.skill_bytes {
         problems.push(format!(
-            "{bytes} bytes in total; a skill may hold at most {} MiB",
+            "more than {0} MiB in total; a skill may hold at most {0} MiB",
             LIMITS.skill_bytes / MIB
         ));
     }

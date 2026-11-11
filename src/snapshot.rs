@@ -18,6 +18,7 @@ use crate::failure::Failure;
 use crate::fetch::Cache;
 use crate::git;
 use crate::path_safety::{self, Content};
+use crate::rules::LIMITS;
 use crate::tree::{self, Kind, Tree, WorkingTree, is_ignored};
 
 /// One regular file of a snapshot.
@@ -213,14 +214,7 @@ impl Tree for Listing<'_> {
     }
 
     fn walk(&self, dir: &str) -> std::io::Result<Vec<tree::Entry>> {
-        Ok(self
-            .entries
-            .iter()
-            .filter(|e| {
-                dir.is_empty() || e.path.strip_prefix(dir).is_some_and(|r| r.starts_with('/'))
-            })
-            .cloned()
-            .collect())
+        Ok(below(&self.entries, dir))
     }
 
     fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
@@ -287,12 +281,7 @@ pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
 
 /// Every entry below the local folder `dir` except folders and `.git`.
 fn walk_local(dir: &Path) -> Result<Vec<tree::Entry>, Failure> {
-    if !dir.is_dir() {
-        return Err(Failure::refused(format!(
-            "the local folder {} does not exist",
-            dir.display()
-        )));
-    }
+    require_folder(dir)?;
     let entries = WorkingTree::new(dir)
         .walk("")
         .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))?;
@@ -303,23 +292,34 @@ fn walk_local(dir: &Path) -> Result<Vec<tree::Entry>, Failure> {
         .collect())
 }
 
+/// Refuses (exit 1) a `dir` that is not a folder.
+fn require_folder(dir: &Path) -> Result<(), Failure> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    Err(Failure::refused(format!(
+        "the local folder {} does not exist",
+        dir.display()
+    )))
+}
+
 impl Snapshot {
     /// Reads the local folder `dir` as it is now, without `.git`, after
     /// [`path_safety::check`] passed on it.
     pub fn read_local(dir: &Path) -> Result<Snapshot, Failure> {
         let label = dir.display().to_string();
         let io = |e: std::io::Error| Failure::operational(format!("cannot read {label}: {e}"));
-        walk_local(dir)?;
-        let folder = LocalFolder(WorkingTree::new(dir));
+        require_folder(dir)?;
+        let folder = LocalFolder::new(dir).map_err(io)?;
         path_safety::check(&folder, "", &label, Content::Upstream)?;
         let mut snapshot = Snapshot::default();
-        for entry in folder.walk("").map_err(io)? {
+        for entry in &folder.entries {
             if let Kind::File { executable, .. } = entry.kind
                 && !is_ignored(&entry.path)
             {
                 snapshot.files.push(SnapshotFile {
                     content: folder.read(&entry.path).map_err(io)?,
-                    path: entry.path,
+                    path: entry.path.clone(),
                     executable,
                 });
             }
@@ -328,22 +328,95 @@ impl Snapshot {
     }
 }
 
-/// A local folder without anything inside `.git` (at any depth, any case).
-struct LocalFolder(WorkingTree);
+/// The entries of a listing that lie below folder `dir` (all for `""`).
+fn below(entries: &[tree::Entry], dir: &str) -> Vec<tree::Entry> {
+    entries
+        .iter()
+        .filter(|e| dir.is_empty() || e.path.strip_prefix(dir).is_some_and(|r| r.starts_with('/')))
+        .cloned()
+        .collect()
+}
+
+/// A local folder without anything inside `.git` (at any depth, any case),
+/// walked once when made. The walk counts what [`path_safety::check`]
+/// counts, the regular files that are not ignored, and stops at the first
+/// one that takes the folder over a skill's limits, so a folder that grew far
+/// past them is refused after about [`LIMITS`]`.files` entries.
+struct LocalFolder {
+    tree: WorkingTree,
+    /// Sorted by path bytes. A stopped walk keeps the folders above every
+    /// entry it holds.
+    entries: Vec<tree::Entry>,
+}
+
+impl LocalFolder {
+    fn new(dir: &Path) -> std::io::Result<LocalFolder> {
+        let tree = WorkingTree::new(dir);
+        let mut walk = Walk::default();
+        if tree.kind("")? == Some(Kind::Dir) {
+            walk.dir(dir, "")?;
+        }
+        let mut entries = walk.entries;
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(LocalFolder { tree, entries })
+    }
+}
+
+/// The state of [`LocalFolder::new`]'s walk.
+#[derive(Default)]
+struct Walk {
+    entries: Vec<tree::Entry>,
+    files: usize,
+    bytes: u64,
+}
+
+impl Walk {
+    /// Adds what folder `rel` of `root` holds, each folder before its
+    /// content, skipping `.git`. `false` once a file took the folder over a
+    /// limit; the walk adds nothing after it.
+    fn dir(&mut self, root: &Path, rel: &str) -> std::io::Result<bool> {
+        for entry in std::fs::read_dir(root.join(rel))? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.eq_ignore_ascii_case(".git") {
+                continue;
+            }
+            let path = tree::join(rel, &name);
+            let kind = tree::kind_of(&std::fs::symlink_metadata(entry.path())?);
+            self.entries.push(tree::Entry {
+                path: path.clone(),
+                kind,
+            });
+            let within = match kind {
+                Kind::Dir => self.dir(root, &path)?,
+                Kind::File { size, .. } if !is_ignored(&path) => {
+                    self.files += 1;
+                    self.bytes += size;
+                    self.files <= LIMITS.files
+                        && size <= LIMITS.file_bytes
+                        && self.bytes <= LIMITS.skill_bytes
+                }
+                _ => true,
+            };
+            if !within {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
 
 impl Tree for LocalFolder {
     fn kind(&self, path: &str) -> std::io::Result<Option<Kind>> {
-        self.0.kind(path)
+        self.tree.kind(path)
     }
 
     fn walk(&self, dir: &str) -> std::io::Result<Vec<tree::Entry>> {
-        let mut entries = self.0.walk(dir)?;
-        entries.retain(|e| !in_dot_git(&e.path));
-        Ok(entries)
+        Ok(below(&self.entries, dir))
     }
 
     fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
-        self.0.read(path)
+        self.tree.read(path)
     }
 }
 

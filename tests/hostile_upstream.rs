@@ -411,14 +411,14 @@ fn too_many_files_are_refused_for_a_git_and_a_local_source() {
     let refs: Vec<(&str, Vec<u8>)> = files.iter().map(|(p, c)| (p.as_str(), c.clone())).collect();
     plain_upstream(&sandbox, &refs);
     let stderr = assert_refused(&sandbox, "acme/pdf", "https://github.com/acme/pdf.git");
-    assert!(stderr.contains("1001 files"), "{stderr}");
+    assert!(stderr.contains("more than 1000 files"), "{stderr}");
 
     let dir = local_upstream(&sandbox);
     for (path, content) in &files {
         write(dir.join(path), content);
     }
     let stderr = assert_refused(&sandbox, "~/src/pdf", &dir.display().to_string());
-    assert!(stderr.contains("1001 files"), "{stderr}");
+    assert!(stderr.contains("more than 1000 files"), "{stderr}");
 }
 
 #[test]

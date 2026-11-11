@@ -166,6 +166,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         return Err(Failure::refused("not imported; nothing was changed"));
     }
 
+    test_hook::at("import", "confirmed");
     let lock = RepoLock::wait(&repo)?;
     refuse_irregular_files(&repo)?;
     let changed = match &writes {

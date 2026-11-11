@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, Tool, backup_dirs, fingerprint, init, read, skill_md, tree, write};
+use crate::support::{
+    Sandbox, Setup, Tool, backup_dirs, fingerprint, import_killed_at, import_with_hook, init, read,
+    setup, skill_md, tree, write,
+};
 
 /// An import folder outside the skill repo holding own skill `notes`, a
 /// shared body and a `skiman.toml` with `manifest` as its text.
@@ -1085,6 +1088,241 @@ fn a_local_source_outside_the_entries_that_move_is_imported_and_updated_afterwar
             .code(0);
         sandbox.skiman().args(["update", "pdf"]).assert().code(0);
     }
+}
+
+/// Foreign skills to move whichever way the import goes: `later` and
+/// `spare` (which holds a folder `pdf`) in Claude Code's tool directory, and
+/// in Codex's a link to `later`.
+fn more_to_move(sandbox: &Sandbox) {
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    write(claude.join("later/SKILL.md"), skill_md("later"));
+    write(claude.join("spare/SKILL.md"), skill_md("spare"));
+    write(claude.join("spare/pdf/SKILL.md"), skill_md("pdf"));
+    std::os::unix::fs::symlink(
+        claude.join("later"),
+        sandbox.tool_dir(Tool::Codex).join("later"),
+    )
+    .unwrap();
+}
+
+/// [`setup`] killed before its last skill, so the import writes again, and
+/// [`more_to_move`].
+fn stopped_before_the_last_skill(sandbox: &Sandbox, local: bool) -> PathBuf {
+    let folder = setup_with_source(sandbox, local);
+    import_killed_at(sandbox, &folder, "rename:skills/pdf");
+    more_to_move(sandbox);
+    folder
+}
+
+/// [`setup`] imported, so the skill repo holds it, and [`more_to_move`].
+fn imported(sandbox: &Sandbox, local: bool) -> PathBuf {
+    let folder = setup_with_source(sandbox, local);
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    more_to_move(sandbox);
+    folder
+}
+
+/// [`setup`]; with `local`, `pdf` is read from `pdf` below the link
+/// `~/src-link -> ~/src` instead.
+fn setup_with_source(sandbox: &Sandbox, local: bool) -> PathBuf {
+    let Setup { folder, .. } = setup(sandbox);
+    if local {
+        let src = sandbox.home().join("src");
+        write(src.join("pdf/SKILL.md"), skill_md("pdf"));
+        write(src.join("pdf/reference.md"), "# Reference\n");
+        std::os::unix::fs::symlink(&src, sandbox.home().join("src-link")).unwrap();
+        write(
+            folder.join("skiman.toml"),
+            format!("{TOOLS}\n[skills.pdf.source]\nurl = \"~/src-link\"\npath = \"pdf\"\n"),
+        );
+    }
+    folder
+}
+
+/// Runs the import with `run` at the step between the confirmation and the
+/// repo lock: it must refuse (exit 1) before anything is written or moved,
+/// making no backup folder after `run`, and no backup folder may hold a link
+/// into the skill repo.
+#[track_caller]
+fn assert_refused_after_the_confirmation(sandbox: &Sandbox, folder: &Path, run: &str) {
+    let listed = sandbox.root().join("backups-after-the-hook");
+    let output = import_with_hook(
+        sandbox,
+        folder,
+        "import:confirmed",
+        &format!(
+            "{run} && (ls -1 '{}' > '{}' 2> /dev/null; true)",
+            crate::support::backups(sandbox).display(),
+            listed.display()
+        ),
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{run}: {stdout}\n{stderr}");
+    assert!(stderr.contains("nothing was changed"), "{run}: {stderr}");
+    assert!(
+        !stdout.lines().any(|l| ["moved ", "created ", "saved "]
+            .iter()
+            .any(|w| l.starts_with(w))),
+        "{run}: {stdout}"
+    );
+    let names: Vec<String> = backup_dirs(sandbox)
+        .iter()
+        .map(|dir| dir.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        names,
+        read(&listed).lines().collect::<Vec<_>>(),
+        "{run}: the refused run made a backup folder"
+    );
+    let repo = sandbox.skill_repo();
+    for dir in backup_dirs(sandbox) {
+        for (path, value) in tree(&dir) {
+            assert!(
+                !value.starts_with(&format!("link -> {}", repo.display())),
+                "{run}: {} links into the skill repo",
+                dir.join(path).display()
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before_anything_moves() {
+    for start in [stopped_before_the_last_skill, imported] {
+        let changes: [fn(&Sandbox, &Path) -> String; 6] = [
+            |sandbox, _| {
+                let notes = sandbox.skill_repo().join("skills/notes/SKILL.md");
+                format!("echo edited >> '{}'", notes.display())
+            },
+            |sandbox, _| {
+                let manifest = sandbox.skill_repo().join("skiman.toml");
+                format!("echo '# edited' >> '{}'", manifest.display())
+            },
+            |_, folder| {
+                let notes = folder.join("skills/notes/SKILL.md");
+                format!("echo edited >> '{}'", notes.display())
+            },
+            |_, folder| {
+                format!(
+                    "env -u SKIMAN_TEST_HOOK '{}' import '{}' --yes > /dev/null 2>&1",
+                    env!("CARGO_BIN_EXE_skiman"),
+                    folder.display()
+                )
+            },
+            |sandbox, _| {
+                let plugin = sandbox
+                    .tool_dir(Tool::ClaudeCode)
+                    .join("later/.claude-plugin");
+                format!(
+                    "mkdir '{}' && echo '{{}}' > '{}/plugin.json'",
+                    plugin.display(),
+                    plugin.display()
+                )
+            },
+            |sandbox, _| {
+                let link = sandbox.tool_dir(Tool::Codex).join("later");
+                let spare = sandbox.tool_dir(Tool::ClaudeCode).join("spare");
+                format!("ln -sfn '{}' '{}'", spare.display(), link.display())
+            },
+        ];
+        for change in changes {
+            let sandbox = Sandbox::new();
+            let folder = start(&sandbox, false);
+            assert_refused_after_the_confirmation(&sandbox, &folder, &change(&sandbox, &folder));
+        }
+    }
+
+    // Where the skill repo holds the import, a skiman.toml that changes no
+    // condition is still checked byte for byte: Codex is no longer enabled,
+    // and its entry stays where it is.
+    let sandbox = Sandbox::new();
+    let folder = imported(&sandbox, false);
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let without_codex = read(&manifest).replace(", \"codex\"", "");
+    std::fs::write(sandbox.root().join("without-codex.toml"), without_codex).unwrap();
+    assert_refused_after_the_confirmation(
+        &sandbox,
+        &folder,
+        &format!(
+            "cp '{}' '{}'",
+            sandbox.root().join("without-codex.toml").display(),
+            manifest.display()
+        ),
+    );
+    assert!(sandbox.tool_dir(Tool::Codex).join("later").is_symlink());
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_local_source_pointed_at_an_entry_to_move_after_the_confirmation_refuses_the_import() {
+    for start in [stopped_before_the_last_skill, imported] {
+        let sandbox = Sandbox::new();
+        let folder = start(&sandbox, true);
+        let spare = sandbox.tool_dir(Tool::ClaudeCode).join("spare");
+        let link = sandbox.home().join("src-link");
+        let run = format!("ln -sfn '{}' '{}'", spare.display(), link.display());
+        assert_refused_after_the_confirmation(&sandbox, &folder, &run);
+        assert!(spare.join("SKILL.md").is_file());
+    }
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_session_start_sync_or_an_edit_inside_an_entry_after_the_confirmation_does_not_refuse_the_import()
+ {
+    // Codex's instruction file is a link to Claude Code's, which is gone
+    // after the kill; a session start in between links it again.
+    let sandbox = Sandbox::new();
+    let Setup { folder, .. } = setup(&sandbox);
+    let agents_md = sandbox.instruction_file(Tool::Codex);
+    std::fs::remove_file(&agents_md).unwrap();
+    std::os::unix::fs::symlink(sandbox.instruction_file(Tool::ClaudeCode), &agents_md).unwrap();
+    import_killed_at(&sandbox, &folder, "moved:claude-code/CLAUDE.md");
+    let output = import_with_hook(
+        &sandbox,
+        &folder,
+        "import:confirmed",
+        &format!("'{}' sync --hook", env!("CARGO_BIN_EXE_skiman")),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sandbox = Sandbox::new();
+    let folder = imported(&sandbox, false);
+    let later = sandbox.tool_dir(Tool::ClaudeCode).join("later/SKILL.md");
+    let output = import_with_hook(
+        &sandbox,
+        &folder,
+        "import:confirmed",
+        &format!("echo edited >> '{}'", later.display()),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]

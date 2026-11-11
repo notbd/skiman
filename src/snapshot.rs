@@ -267,11 +267,6 @@ pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, Stri
 /// The paths of every non-folder entry below the local folder `dir`,
 /// skipping `.git` at any depth. A missing `dir` is refused (exit 1).
 pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
-    Ok(walk_local(dir)?.into_iter().map(|e| e.path).collect())
-}
-
-/// Every entry below the local folder `dir` except folders and `.git`.
-fn walk_local(dir: &Path) -> Result<Vec<tree::Entry>, Failure> {
     require_folder(dir)?;
     let entries = WorkingTree::new(dir)
         .walk("")
@@ -280,6 +275,7 @@ fn walk_local(dir: &Path) -> Result<Vec<tree::Entry>, Failure> {
         .into_iter()
         .filter(|e| e.kind != Kind::Dir)
         .filter(|e| !in_dot_git(&e.path))
+        .map(|e| e.path)
         .collect())
 }
 

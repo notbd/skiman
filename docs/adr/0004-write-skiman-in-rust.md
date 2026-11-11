@@ -1,6 +1,6 @@
 # Write skiman in Rust
 
-skiman ships as a single binary that starts in milliseconds, because it runs at the start of every agent session. Go and Rust both meet that; Rust wins on two points that matter here: several commands (`add`, `remove`, `mv`, `adopt`, `import`) edit the user's hand-written `skiman.toml`, and `toml_edit` preserves comments and layout where Go's equivalents are small projects; and the code is written by agents and not reviewed line by line, so a stricter compiler (exhaustive enums, no nil) catches more mistakes before tests do. Go's advantages, faster builds and easier reading, mostly help the development loop rather than the product.
+skiman ships as a single binary that starts in milliseconds, because it runs at the start of every agent session. Go and Rust both meet that; Rust wins on two points that matter here: several commands (`add`, `remove`, `mv`, `adopt`, `import`) edit the user's hand-written `skiman.toml`, and `toml_edit` preserves comments and layout where Go's equivalents are small projects; and a stricter compiler (exhaustive enums, no nil) catches more mistakes before tests do. Go's advantages, faster builds and easier reading, mostly help the development loop rather than the product.
 
 ## Considered Options
 

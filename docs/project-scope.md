@@ -1,7 +1,5 @@
 # Project scope: project instruction files and project skills
 
-Status: implemented on branch `feat/local-scope`; plan approved by the council (round 5: 9.7, 9.7, 9.7).
-
 ## Goal
 
 skiman manages global content only: `skills/<name>` linked into every tool
@@ -31,9 +29,9 @@ whatever skiman replaces on either side goes to a backup first.
 
 ## Model: the mirror follows the project
 
-Two decisions came out of measuring the real tools and two council rounds:
+Two decisions came out of measuring the real tools against two earlier drafts:
 
-1. **Copy, not links.** Round 1 replaced each project file with a symlink into
+1. **Copy, not links.** The first draft replaced each project file with a symlink into
    the skill repo, like global skills. That breaks how these files are edited
    (`docs/project-scope-evidence.md`): Claude Code does not edit a symlinked
    `AGENTS.md` (it treats the target as outside the working directory),
@@ -41,7 +39,7 @@ Two decisions came out of measuring the real tools and two council rounds:
    and labels the file with its target path. Global locations are derived
    (nobody edits `~/.claude/skills/x` in place), so links stay right there;
    project folders are where people and agents edit, so they keep real files.
-2. **One automatic direction.** Round 2 also wrote mirror changes back to the
+2. **One automatic direction.** The second draft also wrote mirror changes back to the
    project at every sync. A routine `git restore .` in the skill repo then
    overwrote project content that existed nowhere else, and a conflicted
    `git pull` could write conflict markers into a project. Now sync only
@@ -425,5 +423,3 @@ the project file through Claude Code, sync, see the mirror change.
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
   `cargo test` (the CI job).
-- Council on the plan and on the implementation: every delegate above 9.5
-  and approving.

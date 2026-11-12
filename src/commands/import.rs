@@ -141,8 +141,8 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         }
     };
     let plan = Plan::make(&paths, &repo, &manifest, &content)?;
-    refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     refuse_special_files(&plan)?;
+    refuse_moving_sources(&paths, &content, &manifest, &plan)?;
 
     out!(
         "import {} into the skill repo {}:",
@@ -194,7 +194,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     // What moves, in which order, and what is left alone, as the preview showed.
     if Plan::make(&paths, &repo, &manifest, &content)? != plan {
         return Err(Failure::refused(
-            "the tool directories changed after the preview; nothing was changed, run the import again",
+            "the tool directories or instruction files changed after the preview; nothing was changed, run the import again",
         ));
     }
     refuse_special_files(&plan)?;
@@ -920,12 +920,14 @@ fn refuse_special_files(plan: &Plan) -> Result<(), Failure> {
 /// ([`local_source`]) would be gone after the takeover, so that neither
 /// `update` nor this import run again could read it: its path, resolved
 /// like [`resolution`], passes through an entry that moves (a link
-/// included), or it is in, or holds, the real folder of one. Moving a link that leads to a source
-/// elsewhere leaves the source where it is; a source whose path passes
-/// through that link is refused all the same. Entries compare by their real
-/// path, byte for byte. The sources come from `manifest`, the `skiman.toml`
-/// the takeover plan follows; a source folder that does not exist is
-/// skipped.
+/// included), or it is in, or holds, the real folder of one. Being in one
+/// compares the source's canonical path, so it also holds where the written
+/// path is spelt otherwise than on disk, such as in another case. Moving a
+/// link that leads to a source elsewhere leaves the source where it is; a
+/// source whose path passes through that link is refused all the same.
+/// Entries compare by their real path, byte for byte. The sources come from
+/// `manifest`, the `skiman.toml` the takeover plan follows; a source folder
+/// that does not exist is skipped.
 fn refuse_moving_sources(
     paths: &Paths,
     content: &Folder,
@@ -967,7 +969,7 @@ fn refuse_moving_sources(
         return Ok(());
     }
     Err(Failure::refused(format!(
-        "refusing to import {}: the local folder a third-party skill is read from is in, holds or is reached through an entry the takeover moves to the backup, after which the skill cannot be read from it again; in the import folder's skiman.toml, point the source at a copy of that upstream outside the tool directories, or drop the skill's source table to import it as an own skill; nothing was changed:\n{}",
+        "refusing to import {}: the local folder a third-party skill is read from is in, holds or is reached through an entry the import moves to the backup, after which the skill cannot be read from it again; in the import folder's skiman.toml, point the source at a copy of that upstream outside the tool directories, or drop the skill's source table to import it as an own skill; nothing was changed:\n{}",
         content.root.display(),
         lines.join("\n")
     )))
@@ -1537,7 +1539,7 @@ mod tests {
     }
 
     #[test]
-    fn a_link_to_a_link_to_a_folder_moves_before_both_and_an_entry_nothing_passes_through_keeps_its_place()
+    fn a_link_to_a_link_to_a_folder_moves_before_both_and_an_entry_nothing_passes_through_moves_first()
      {
         // gemini/notes -> agents/notes -> claude/notes
         let entries = [

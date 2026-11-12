@@ -292,13 +292,14 @@ before:
 ### Known limits
 
 - When the backups folder is on another volume than an original, the move
-  copies, checks, then deletes the original. Interrupted while deleting, it
-  leaves part of the original in place. Running again moves that part to a
-  new folder in the backups folder while it still has its `SKILL.md`, and
-  otherwise leaves it where it is, with a warning (exit code 3) only when a
-  skill of the import goes there. The whole copy is in the backup folder of
-  the interrupted run: delete a part left in a tool directory, then run
-  `skiman sync`.
+  copies, checks, then deletes the original. Interrupted while copying, it
+  leaves a part copy in the backup folder and the original whole; while
+  deleting, part of the original in place. If what is in place still has
+  its `SKILL.md`, running again moves it to a new backup folder; otherwise
+  it stays where it is, with a warning (exit code 3) only when the import
+  links a skill of that name there. Of two copies of one original in the
+  backups folder, the one with more files is whole. Delete a part left in a
+  tool directory, then run `skiman sync`.
 - A link in a tool directory to another skill's folder in the skill repo
   (`notes -> <skill repo>/skills/pdf`) dangles until the import writes that
   skill: the first run leaves it in place, and running again moves it to

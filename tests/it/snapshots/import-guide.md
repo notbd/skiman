@@ -230,7 +230,8 @@ folder holds exactly one canonical copy per skill.
    - 2: there is no terminal and no `--yes`.
    - 4, or the import was interrupted: run the same command again (see
      below). When the message names a `shallow.lock` file in skiman's cache,
-     first make sure no other skiman is running, then delete that file.
+     wait until no other skiman is running; if the file is still there,
+     delete it.
 
 ## Run it again
 
@@ -273,10 +274,11 @@ import writes it, writes the rest, and moves each original still in place.
 ### When the shared bodies differ
 
 When the skill repo holds everything the import writes except the shared
-body (every skill, each the same, the same sources, and the snapshots and
-`skiman.lock` that go with them), but its `instructions/shared.md` holds
-something other than the import folder's, the import refuses. Go on by
-whether this import has run on this skill repo before:
+body (exactly the import's skills, each the same, the same sources, and the
+snapshots and `skiman.lock` that go with them), but its
+`instructions/shared.md` holds something other than the import folder's,
+the import refuses. Go on by whether this import has run on this skill repo
+before:
 
 - It has (it finished, or stopped part-way): copy the file to keep over the
   other one, then run it again. That run finishes what is left without
@@ -300,9 +302,12 @@ whether this import has run on this skill repo before:
 
 - When the backups folder is on another volume than an original, the move
   copies, checks, then deletes the original. Interrupted while deleting, it
-  can leave a folder without `SKILL.md` in the original place, which running
-  again leaves alone. The copy in the backup is whole: compare the two,
-  delete the leftover, then run `skiman sync`.
+  leaves part of the original in place. Running again moves that part to a
+  new folder in the backups folder while it still has its `SKILL.md`, and
+  otherwise leaves it where it is, with a warning (exit code 3) only when a
+  skill of the import goes there. The whole copy is in the backup folder of
+  the interrupted run: delete a part left in a tool directory, then run
+  `skiman sync`.
 - A link in a tool directory to another skill's folder in the skill repo
   (`notes -> <skill repo>/skills/pdf`) dangles until the import writes that
   skill: the first run leaves it in place, and running again moves it to

@@ -1350,30 +1350,46 @@ fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn a_project_added_while_the_import_fetches_refuses_the_import_and_keeps_the_project() {
-    // The import's skiman.toml carries the skill repo's configuration as the
-    // import first read it; the repo's differs from it before and after.
-    let sandbox = Sandbox::new();
-    let folder = setup_with_source(&sandbox, false);
-    let project = sandbox.home().join("proj");
-    write(project.join("AGENTS.md"), "# Proj\n");
-    let output = import_with_hook(
-        &sandbox,
-        &folder,
-        "import:fetched",
-        &format!(
-            "env -u SKIMAN_TEST_HOOK '{}' project add '{}' > /dev/null",
-            env!("CARGO_BIN_EXE_skiman"),
-            project.display()
+fn a_skill_repo_file_changed_while_the_import_fetches_refuses_the_import_and_keeps_the_change() {
+    // Which way the import goes, and the skiman.toml it writes, follow the
+    // skill repo's three files as first read. The preview, made after the
+    // fetch, lists each file as replaced both before and after the change:
+    // only their bytes tell them apart.
+    let changes = [
+        (
+            "skiman.toml",
+            r#"env -u SKIMAN_TEST_HOOK "$SKIMAN" project add "$PROJECT" > /dev/null"#,
         ),
-    );
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "error: the skill repo changed after the preview; nothing was changed, run the import again\n"
-    );
-    assert_eq!(output.status.code(), Some(1));
-    assert!(read(sandbox.skill_repo().join("skiman.toml")).contains("[projects.proj]"));
-    assert!(backup_dirs(&sandbox).is_empty());
+        (
+            "instructions/shared.md",
+            r#"echo 'Written in a session.' >> "$FILE""#,
+        ),
+        ("skiman.lock", r#"echo '# written' >> "$FILE""#),
+    ];
+    for (rel, change) in changes {
+        let sandbox = Sandbox::new();
+        let folder = setup_with_source(&sandbox, false);
+        let project = sandbox.home().join("proj");
+        write(project.join("AGENTS.md"), "# Proj\n");
+        let file = sandbox.skill_repo().join(rel);
+        let changed = sandbox.root().join("changed");
+        let run = format!(
+            "FILE='{}' SKIMAN='{}' PROJECT='{}'; {change} && cp \"$FILE\" '{}'",
+            file.display(),
+            env!("CARGO_BIN_EXE_skiman"),
+            project.display(),
+            changed.display()
+        );
+        let output = import_with_hook(&sandbox, &folder, "import:fetched", &run);
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            "error: the skill repo changed after the preview; nothing was changed, run the import again\n",
+            "{rel}"
+        );
+        assert_eq!(output.status.code(), Some(1), "{rel}");
+        assert_eq!(read(&file), read(&changed), "{rel}");
+        assert!(backup_dirs(&sandbox).is_empty(), "{rel}");
+    }
 }
 
 #[test]

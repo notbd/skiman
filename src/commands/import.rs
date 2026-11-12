@@ -88,6 +88,13 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         ))
     })?;
     refuse_irregular_files(&repo)?;
+    // Which way the run goes, and the skiman.toml it writes, follow these
+    // as first read: under the lock, any byte of them that changed refuses.
+    let repo_files = |repo: &SkillRepo| {
+        [repo.manifest_file(), repo.lockfile(), repo.shared_body()]
+            .map(|path| std::fs::read(path).ok())
+    };
+    let first_read = repo_files(&repo);
     let repo_manifest = std::fs::read_to_string(repo.manifest_file()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Failure::refused(format!(
@@ -172,10 +179,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     test_hook::at("import", "confirmed");
     let lock = RepoLock::wait(&repo)?;
     refuse_irregular_files(&repo)?;
-    // The repo's skiman.toml as first read is merged into the import's, or
-    // is what the takeover plan follows: any byte of it counts.
-    let changed = std::fs::read(repo.manifest_file()).ok().as_deref()
-        != Some(repo_manifest.as_bytes())
+    let changed = repo_files(&repo) != first_read
         || match &writes {
             Some((candidate, todo)) => repo_todo(&repo, candidate)? != *todo,
             None => progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done,

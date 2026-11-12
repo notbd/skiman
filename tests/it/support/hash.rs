@@ -18,7 +18,7 @@ pub fn fingerprint(matched: &str) -> String {
     format!("sha256:{}", hex(&Sha256::digest(matched.as_bytes())))
 }
 
-/// The spec's tree hash of the folder `dir`: regular files only, sorted by
+/// skiman's tree hash of the folder `dir`: regular files only, sorted by
 /// path bytes, each adding `path \0 x \0 sha256 \n`; `.DS_Store`,
 /// `Thumbs.db` and `Icon\r` are ignored.
 pub fn tree_hash(dir: &Path) -> String {

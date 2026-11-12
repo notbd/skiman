@@ -512,9 +512,12 @@ fn a_skill_repo_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_be
         std::os::unix::fs::symlink(&elsewhere, repo.join(rel)).unwrap();
         let folder = import_folder(&sandbox, TOOLS);
 
-        let line = format!("  {rel} is not a regular file");
-        let first = assert_refused(&sandbox, &folder, 1, &[&line]);
-        let again = assert_refused(&sandbox, &folder, 1, &[&line]);
+        let lines = [
+            "holds a link, folder or special file where import needs a regular file",
+            &format!("  {rel} is not a regular file\n"),
+        ];
+        let first = assert_refused(&sandbox, &folder, 1, &lines);
+        let again = assert_refused(&sandbox, &folder, 1, &lines);
         assert_eq!(again, first);
     }
 }

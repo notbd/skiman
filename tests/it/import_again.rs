@@ -119,8 +119,7 @@ fn a_blank_or_missing_shared_body_in_the_skill_repo_is_the_same_as_an_empty_one_
 
     std::fs::remove_file(repo.join("instructions/shared.md")).unwrap();
     let before = tree(&repo);
-    let output = import(&sandbox, &folder);
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stdout = run(&sandbox, &folder, 0);
     assert!(stdout.contains(HOLDS), "{stdout}");
     assert_eq!(tree(&repo), before);
     assert_eq!(tree(repo.join("upstream/pdf")), snapshot);

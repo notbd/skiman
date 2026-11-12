@@ -418,3 +418,51 @@ fn adopt_refuses_an_entry_that_is_missing_owned_or_not_a_skill() {
         .code(2);
     assert_eq!(world(&sandbox), before);
 }
+
+/// `skiman adopt notes --from claude-code --yes` running the shell command
+/// `run` between the confirmation and the repo lock (debug builds only).
+fn adopt_with_hook(sandbox: &Sandbox, run: &str) -> std::process::Output {
+    sandbox
+        .skiman()
+        .args(["adopt", "notes", "--from", "claude-code", "--yes"])
+        .env("SKIMAN_TEST_HOOK", "adopt:confirmed")
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap()
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_original_changed_or_moved_after_the_confirmation_refuses_adopt_and_changes_nothing() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let original = foreign_notes(&sandbox);
+    let before = world(&sandbox);
+    let skill_md_path = original.join("SKILL.md");
+    let output = adopt_with_hook(
+        &sandbox,
+        &format!(
+            "echo 'Edited while adopt waited.' >> '{}'",
+            skill_md_path.display()
+        ),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("nothing was changed"), "{stderr}");
+    assert!(read(&skill_md_path).ends_with("Edited while adopt waited.\n"));
+    write(&skill_md_path, skill_md("my-notes"));
+    assert_eq!(world(&sandbox), before, "{stderr}");
+
+    let moved = sandbox.home().join("elsewhere");
+    let output = adopt_with_hook(
+        &sandbox,
+        &format!("mv '{}' '{}'", original.display(), moved.display()),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    std::fs::rename(&moved, &original).unwrap();
+    assert_eq!(world(&sandbox), before, "{stderr}");
+}

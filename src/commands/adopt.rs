@@ -1,10 +1,12 @@
 //! `skiman adopt <name> --from <tool id>`: bring a foreign skill in as an own
 //! skill. Reads the entry's resolved content (path safety applies, `.git/`
-//! is not skill content), rewrites the `name` line when needed, checks the
-//! whole copy as new content, stages it under `.skiman/tmp/`, renames it to
-//! `skills/<name>`, moves the original entry (a link as a link) to
-//! `backups/<timestamp>/<tool id>/<name>`, then syncs, which links the copy
-//! in its place. A link's target is never moved, edited or deleted.
+//! is not skill content), rewrites the `name` line when needed, locates and
+//! reads the entry again under the repo lock (refusing when the copy
+//! changed), checks the whole copy as new content, stages it under
+//! `.skiman/tmp/`, renames it to `skills/<name>`, moves the original entry
+//! (a link as a link) to `backups/<timestamp>/<tool id>/<name>`, then syncs,
+//! which links the copy in its place. A link's target is never moved,
+//! edited or deleted.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -25,6 +27,7 @@ use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
+use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
 use crate::tree::{Overlay, WorkingTree};
 
@@ -57,8 +60,19 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         }
     }
 
+    test_hook::at("adopt", "confirmed");
     let lock = RepoLock::wait(&repo)?;
     check_name(&repo, name, &entry)?;
+    // The entry may have moved, come under another manager or changed while
+    // adopt waited. The copies compare as written (`name` line rewritten,
+    // `.git/` left out), so only a change to what would be adopted refuses.
+    let manifest = Manifest::load(&repo)?;
+    if locate(&paths, &repo, &manifest, tool, name)? != entry || read_copy(&entry, name)? != files {
+        return Err(Failure::refused(format!(
+            "{} changed after adopt read it; nothing was changed, run adopt again",
+            entry.display()
+        )));
+    }
     validate(&repo, name, &files)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     let staged = stage(&staging, name, &files)?;

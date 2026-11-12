@@ -133,7 +133,12 @@ impl Backup {
 }
 
 fn move_across_filesystems(original: &Path, dest: &Path) -> io::Result<()> {
-    refuse_special_files(original)?;
+    if let Some(special) = special_files(original)?.first() {
+        return Err(io::Error::other(format!(
+            "{} is a special file (FIFO, socket or device); move it away by hand",
+            special.display()
+        )));
+    }
     let copied = copy_all(original, dest).and_then(|()| verify(original, dest));
     if let Err(e) = copied {
         let _ = remove(dest);
@@ -167,17 +172,17 @@ fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {
     Ok(out)
 }
 
-fn refuse_special_files(path: &Path) -> io::Result<()> {
-    for (entry, meta) in entries(path)? {
-        let kind = meta.file_type();
-        if !(kind.is_file() || kind.is_dir() || kind.is_symlink()) {
-            return Err(io::Error::other(format!(
-                "{} is a special file (FIFO, socket or device); move it away by hand",
-                entry.display()
-            )));
-        }
-    }
-    Ok(())
+/// Every special file (FIFO, socket, device) at or below `path`, never
+/// following symlinks: what a move across filesystems refuses.
+pub fn special_files(path: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(entries(path)?
+        .into_iter()
+        .filter(|(_, meta)| {
+            let kind = meta.file_type();
+            !(kind.is_file() || kind.is_dir() || kind.is_symlink())
+        })
+        .map(|(entry, _)| entry)
+        .collect())
 }
 
 /// Where `entry` (at or below `from`) goes below `to`; `from` itself goes to

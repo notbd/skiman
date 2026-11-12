@@ -25,11 +25,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::{self, Backup};
 use crate::commands::update::print_not_installed;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
@@ -48,7 +48,7 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::Snapshot;
-use crate::source::{UrlKind, check_url};
+use crate::source::{Source, SourceKind, UrlKind, check_url};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::test_hook;
@@ -123,7 +123,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         Progress::OtherSharedBody => return Err(other_shared_body(&repo, &folder)),
         Progress::NotDone => {
             let thirds = fetch_sources(&paths, &content, &manifest_text, prompts)?;
-            let manifest_text = with_ref_kinds(&manifest_text, &thirds)?;
+            let manifest_text = with_ref_kinds(manifest_text, &thirds)?;
             let lock_text = lock_text(&thirds)?;
             check_result(&content, &manifest_text, &lock_text, &thirds)?;
             let manifest = Manifest::parse(&manifest_text)
@@ -575,22 +575,7 @@ fn fetch_sources(
             if source.git_ref.is_some() {
                 return Err(refuse("a local folder has no versions; drop `ref`"));
             }
-            let dir = if url == "~" {
-                paths.home().to_path_buf()
-            } else if let Some(rest) = url.strip_prefix("~/") {
-                paths.home().join(rest)
-            } else if url.starts_with('~') {
-                return Err(refuse(
-                    "`url` uses `~user`; give an absolute path or one below `~`",
-                ));
-            } else {
-                PathBuf::from(url)
-            };
-            let dir = if source.path.is_empty() {
-                dir
-            } else {
-                dir.join(&source.path)
-            };
+            let dir = local_source(paths, &source).map_err(|f| refuse(&f.message))?;
             thirds.push(Third {
                 snapshot: Snapshot::read_local_upstream(&dir)?,
                 name,
@@ -622,39 +607,26 @@ fn fetch_sources(
 
 /// `manifest` with each source's `ref_kind` set to the derived kind, or
 /// removed when the source has no `ref` (a hand-written `ref_kind` is never trusted).
-fn with_ref_kinds(manifest: &str, thirds: &[Third]) -> Result<String, Failure> {
-    let mut doc = manifest
-        .parse::<DocumentMut>()
-        .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
-    let mut changed = false;
-    for third in thirds {
-        let Some(source) = doc
-            .get_mut("skills")
-            .and_then(|s| s.get_mut(&third.name))
-            .and_then(|s| s.get_mut("source"))
-            .and_then(Item::as_table_like_mut)
-        else {
-            continue;
-        };
-        let derived = third.ref_kind.map(RefKind::as_str);
-        let current = source.get("ref_kind").and_then(Item::as_str);
-        if current == derived {
-            continue;
-        }
-        changed = true;
-        match derived {
-            Some(kind) => {
-                source.insert("ref_kind", value(kind));
-            }
-            None => {
-                source.remove("ref_kind");
-            }
-        }
-    }
-    Ok(if changed {
-        doc.to_string()
+fn with_ref_kinds(manifest: String, thirds: &[Third]) -> Result<String, Failure> {
+    thirds.iter().try_fold(manifest, |text, t| {
+        let kind = t.ref_kind.map(RefKind::as_str);
+        manifest::with_source_ref(&text, &t.name, t.source.git_ref.as_deref(), kind)
+            .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))
+    })
+}
+
+/// The local folder a third-party skill is read from, as `update` reads it:
+/// its `url` as [`Source::parse`] makes it absolute (`~` expanded, `.` and
+/// `..` taken by the letter, not through links), then its `path` as written.
+fn local_source(paths: &Paths, source: &SourceRecord) -> Result<PathBuf, Failure> {
+    let SourceKind::Local { dir } = Source::parse(&source.url, paths.home(), Path::new("/"))?.kind
+    else {
+        unreachable!("a `/` or `~` source is a local folder");
+    };
+    Ok(if source.path.is_empty() {
+        dir
     } else {
-        manifest.to_owned()
+        dir.join(&source.path)
     })
 }
 
@@ -927,25 +899,12 @@ fn move_order(entries: &[Move]) -> Option<Vec<usize>> {
 /// or contains a special file (FIFO, socket, device).
 fn refuse_special_files(plan: &Plan) -> Result<(), Failure> {
     let mut found = Vec::new();
-    for location in &plan.moves {
-        let meta = std::fs::symlink_metadata(&location.path).map_err(|e| {
-            Failure::operational(format!("cannot read {}: {e}", location.path.display()))
-        })?;
-        if meta.is_dir() {
-            let tree = WorkingTree::new(&location.path);
-            let entries = tree.walk("").map_err(|e| {
-                Failure::operational(format!("cannot read {}: {e}", location.path.display()))
-            })?;
-            found.extend(
-                entries
-                    .into_iter()
-                    .filter(|e| e.kind == Kind::Special)
-                    .map(|e| location.path.join(e.path)),
-            );
-        } else if !meta.is_file() && !meta.is_symlink() {
-            found.push(location.path.clone());
-        }
+    for entry in &plan.moves {
+        found.extend(backup::special_files(&entry.path).map_err(|e| {
+            Failure::operational(format!("cannot read {}: {e}", entry.path.display()))
+        })?);
     }
+    found.sort();
     if found.is_empty() {
         return Ok(());
     }
@@ -957,10 +916,10 @@ fn refuse_special_files(plan: &Plan) -> Result<(), Failure> {
 }
 
 /// Refuses (exit 1) when the local folder a third-party skill is read from
-/// would be gone after the takeover, so that neither `update` nor this
-/// import run again could read it: its path, resolved like [`resolution`],
-/// passes through an entry that moves (a link included), or it is in, or
-/// holds, the real folder of one. Moving a link that leads to a source
+/// ([`local_source`]) would be gone after the takeover, so that neither
+/// `update` nor this import run again could read it: its path, resolved
+/// like [`resolution`], passes through an entry that moves (a link
+/// included), or it is in, or holds, the real folder of one. Moving a link that leads to a source
 /// elsewhere leaves the source where it is; a source whose path passes
 /// through that link is refused all the same. Entries compare by their real
 /// path, byte for byte. The sources come from `manifest`, the `skiman.toml`
@@ -977,15 +936,9 @@ fn refuse_moving_sources(
         if !matches!(check_url(&record.url), Ok(UrlKind::Local)) {
             continue;
         }
-        let dir = match record.url.strip_prefix('~') {
-            None => PathBuf::from(&record.url),
-            Some("") => paths.home().to_path_buf(),
-            Some(rest) => match rest.strip_prefix('/') {
-                Some(rest) => paths.home().join(rest),
-                None => continue,
-            },
+        let Ok(written) = local_source(paths, &record) else {
+            continue;
         };
-        let written = dir.join(&record.path);
         let Ok(source) = written.canonicalize() else {
             continue;
         };

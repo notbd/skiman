@@ -2,20 +2,21 @@
 //! import folder (ADR 0001), and `skiman import --guide`, the guide an agent
 //! follows to prepare one (read-only).
 //!
-//! Order: no TTY and no `--yes` -> exit 2 -> config -> the skill repo is
-//! initialised, and its `skiman.toml`, `skiman.lock` and shared body are
-//! regular files -> phase 1 on the folder (layout, path safety, every rule
+//! Order: no TTY and no `--yes` -> exit 2 -> config -> the skill repo's
+//! `skiman.toml`, `skiman.lock` and shared body are regular files, and it is
+//! initialised -> phase 1 on the folder (layout, path safety, every rule
 //! except Consistency) -> whether the skill repo already holds the whole
 //! import ([`progress`]; if so, nothing is fetched or written and the run
 //! goes on at the takeover plan) -> fetch every declared source -> phase 2
 //! on the complete result (Consistency, secrets, everything) -> what the
 //! skill repo holds against what the import writes ([`repo_todo`]) ->
-//! takeover plan -> preview -> confirm -> repo lock, checks again (the
-//! takeover plan included) -> tmp leftovers -> `upstream/`, `skiman.lock`,
-//! `skiman.toml`, `instructions/shared.md`, `skills/` (each staged under
-//! `.skiman/tmp/` and renamed into place) -> originals in tool directories
-//! and instruction locations to the backup -> sync, which creates every
-//! link. Never commits.
+//! takeover plan, no special file in it and no local source it moves away
+//! -> preview -> confirm -> repo lock, checks again (the takeover plan
+//! included) -> tmp leftovers -> `upstream/`, `skiman.lock`, `skiman.toml`,
+//! `instructions/shared.md`, `skills/`, each not yet in place (staged under
+//! `.skiman/tmp/` and renamed into place; what it replaces goes to the
+//! backup first) -> originals in tool directories and instruction locations
+//! to the backup -> sync, which creates every link. Never commits.
 //!
 //! There is no record of a run (ADR 0005). An import that stopped part-way
 //! is finished by running the same command again: every run works out the

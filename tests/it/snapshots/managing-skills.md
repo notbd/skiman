@@ -147,8 +147,9 @@ copies every change made in the project into it at each sync.
 
 ## Import an existing setup
 
-Run `skiman import --guide` and follow the guide it prints. It applies only
-to a skill repo without skills.
+Run `skiman import --guide` and follow the guide it prints. The skill repo
+may hold only skills the import folder holds too, with the same content. To
+finish an import that stopped part-way, run the same command again.
 
 ## See the state
 

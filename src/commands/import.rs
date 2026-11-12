@@ -124,6 +124,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         Progress::OtherSharedBody => return Err(other_shared_body(&repo, &folder)),
         Progress::NotDone => {
             let thirds = fetch_sources(&paths, &content, &manifest_text, prompts)?;
+            test_hook::at("import", "fetched");
             let manifest_text = with_ref_kinds(manifest_text, &thirds)?;
             let lock_text = lock_text(&thirds)?;
             check_result(&content, &manifest_text, &lock_text, &thirds)?;
@@ -171,15 +172,14 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     test_hook::at("import", "confirmed");
     let lock = RepoLock::wait(&repo)?;
     refuse_irregular_files(&repo)?;
-    let changed = match &writes {
-        Some((candidate, todo)) => repo_todo(&repo, candidate)? != *todo,
-        // The takeover plan follows the repo's skiman.toml: any byte of it counts.
-        None => {
-            progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done
-                || std::fs::read(repo.manifest_file()).ok().as_deref()
-                    != Some(repo_manifest.as_bytes())
-        }
-    };
+    // The repo's skiman.toml as first read is merged into the import's, or
+    // is what the takeover plan follows: any byte of it counts.
+    let changed = std::fs::read(repo.manifest_file()).ok().as_deref()
+        != Some(repo_manifest.as_bytes())
+        || match &writes {
+            Some((candidate, todo)) => repo_todo(&repo, candidate)? != *todo,
+            None => progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done,
+        };
     if changed {
         return Err(Failure::refused(
             "the skill repo changed after the preview; nothing was changed, run the import again",

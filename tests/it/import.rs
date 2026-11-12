@@ -1347,6 +1347,37 @@ fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
+fn a_project_added_while_the_import_fetches_refuses_the_import_and_keeps_the_project() {
+    // The import's skiman.toml carries the skill repo's configuration as the
+    // import first read it; the repo's differs from it before and after.
+    let sandbox = Sandbox::new();
+    let folder = setup_with_source(&sandbox, false);
+    let project = sandbox.home().join("proj");
+    write(project.join("AGENTS.md"), "# Proj\n");
+    let output = import_with_hook(
+        &sandbox,
+        &folder,
+        "import:fetched",
+        &format!(
+            "env -u SKIMAN_TEST_HOOK '{}' project add '{}' > /dev/null",
+            env!("CARGO_BIN_EXE_skiman"),
+            project.display()
+        ),
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: the skill repo changed after the preview; nothing was changed, run the import again\n"
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(read(sandbox.skill_repo().join("skiman.toml")).contains("[projects.proj]"));
+    assert!(backup_dirs(&sandbox).is_empty());
+}
+
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_local_source_pointed_at_an_entry_to_move_after_the_confirmation_refuses_the_import() {
     for start in [stopped_before_the_last_skill, imported] {
         let sandbox = Sandbox::new();

@@ -771,35 +771,39 @@ fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_t
 )]
 fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_out_until_it_is_removed()
  {
-    let sandbox = Sandbox::new();
-    let Setup { folder, .. } = setup(&sandbox);
-    import_killed_at(&sandbox, &folder, "rename:skills/notes");
-    sandbox
-        .skiman()
-        .args(["new", "mine", "-d", "Mine"])
-        .output()
-        .unwrap();
+    // Before the last skill is written, and once the repo holds all of them.
+    for point in ["rename:skills/notes", "moved:claude-code/notes"] {
+        let sandbox = Sandbox::new();
+        let Setup { folder, .. } = setup(&sandbox);
+        import_killed_at(&sandbox, &folder, point);
+        sandbox
+            .skiman()
+            .args(["new", "mine", "-d", "Mine"])
+            .output()
+            .unwrap();
+        assert!(sandbox.skill_repo().join("skills/mine").is_dir());
 
-    assert_run_refused(
-        &sandbox,
-        &folder,
-        &[
-            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
-        ],
-    );
-    sandbox
-        .skiman()
-        .args(["remove", "mine", "--yes"])
-        .assert()
-        .code(3);
-    assert!(!sandbox.skill_repo().join("skills/mine").exists());
-    let output = import(&sandbox, &folder);
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+        assert_run_refused(
+            &sandbox,
+            &folder,
+            &[
+                "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+            ],
+        );
+        sandbox
+            .skiman()
+            .args(["remove", "mine", "--yes"])
+            .assert()
+            .code(3);
+        assert!(!sandbox.skill_repo().join("skills/mine").exists());
+        let output = import(&sandbox, &folder);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{point}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]

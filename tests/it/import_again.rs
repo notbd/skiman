@@ -541,3 +541,39 @@ fn a_ref_changed_by_update_after_an_import_is_kept_when_it_runs_again() {
     assert_eq!(read(repo.join("skiman.toml")), manifest);
     assert_eq!(read(repo.join("instructions/shared.md")), "Edited later.\n");
 }
+
+#[test]
+fn a_source_url_or_path_changed_in_the_import_folder_after_an_import_makes_it_a_full_import_again()
+{
+    for (from, to) in [
+        ("url = \"~/src\"", "url = \"~/src2\""),
+        ("path = \"pdf\"", "path = \"pdf2\""),
+    ] {
+        let sandbox = Sandbox::new();
+        let Setup { folder, .. } = setup(&sandbox);
+        let home = sandbox.home();
+        for dir in ["src/pdf", "src/pdf2", "src2/pdf"] {
+            write(home.join(dir).join("SKILL.md"), skill_md("pdf"));
+            write(home.join(dir).join("reference.md"), "# Reference\n");
+        }
+        write(home.join("src/pdf2/reference.md"), "# Moved\n");
+        write(home.join("src2/pdf/reference.md"), "# Moved\n");
+        let manifest = folder.join("skiman.toml");
+        write(
+            &manifest,
+            format!("{TOOLS}\n[skills.pdf.source]\nurl = \"~/src\"\npath = \"pdf\"\n"),
+        );
+        run(&sandbox, &folder, 0);
+
+        write(&manifest, read(&manifest).replace(from, to));
+        let stdout = run(&sandbox, &folder, 0);
+        assert!(!stdout.contains(HOLDS), "{to}: {stdout}");
+        let repo = sandbox.skill_repo();
+        assert_eq!(
+            read(repo.join("upstream/pdf/reference.md")),
+            "# Moved\n",
+            "{to}"
+        );
+        assert!(read(repo.join("skiman.toml")).contains(to), "{to}");
+    }
+}

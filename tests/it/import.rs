@@ -1282,7 +1282,7 @@ fn assert_refused_after_the_confirmation(sandbox: &Sandbox, folder: &Path, run: 
 )]
 fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before_anything_moves() {
     for start in [stopped_before_the_last_skill, imported] {
-        let changes: [fn(&Sandbox, &Path) -> String; 6] = [
+        let changes: [fn(&Sandbox, &Path) -> String; 7] = [
             |sandbox, _| {
                 let notes = sandbox.skill_repo().join("skills/notes/SKILL.md");
                 format!("echo edited >> '{}'", notes.display())
@@ -1316,6 +1316,10 @@ fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before
                 let link = sandbox.tool_dir(Tool::Codex).join("later");
                 let spare = sandbox.tool_dir(Tool::ClaudeCode).join("spare");
                 format!("ln -sfn '{}' '{}'", spare.display(), link.display())
+            },
+            |sandbox, _| {
+                let fifo = sandbox.tool_dir(Tool::ClaudeCode).join("later/fifo");
+                format!("mkfifo '{}'", fifo.display())
             },
         ];
         for change in changes {

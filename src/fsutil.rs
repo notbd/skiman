@@ -108,9 +108,10 @@ pub fn rewrite_atomic(
     replace_atomic(path, contents, 0o600, Some(permissions))
 }
 
-/// Creates a symlink at `link` pointing to `target` under a temporary name in
-/// the same directory, then renames it into place.
-pub fn symlink_atomic(target: &Path, link: &Path) -> io::Result<()> {
+/// Points skiman's own link `link` at `target`: creates the new link under a
+/// temporary name in the same directory, then renames it over `link`. The
+/// rename replaces whatever is at `link`, so it is only for a link skiman owns.
+pub fn retarget_symlink(target: &Path, link: &Path) -> io::Result<()> {
     let (tmp, ()) = create_temporary_sibling(link, |tmp| std::os::unix::fs::symlink(target, tmp))?;
     std::fs::rename(&tmp, link).inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
@@ -239,14 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn symlink_atomic_leaves_an_entry_under_its_temporary_name_alone() {
+    fn retarget_symlink_leaves_an_entry_under_its_temporary_name_alone() {
         let (_temp, dir) = root();
         let link = dir.join("notes");
         let victim = dir.join("victim");
         std::fs::write(&victim, "user original").unwrap();
         let planted = plant_link(&link, &victim);
 
-        symlink_atomic(Path::new("/skills/notes"), &link).unwrap();
+        retarget_symlink(Path::new("/skills/notes"), &link).unwrap();
 
         assert_eq!(std::fs::read_link(&planted).unwrap(), victim);
         assert_eq!(

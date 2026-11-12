@@ -339,7 +339,7 @@ fn reconcile_instruction_locations(
                 .push(format!("cannot inspect {}: {e}", path.display())),
             Ok(meta) => match ownership.owned_instruction(&location, &meta) {
                 Some(current) if current == target => {}
-                Some(_) => match fsutil::symlink_atomic(&target, &location) {
+                Some(_) => match fsutil::retarget_symlink(&target, &location) {
                     Ok(()) => report.changes.push((Change::Retargeted, path)),
                     Err(e) => report
                         .errors
@@ -499,7 +499,7 @@ fn reconcile_tool_dir(
             (Entry::Owned(current), Some((name, target))) => {
                 handled.insert(*name);
                 if current != *target {
-                    match fsutil::symlink_atomic(target, &path) {
+                    match fsutil::retarget_symlink(target, &path) {
                         Ok(()) => report.changes.push((Change::Retargeted, path)),
                         Err(e) => report
                             .errors

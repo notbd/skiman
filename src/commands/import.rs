@@ -71,6 +71,9 @@ pub fn run(folder: Option<&Path>, yes: bool) -> Exit {
 
 const SHARED_BODY: &str = "instructions/shared.md";
 
+/// The skill repo's files the import replaces whole, each a regular file.
+const REPO_FILES: [&str; 3] = [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY];
+
 fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let terminal = has_terminal();
     if !terminal && !yes {
@@ -88,13 +91,11 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         ))
     })?;
     refuse_irregular_files(&repo)?;
-    // Which way the run goes, and the skiman.toml it writes, follow these
-    // as first read: under the lock, any byte of them that changed refuses.
-    let repo_files = |repo: &SkillRepo| {
-        [repo.manifest_file(), repo.lockfile(), repo.shared_body()]
-            .map(|path| std::fs::read(path).ok())
-    };
-    let first_read = repo_files(&repo);
+    // Which way the run goes, the skiman.toml it writes and the one its
+    // takeover follows come from these as first read: under the lock, any
+    // byte of them that changed refuses.
+    let repo_files = || REPO_FILES.map(|rel| std::fs::read(repo.root().join(rel)).ok());
+    let first_read = repo_files();
     let repo_manifest = std::fs::read_to_string(repo.manifest_file()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Failure::refused(format!(
@@ -179,7 +180,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     test_hook::at("import", "confirmed");
     let lock = RepoLock::wait(&repo)?;
     refuse_irregular_files(&repo)?;
-    let changed = repo_files(&repo) != first_read
+    let changed = repo_files() != first_read
         || match &writes {
             Some((candidate, todo)) => repo_todo(&repo, candidate)? != *todo,
             None => progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done,
@@ -1260,7 +1261,7 @@ fn names_in(dir: &Path) -> Result<Vec<String>, Failure> {
 /// the skill repo is there but is not a regular file.
 fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
     let mut lines = Vec::new();
-    for rel in [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY] {
+    for rel in REPO_FILES {
         let path = repo.root().join(rel);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if !meta.is_file() => lines.push(format!("  {rel} is not a regular file")),

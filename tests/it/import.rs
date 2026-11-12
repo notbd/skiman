@@ -1356,9 +1356,9 @@ fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before
 )]
 fn a_skill_repo_file_changed_while_the_import_fetches_refuses_the_import_and_keeps_the_change() {
     // Which way the import goes, and the skiman.toml it writes, follow the
-    // skill repo's three files as first read. The preview, made after the
-    // fetch, lists each file as replaced both before and after the change:
-    // only their bytes tell them apart.
+    // skill repo's three files as first read. The preview is worked out after
+    // the fetch, so it already holds the change: only the bytes as first read
+    // tell it apart.
     let changes = [
         (
             "skiman.toml",

@@ -49,6 +49,10 @@ pub enum Command {
         /// Move the skill to this branch, tag or full 40-hex commit (single skill only)
         #[arg(long = "ref", value_name = "REF")]
         git_ref: Option<String>,
+        /// Show the new versions, changed files and conflicts without changing the skill repo or
+        /// the tool directories (exit 0 even with conflicts)
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove a skill: its folders go to a backup, its records and links are removed
     Remove {
@@ -241,7 +245,11 @@ where
         Command::New { name, description } => commands::new::run(&name, description),
         Command::Add(args) => commands::add::run(args),
         Command::Diff { name } => commands::diff::run(&name),
-        Command::Update { names, git_ref } => commands::update::run(names, git_ref),
+        Command::Update {
+            names,
+            git_ref,
+            dry_run,
+        } => commands::update::run(names, git_ref, dry_run),
         Command::Remove { name, yes } => commands::remove::run(&name, yes),
         Command::Mv { old, new } => commands::mv::run(&old, &new),
         Command::Adopt { name, from, yes } => commands::adopt::run(&name, &from, yes),

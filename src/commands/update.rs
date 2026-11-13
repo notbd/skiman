@@ -16,12 +16,16 @@
 //! 3. When the snapshot changes, [`merge`] in a temporary repository
 //!    (conflicts are written into the result, exit 3).
 //!
-//! Then, under the repo lock, [`update_to`] refuses a skill whose records,
-//! `skills/<name>` or `upstream/<name>` changed since, and moves the others:
+//! `--dry-run` stops there: [`plan`] checks each merge against the rules
+//! and [`report`] prints what an update would do, conflicts included; it
+//! writes nothing in the skill repo or the tool directories (fetching
+//! fills the upstream cache). Otherwise, under the repo lock,
+//! [`update_to`] refuses a skill whose records, `skills/<name>` or
+//! `upstream/<name>` changed since, and moves the others:
 //!
 //! 4. Same snapshot: up to date, or [`advance_records`] (fragments to a
 //!    fresh backup, then `source.ref` and `ref_kind`, then the lock entry).
-//! 5. Otherwise [`validate`] the candidate output (path safety, rules),
+//! 5. Otherwise [`plan`] ([`validate`] the merge: path safety, rules),
 //!    stage it in `tmp/<timestamp>/new/`, then [`swap`]: re-hash, fragments,
 //!    re-hash, renames through `tmp/<timestamp>/old/`, `source.ref` and
 //!    `ref_kind`, lock entry (last write), old folders to the backup; a
@@ -52,32 +56,32 @@ use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::{Overlay, WorkingTree, tree_hash_of_dir};
-use crate::upstream::{self, Upstream, print_not_installed};
+use crate::upstream::{self, Upstream, print_not_installed, run_flags};
 
-pub fn run(names: Vec<String>, git_ref: Option<String>) -> Exit {
-    finish(update(names, git_ref))
+pub fn run(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Exit {
+    finish(update(names, git_ref, dry_run))
 }
 
 /// What every skill's write shares, under the repo lock.
-struct Context {
-    paths: Paths,
-    repo: SkillRepo,
+struct Context<'a> {
+    paths: &'a Paths,
+    repo: &'a SkillRepo,
     lock: RepoLock,
     /// The command's `tmp/<timestamp>/`, begun before the first skill writes
     /// (a merge or a records-only advance), so tmp leftovers move first.
     staging: Option<Staging>,
 }
 
-impl Context {
+impl Context<'_> {
     fn staging(&mut self) -> Result<&Staging, Failure> {
         if self.staging.is_none() {
-            self.staging = Some(Staging::begin(&self.paths, &self.repo, &self.lock)?);
+            self.staging = Some(Staging::begin(self.paths, self.repo, &self.lock)?);
         }
         Ok(self.staging.as_ref().expect("just begun"))
     }
 }
 
-fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> {
+fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<Exit, Failure> {
     if git_ref.is_some() && names.len() != 1 {
         return Err(Failure::usage("--ref needs exactly one skill name"));
     }
@@ -103,8 +107,6 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
             .collect()
     };
 
-    // Without the repo lock: fetching may use the network and ask for
-    // credentials, and other commands go on meanwhile.
     let mut exit = Exit::Success;
     let mut prepared = Vec::new();
     for name in &names {
@@ -116,21 +118,29 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
             }
         }
     }
-    if prepared.is_empty() && !names.is_empty() {
-        return Ok(exit);
-    }
-
-    let lock = RepoLock::wait(&repo)?;
-    let mut context = Context {
-        paths,
-        repo,
-        lock,
-        staging: None,
+    // A dry run, or a run with nothing to write, takes no lock to write.
+    let mut context = if dry_run || (prepared.is_empty() && !names.is_empty()) {
+        None
+    } else {
+        Some(Context {
+            paths: &paths,
+            repo: &repo,
+            lock: RepoLock::wait(&repo)?,
+            staging: None,
+        })
     };
     let mut any_done = names.is_empty();
     for skill in &prepared {
-        let name = &skill.name;
-        match update_to(&mut context, skill) {
+        let result = match context.as_mut() {
+            Some(context) => update_to(context, skill),
+            None => plan(&repo, skill, &skill.current).map(|plan| {
+                report(skill, &plan, true);
+                let conflicts = skill.merge.as_ref().map(|m| m.conflicts.as_slice());
+                print_conflicts(&skill.name, conflicts.unwrap_or_default(), true);
+                Exit::Success
+            }),
+        };
+        match result {
             Ok(result) => {
                 for note in &skill.target.notes {
                     out!("  note: {note}");
@@ -139,20 +149,18 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
                 exit = exit.combine(result);
             }
             Err(failure) => {
-                err!("error: skill {name}: {}", failure.message);
+                err!("error: skill {}: {}", skill.name, failure.message);
                 exit = exit.combine(failure.exit);
             }
         }
     }
-    let Context {
-        paths,
-        repo,
-        lock,
-        staging,
-    } = context;
-    drop(staging);
-    if any_done {
-        exit = exit.combine(sync::run(&paths, &repo, &lock, Output::Normal));
+    match context {
+        Some(context) if any_done => {
+            drop(context.staging);
+            exit = exit.combine(sync::run(&paths, &repo, &context.lock, Output::Normal));
+        }
+        None if dry_run => out!("dry run: nothing was written"),
+        _ => {}
     }
     Ok(exit)
 }
@@ -249,8 +257,6 @@ fn refuse_unresolved(repo: &SkillRepo, name: &str) -> Result<(), Failure> {
 
 /// The version an update moves to.
 struct Target {
-    /// The commit, or for a local folder the snapshot's tree hash.
-    version: String,
     snapshot: Snapshot,
     /// The new lock entry.
     entry: LockEntry,
@@ -331,6 +337,72 @@ fn changed(name: &str) -> Failure {
     ))
 }
 
+/// What moving a skill to its target writes, from the records `current`:
+/// the files the merge changes, and the new `skiman.toml` (`None` when it
+/// stays the same) and `skiman.lock`. A merge has passed [`validate`].
+struct Plan {
+    changes: Vec<(Change, String)>,
+    manifest: Option<String>,
+    lock: String,
+}
+
+fn plan(repo: &SkillRepo, skill: &Prepared, current: &Current) -> Result<Plan, Failure> {
+    let Prepared {
+        name,
+        target,
+        merge,
+        ..
+    } = skill;
+    let plan = Plan {
+        changes: merge
+            .as_ref()
+            .map_or_else(Vec::new, |m| changes(&m.ours, &m.merged)),
+        manifest: new_manifest_text(name, current, target.resolved.as_ref())?,
+        lock: lockfile::with_entry(&current.lock_text, name, &target.entry)
+            .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?,
+    };
+    if let Some(m) = merge {
+        validate(repo, name, &m.merged, &target.snapshot, &plan, &m.conflicts)?;
+    }
+    Ok(plan)
+}
+
+/// Whether the skill stays as it is: same snapshot, lock entry and records.
+fn up_to_date(skill: &Prepared, plan: &Plan) -> bool {
+    skill.merge.is_none() && skill.target.entry == skill.current.entry && plan.manifest.is_none()
+}
+
+/// The result line of a skill (`dry_run`: what an update would do) and the
+/// files it changes, flagging what agents may run.
+fn report(skill: &Prepared, plan: &Plan, dry_run: bool) {
+    let (name, entry) = (&skill.name, &skill.target.entry);
+    // The commit, or for a local folder the snapshot's tree hash.
+    let version = entry.commit.as_ref().unwrap_or(&entry.snapshot);
+    match &skill.merge {
+        _ if up_to_date(skill, plan) => out!("skill {name}: up to date at {version}"),
+        None if dry_run => {
+            out!("skill {name}: would move to {version}; no file of the skill changes")
+        }
+        None => out!("skill {name}: now at {version}; no file of the skill changed"),
+        Some(merge) => {
+            let done = if dry_run { "would update" } else { "updated" };
+            let conflicts = if merge.conflicts.is_empty() {
+                ""
+            } else {
+                " with conflicts"
+            };
+            out!("skill {name}: {done} to {version}{conflicts}; changed files:");
+            for (change, path) in &plan.changes {
+                let flags = merge.merged.file(path).map_or_else(String::new, |file| {
+                    run_flags(path, &file.content, file.executable)
+                });
+                out!("  {} {path}{flags}", change.verb());
+            }
+        }
+    }
+    print_not_installed(&skill.target.snapshot, "  ");
+}
+
 /// Under the repo lock: refuses the skill (exit 1) when its records or
 /// `skills/<name>` changed since [`prepare`] read them (`upstream/<name>`
 /// is checked by `Current::read` against the same lock entry), then moves
@@ -343,12 +415,9 @@ fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
         merge,
         ..
     } = skill;
-    let repo = &context.repo;
+    let repo = context.repo;
     let current = Current::read(repo, name)?;
-    let hash = |dir: &Path| {
-        tree_hash_of_dir(dir)
-            .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))
-    };
+    let hash = |dir: &Path| Snapshot::from_folder(dir).map(|folder| folder.tree_hash());
     let unchanged = (&current.source, &current.entry)
         == (&skill.current.source, &skill.current.entry)
         && match merge {
@@ -358,82 +427,57 @@ fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
     if !unchanged {
         return Err(changed(name));
     }
-    let manifest_text = new_manifest_text(name, &current, target.resolved.as_ref())?;
-
+    let plan = plan(repo, skill, &current)?;
+    if up_to_date(skill, &plan) {
+        report(skill, &plan, false);
+        return Ok(Exit::Success);
+    }
     let Some(merge) = merge else {
-        if target.entry == current.entry && manifest_text.is_none() {
-            out!("skill {name}: up to date at {}", target.version);
-            print_not_installed(&target.snapshot, "  ");
-            return Ok(Exit::Success);
-        }
         context.staging()?;
-        let backup = advance_records(context, name, &current, target, manifest_text)?;
-        out!(
-            "skill {name}: now at {}; no file of the skill changed",
-            target.version
-        );
-        print_not_installed(&target.snapshot, "  ");
+        let backup = advance_records(context, name, &current, &plan)?;
+        report(skill, &plan, false);
         out!("saved the records of {name} to {}", backup.dir().display());
         return Ok(Exit::Success);
     };
-
-    let Merge {
-        ours,
-        merged,
-        conflicts,
-        ..
-    } = merge;
-    let changes = changes(ours, merged);
-    let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
-        .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
-    let records = Records {
-        manifest: manifest_text.as_deref(),
-        lock: &lock_text,
-    };
-    validate(
-        &context.repo,
-        name,
-        merged,
-        &target.snapshot,
-        &records,
-        &changes,
-        conflicts,
-    )?;
     let staging = context.staging()?;
     let work = Workspace::new(staging, name);
-    work.stage(merged, &target.snapshot)?;
-    let (backup, old_folders_saved) =
-        swap(context, &work, name, &current, &ours.tree_hash(), &records)?;
-
-    let with_conflicts = if conflicts.is_empty() {
-        ""
-    } else {
-        " with conflicts"
-    };
-    out!(
-        "skill {name}: updated to {}{with_conflicts}; changed files:",
-        target.version
-    );
-    for (change, path) in &changes {
-        out!("  {} {path}", change.verb());
-    }
-    print_not_installed(&target.snapshot, "  ");
+    work.stage(&merge.merged, &target.snapshot)?;
+    let (backup, old_folders_saved) = swap(
+        context,
+        &work,
+        name,
+        &current,
+        &merge.ours.tree_hash(),
+        &plan,
+    )?;
+    report(skill, &plan, false);
     let saved = if old_folders_saved {
         "the old folders and records"
     } else {
         "the records"
     };
     out!("saved {saved} of {name} to {}", backup.display());
+    print_conflicts(name, &merge.conflicts, false);
+    Ok(match merge.conflicts.is_empty() {
+        true => Exit::Success,
+        false => Exit::NeedsAttention,
+    })
+}
+
+/// The conflicts a merge wrote into `skills/<name>` (`dry_run`: would write).
+fn print_conflicts(name: &str, conflicts: &[Conflict], dry_run: bool) {
     if conflicts.is_empty() {
-        return Ok(Exit::Success);
+        return;
     }
-    out!(
-        "skill {name}: resolve these conflicts in skills/{name}, then delete the conflict records:"
-    );
+    match dry_run {
+        true => out!("skill {name}: the update would write these conflicts into skills/{name}:"),
+        false => out!(
+            "skill {name}: resolve these conflicts in skills/{name}, then delete the conflict records:"
+        ),
+    }
     for conflict in conflicts {
         out!("  {}", describe(conflict));
     }
-    Ok(Exit::NeedsAttention)
 }
 
 /// One line of the conflict list, naming the file and its record.
@@ -502,10 +546,6 @@ fn fetch(
     let snapshot = upstream.snapshot(&source.path)?;
     let entry = upstream.lock_entry(&snapshot);
     Ok(Target {
-        version: entry
-            .commit
-            .clone()
-            .unwrap_or_else(|| entry.snapshot.clone()),
         resolved: upstream.resolved().cloned(),
         snapshot,
         entry,
@@ -601,27 +641,24 @@ fn save_fragments(paths: &Paths, name: &str, current: &Current) -> Result<Backup
 }
 
 /// The skill's files stay as they are; only its records move to the new
-/// version: fragments to a fresh backup, then the lock entry.
+/// version: fragments to a fresh backup, then the records `plan` writes.
 fn advance_records(
     context: &Context,
     name: &str,
     current: &Current,
-    target: &Target,
-    manifest_text: Option<String>,
+    plan: &Plan,
 ) -> Result<Backup, Failure> {
-    let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
-        .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
-    let backup = save_fragments(&context.paths, name, current)?;
+    let backup = save_fragments(context.paths, name, current)?;
     let mut completed = Vec::new();
-    let failed = |e, completed: &[String]| stopped(e, completed, &context.repo, name, &backup, &[]);
-    if let Some(text) = &manifest_text {
+    let failed = |e, completed: &[String]| stopped(e, completed, context.repo, name, &backup, &[]);
+    if let Some(text) = &plan.manifest {
         write_record(&context.repo.manifest_file(), text).map_err(|e| failed(e, &completed))?;
         completed.push(format!(
             "wrote the new `source.ref` and `ref_kind` of {name} to skiman.toml"
         ));
     }
     test_hook::at(name, "before-lock");
-    write_record(&context.repo.lockfile(), &lock_text).map_err(|e| failed(e, &completed))?;
+    write_record(&context.repo.lockfile(), &plan.lock).map_err(|e| failed(e, &completed))?;
     Ok(backup)
 }
 
@@ -699,13 +736,6 @@ fn stopped(
         ));
     }
     Failure::operational(message)
-}
-
-/// The skill's new `skiman.toml` (when its `source.ref` or `ref_kind`
-/// changes) and `skiman.lock` texts.
-struct Records<'a> {
-    manifest: Option<&'a str>,
-    lock: &'a str,
 }
 
 fn write_record(path: &Path, text: &str) -> Result<(), Failure> {
@@ -811,8 +841,7 @@ fn validate(
     name: &str,
     merged: &Snapshot,
     snapshot: &Snapshot,
-    records: &Records,
-    changes: &[(Change, String)],
+    plan: &Plan,
     conflicts: &[Conflict],
 ) -> Result<(), Failure> {
     let skill = format!("skills/{name}");
@@ -828,8 +857,8 @@ fn validate(
             files.push((path, file.content.clone()));
         }
     }
-    files.push((rules::LOCKFILE.to_owned(), records.lock.as_bytes().to_vec()));
-    if let Some(text) = records.manifest {
+    files.push((rules::LOCKFILE.to_owned(), plan.lock.as_bytes().to_vec()));
+    if let Some(text) = &plan.manifest {
         files.push((rules::MANIFEST.to_owned(), text.as_bytes().to_vec()));
     }
     let working_tree = WorkingTree::new(repo.root());
@@ -839,7 +868,8 @@ fn validate(
     path_safety::check(&candidate, &skill, "the merge result", Content::Output)?;
     let names = BTreeSet::from([name.to_owned()]);
     let scope = Scope {
-        files: changes
+        files: plan
+            .changes
             .iter()
             .filter(|(change, _)| *change != Change::Deleted)
             .map(|(_, path)| format!("{skill}/{path}"))
@@ -911,7 +941,7 @@ fn swap(
     name: &str,
     current: &Current,
     start_hash: &str,
-    records: &Records,
+    plan: &Plan,
 ) -> Result<(PathBuf, bool), Failure> {
     let repo = &context.repo;
     let skill_dir = repo.skill_dir(name);
@@ -932,7 +962,7 @@ fn swap(
     };
     test_hook::at(name, "before-rehash-1");
     unchanged(None)?;
-    let backup = save_fragments(&context.paths, name, current)?;
+    let backup = save_fragments(context.paths, name, current)?;
     test_hook::at(name, "before-rehash-2");
     unchanged(Some(&backup))?;
 
@@ -956,14 +986,14 @@ fn swap(
         staging::rename_into_place(from, to).map_err(|e| failed(e, &completed))?;
         completed.push(format!("renamed {} to {}", from.display(), to.display()));
     }
-    if let Some(text) = records.manifest {
+    if let Some(text) = &plan.manifest {
         write_record(&repo.manifest_file(), text).map_err(|e| failed(e, &completed))?;
         completed.push(format!(
             "wrote the new `source.ref` and `ref_kind` of {name} to skiman.toml"
         ));
     }
     test_hook::at(name, "before-lock");
-    write_record(&repo.lockfile(), records.lock).map_err(|e| failed(e, &completed))?;
+    write_record(&repo.lockfile(), &plan.lock).map_err(|e| failed(e, &completed))?;
 
     test_hook::at(name, "before-backup-move");
     let mut all_saved = true;

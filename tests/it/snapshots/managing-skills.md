@@ -100,6 +100,10 @@ reports the size limit of the enabled agent tools.
 
 1. Run `skiman update <name>`, or `skiman update` for every third-party skill.
    With a single name, `--ref <branch|tag|commit>` switches what it follows.
+   `--dry-run` first shows each new version, the files it would change
+   (scripts and executables flagged) and any conflicts, and changes nothing
+   in the skill repo; show that to the user before updating a skill they
+   have not reviewed.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
    it in `<SKILL_REPO>/skills/<name>/`:
    - Text between `<<<<<<< local (skiman)`, `=======` and

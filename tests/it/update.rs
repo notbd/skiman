@@ -803,3 +803,39 @@ fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
         ));
     assert_eq!(tree(sandbox.skill_repo()), before);
 }
+
+#[test]
+fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    up.write("forms.md", lines(&[(5, "theirs")]))
+        .write_executable("reference.md", lines(&[]))
+        .write_executable("scripts/fill.sh", "#!/bin/sh\n");
+    let commit = up.commit("v2");
+    let files = "  modified forms.md\n  modified reference.md  [executable]\n  added scripts/fill.sh  [script, executable]\n";
+    let before = tree(sandbox.skill_repo());
+    // A dry run writes nothing, so it does not need the repo lock.
+    let lock = std::fs::File::open(sandbox.skill_repo().join(".skiman/lock")).unwrap();
+    lock.lock().unwrap();
+
+    sandbox
+        .skiman()
+        .args(["update", "--dry-run"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: would update to {commit}; changed files:\n{files}dry run: nothing was written\n"
+        ))
+        .stderr_eq("");
+    assert_eq!(tree(sandbox.skill_repo()), before);
+    drop(lock);
+
+    sandbox
+        .skiman()
+        .args(["update"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: updated to {commit}; changed files:\n{files}saved the old folders and records of pdf to [..]\n"
+        ));
+}

@@ -28,7 +28,7 @@ cargo install --locked --path .
 | `skiman init <path> --session-hooks <ids>\|none` | Create or reuse a skill repo, install its git hooks and session-start hooks, then sync. |
 | `skiman new <name> -d <description>` | Create an own skill. |
 | `skiman add <source>` | Install third-party skills from a git URL, a GitHub tree URL, `<owner>/<repo>` or a local folder (`--skill`, `--all`, `--name`, `--ref`, `--dry-run`, `--yes`). |
-| `skiman update [names]` | Merge each third-party skill's new upstream version with its local modifications (`--ref` for one skill). |
+| `skiman update [names]` | Merge each third-party skill's new upstream version with its local modifications (`--ref` for one skill, `--dry-run`). |
 | `skiman diff <name>` | Show a third-party skill's local modifications. |
 | `skiman remove <name> --yes` | Remove a skill; its folders go to a backup. |
 | `skiman mv <old> <new>` | Rename a skill and its records. |

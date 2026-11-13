@@ -1,8 +1,9 @@
 //! Every path skiman uses derives from `$HOME` and the XDG variables, never
 //! from platform directories (spec: Language and packaging).
 
-use std::fmt;
 use std::path::{Path, PathBuf};
+
+use crate::failure::Failure;
 
 /// Base directories read from the environment once, at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -12,37 +13,22 @@ pub struct Paths {
     state_home: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PathsError {
-    HomeNotSet,
-    HomeNotAbsolute(PathBuf),
-}
-
-impl fmt::Display for PathsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            PathsError::HomeNotSet => write!(f, "HOME is not set"),
-            PathsError::HomeNotAbsolute(home) => {
-                write!(f, "HOME is not an absolute path: {}", home.display())
-            }
-        }
-    }
-}
-
-impl std::error::Error for PathsError {}
-
 impl Paths {
     /// Reads `HOME`, `XDG_CONFIG_HOME` and `XDG_STATE_HOME` from the process
     /// environment. An XDG variable that is unset, empty or relative falls back
     /// to its default under `HOME`, as the XDG Base Directory spec requires.
-    pub fn from_env() -> Result<Self, PathsError> {
+    /// Exit 4 when `HOME` is unset, empty or relative.
+    pub fn from_env() -> Result<Self, Failure> {
         let home = PathBuf::from(
             std::env::var_os("HOME")
                 .filter(|h| !h.is_empty())
-                .ok_or(PathsError::HomeNotSet)?,
+                .ok_or_else(|| Failure::operational("HOME is not set"))?,
         );
         if !home.is_absolute() {
-            return Err(PathsError::HomeNotAbsolute(home));
+            return Err(Failure::operational(format!(
+                "HOME is not an absolute path: {}",
+                home.display()
+            )));
         }
         let xdg = |name: &str, default: &str| {
             std::env::var_os(name)

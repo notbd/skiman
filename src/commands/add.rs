@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
+use crate::cli::AddArgs as Args;
 use crate::commands::update::print_not_installed;
 use crate::commands::{ask, confirm, has_terminal};
 use crate::discovery;
@@ -29,18 +30,6 @@ use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::tree::{self, Overlay, WorkingTree};
-
-#[derive(Debug, Clone)]
-pub struct Args {
-    pub source: String,
-    /// `--skill`: upstream names to install.
-    pub skills: Vec<String>,
-    pub all: bool,
-    pub name: Option<String>,
-    pub git_ref: Option<String>,
-    pub dry_run: bool,
-    pub yes: bool,
-}
 
 pub fn run(args: Args) -> Exit {
     finish(add(args))

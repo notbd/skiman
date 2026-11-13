@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use crate::Exit;
 use crate::commands;
@@ -36,29 +36,7 @@ pub enum Command {
         description: Option<String>,
     },
     /// Install a third-party skill
-    Add {
-        /// Where the skills come from: <owner>/<repo>, an https:// or ssh:// git URL,
-        /// user@host:path, a GitHub tree or blob URL, or a local folder (/, ~ or .)
-        source: String,
-        /// Install the skill with this upstream name (repeatable)
-        #[arg(long = "skill", value_name = "NAME")]
-        skills: Vec<String>,
-        /// Install every skill the source holds
-        #[arg(long, conflicts_with = "skills")]
-        all: bool,
-        /// Install name, when it must differ from the upstream name (single skill only)
-        #[arg(long)]
-        name: Option<String>,
-        /// Branch, tag or full 40-hex commit to install instead of the default branch
-        #[arg(long = "ref", value_name = "REF")]
-        git_ref: Option<String>,
-        /// Show the file list, then stop without writing anything
-        #[arg(long)]
-        dry_run: bool,
-        /// Install without asking for confirmation
-        #[arg(long)]
-        yes: bool,
-    },
+    Add(AddArgs),
     /// Show the local modifications of a third-party skill against its upstream snapshot
     Diff {
         /// Name of the third-party skill
@@ -131,6 +109,31 @@ pub enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AddArgs {
+    /// Where the skills come from: <owner>/<repo>, an https:// or ssh:// git URL,
+    /// user@host:path, a GitHub tree or blob URL, or a local folder (/, ~ or .)
+    pub source: String,
+    /// Install the skill with this upstream name (repeatable)
+    #[arg(long = "skill", value_name = "NAME")]
+    pub skills: Vec<String>,
+    /// Install every skill the source holds
+    #[arg(long, conflicts_with = "skills")]
+    pub all: bool,
+    /// Install name, when it must differ from the upstream name (single skill only)
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Branch, tag or full 40-hex commit to install instead of the default branch
+    #[arg(long = "ref", value_name = "REF")]
+    pub git_ref: Option<String>,
+    /// Show the file list, then stop without writing anything
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Install without asking for confirmation
+    #[arg(long)]
+    pub yes: bool,
 }
 
 /// `skiman project <command>`; the logic lives in `commands::project`.
@@ -235,23 +238,7 @@ where
             session_hooks,
         } => commands::init::run(&path, session_hooks.as_deref()),
         Command::New { name, description } => commands::new::run(&name, description),
-        Command::Add {
-            source,
-            skills,
-            all,
-            name,
-            git_ref,
-            dry_run,
-            yes,
-        } => commands::add::run(commands::add::Args {
-            source,
-            skills,
-            all,
-            name,
-            git_ref,
-            dry_run,
-            yes,
-        }),
+        Command::Add(args) => commands::add::run(args),
         Command::Diff { name } => commands::diff::run(&name),
         Command::Update { names, git_ref } => commands::update::run(names, git_ref),
         Command::Remove { name, yes } => commands::remove::run(&name, yes),

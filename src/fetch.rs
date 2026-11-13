@@ -5,6 +5,7 @@
 //! the objects (`crate::snapshot`).
 
 use std::collections::BTreeMap;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -63,6 +64,10 @@ impl Cache {
             .with_extension(format!("git.tmp-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         let mut init = self.git_in(&tmp);
+        // Files refs, whatever the user's default, so a killed git leaves only
+        // the lock files `fetch_commit` removes (an older git ignores this).
+        init.args(["-c", "init.defaultRefFormat=files"])
+            .env_remove("GIT_DEFAULT_REF_FORMAT");
         init.args(["init", "--quiet", "--bare", "--"]).arg(&tmp);
         git::run(init, "creating the git cache")?;
         let mut config = self.git_in(&tmp);
@@ -168,13 +173,30 @@ impl Cache {
     }
 
     /// Makes `commit` (a full sha) available in the cache, fetching it when
-    /// missing, and pins it under `refs/skiman/c/<sha>` so it is kept.
+    /// missing, and pins it under `refs/skiman/c/<sha>` so it is kept. The
+    /// pin, not the commit object, says it was fetched: git writes the pin
+    /// once every object is in, while a running or killed fetch may hold the
+    /// commit without its tree. Fetches take turns ([`Cache::lock`]); the
+    /// lock is held by the skiman fetching and by the git it starts, even
+    /// when that skiman alone is killed, so a lock file of git's found by
+    /// the one holding it was left by a killed git.
     pub fn fetch_commit(&self, commit: &str) -> Result<(), Failure> {
         assert!(is_full_sha(commit), "fetch by full sha only");
-        let mut has = self.git();
-        has.args(["cat-file", "-e", &format!("{commit}^{{commit}}")]);
-        if has.output().is_ok_and(|o| o.status.success()) {
+        let pin = format!("refs/skiman/c/{commit}");
+        let pinned = || {
+            let mut has = self.git();
+            has.args(["cat-file", "-e", &pin]);
+            has.output().is_ok_and(|o| o.status.success())
+        };
+        if pinned() {
             return Ok(());
+        }
+        let lock = self.lock()?;
+        if pinned() {
+            return Ok(());
+        }
+        for left in ["shallow.lock".to_owned(), format!("{pin}.lock")] {
+            let _ = std::fs::remove_file(self.dir.join(left));
         }
         let mut fetch = self.git();
         fetch.args([
@@ -185,10 +207,31 @@ impl Cache {
             "--depth=1",
             "--",
             &self.url,
-            &format!("{commit}:refs/skiman/c/{commit}"),
+            &format!("{commit}:{pin}"),
         ]);
+        // git holds the lock as its stdin, which it never reads.
+        fetch.stdin(lock);
         git::run(fetch, &format!("fetching {commit} from {}", self.url))?;
         Ok(())
+    }
+
+    /// Takes `<state>/skiman/cache/<hex>.git.lock`, the lock of the cache
+    /// `<hex>.git`, held until dropped. Waits as long as another skiman
+    /// fetches into this cache: a fetch may wait for a password.
+    fn lock(&self) -> Result<File, Failure> {
+        let path = self.dir.with_extension("git.lock");
+        let io = |e: std::io::Error| {
+            Failure::operational(format!("cannot lock {}: {e}", path.display()))
+        };
+        let file = File::create(&path).map_err(io)?;
+        if file.try_lock().is_err() {
+            let (url, held) = (&self.url, path.display());
+            err!(
+                "waiting for another skiman, or a git it started, to finish fetching from {url} (it holds {held})"
+            );
+            file.lock().map_err(io)?;
+        }
+        Ok(file)
     }
 }
 

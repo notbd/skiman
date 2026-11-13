@@ -39,3 +39,4 @@ mod update;
 mod update_conflicts;
 mod update_recovery;
 mod update_refs;
+mod upstream_cache;

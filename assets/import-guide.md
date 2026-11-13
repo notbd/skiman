@@ -220,9 +220,7 @@ folder holds exactly one canonical copy per skill.
      TOML, delete that file. Then run the import again.
    - 2: there is no terminal and no `--yes`.
    - 4, or the import was interrupted: run the same command again (see
-     below). When the message names a `shallow.lock` file in skiman's cache,
-     wait until no other skiman is running; if the file is still there,
-     delete it.
+     below).
 
 ## Run it again
 

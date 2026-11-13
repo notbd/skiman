@@ -51,7 +51,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             dir.display()
         )));
     }
-    let _lock = RepoLock::wait(&repo)?;
+    let _lock = RepoLock::wait(&paths, &repo)?;
     let manifest = Manifest::load(&repo)?;
     if manifest.projects().iter().any(|entry| entry.id == id) {
         return Err(Failure::refused(format!(
@@ -121,7 +121,7 @@ impl Context {
     fn open() -> Result<Context, Failure> {
         let paths = Paths::from_env()?;
         let repo = SkillRepo::from_config(&paths)?;
-        let lock = RepoLock::wait(&repo)?;
+        let lock = RepoLock::wait(&paths, &repo)?;
         if let Some(operation) = operation_in_progress(repo.root()) {
             return Err(Failure::operational(format!(
                 "the skill repo {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"

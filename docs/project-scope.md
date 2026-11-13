@@ -305,7 +305,7 @@ content or undoes a local deletion on either side; that needs the item's
 exact path.** So an
 `adopt` an agent runs with `--yes` cannot settle conflicts in bulk.
 Conventions as today: `--yes` without a terminal, exit codes 0/1/2/3/4, the
-repo lock, staging, backups under machine state.
+locks, staging, backups under machine state.
 
 ### Local edits skiman did not see
 

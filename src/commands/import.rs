@@ -174,7 +174,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     }
 
     test_hook::at("import", "confirmed");
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     refuse_irregular_files(&repo)?;
     let changed = repo_files() != first_read
         || match &writes {

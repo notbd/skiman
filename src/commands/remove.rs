@@ -39,7 +39,7 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
         }
     }
 
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     let found = Found::read(&repo, name)?;
     let records = Records::build(&repo, name, &found)?;
     validate(&repo, name, &records)?;

@@ -468,3 +468,42 @@ fn a_fifo_in_what_a_move_cut_short_left_does_not_block_sync_hook() {
         "{said}"
     );
 }
+
+/// One write at a time on a machine: a command that waited for the
+/// machine lock while another switched the skill repo writes nothing.
+#[test]
+fn a_command_that_waited_while_the_skill_repo_was_switched_writes_nothing() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let other = sandbox.root().join("other-repo");
+    std::fs::create_dir(&other).unwrap();
+    let config = sandbox.config_home().join("skiman/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let repo = sandbox.skill_repo().display().to_string();
+    let switched = text.replace(&repo, &other.display().to_string());
+    assert_ne!(switched, text);
+    let lock = std::fs::File::options()
+        .write(true)
+        .open(sandbox.state_home().join("skiman/lock"))
+        .unwrap();
+    lock.lock().unwrap();
+
+    let output = std::thread::scope(|scope| {
+        let new = scope.spawn(|| sandbox.skiman().args(["new", "pdf", "-d", "d"]).output());
+        std::thread::sleep(Duration::from_millis(500));
+        std::fs::write(&config, &switched).unwrap();
+        drop(lock);
+        new.join().unwrap().unwrap()
+    });
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "the skill repo changed to {}",
+            other.canonicalize().unwrap().display()
+        )),
+        "{stderr}"
+    );
+    assert!(!sandbox.skill_repo().join("skills/pdf").exists());
+}

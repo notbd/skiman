@@ -125,7 +125,7 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
         Some(Context {
             paths: &paths,
             repo: &repo,
-            lock: RepoLock::wait(&repo)?,
+            lock: RepoLock::wait(&paths, &repo)?,
             staging: None,
         })
     };
@@ -296,7 +296,7 @@ fn prepare(
     // records read there are checked again by `update_to` like any others.
     let current = Current::read(repo, name).or_else(|_| {
         test_hook::at(name, "read-again");
-        let _lock = RepoLock::wait(repo)?;
+        let _lock = RepoLock::wait(paths, repo)?;
         Current::read(repo, name)
     })?;
     let target = fetch(paths, prompts, name, &current, git_ref)?;

@@ -33,7 +33,7 @@ fn mv(old: &str, new: &str) -> Result<Exit, Failure> {
     check_single_name(old)?;
     names::check_new_name(new)?;
 
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     if !std::fs::symlink_metadata(repo.skill_dir(old)).is_ok_and(|m| m.is_dir()) {
         return Err(Failure::refused(format!(
             "skills/{old} is not a skill folder"

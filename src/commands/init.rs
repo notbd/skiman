@@ -49,13 +49,14 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current directory: {e}")))?;
     let path = absolute_lexical(&cwd, path);
+    let machine = RepoLock::machine(&paths)?;
     let target = inspect(&path)?;
 
     if target == Target::Create {
         git_init(&path)?;
     }
     let repo = SkillRepo::at(&path)?;
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::of_init(machine, &repo)?;
     if target == Target::Reuse {
         ignore_machine_state(&repo)?;
     } else {

@@ -125,7 +125,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         return Err(Failure::refused("not installed; nothing was written"));
     }
 
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     check_install_names(&repo, &installs)?;
     let files = candidate_files(&installs);
     let records = Records::build(&repo, &installs, &upstream)?;

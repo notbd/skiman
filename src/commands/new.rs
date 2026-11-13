@@ -42,7 +42,7 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
         )));
     }
 
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     names::check_not_taken(&repo, name)?;
     let content = skill_md(name, &description);
     let rel = format!("skills/{name}/SKILL.md");

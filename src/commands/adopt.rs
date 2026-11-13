@@ -61,7 +61,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     }
 
     test_hook::at("adopt", "confirmed");
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     check_name(&repo, name, &entry)?;
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,

@@ -33,7 +33,7 @@ use crate::Exit;
 use crate::backup::{self, Backup};
 use crate::commands::{confirm, has_terminal, prompts};
 use crate::failure::{Failure, finish};
-use crate::fetch::{Cache, RefKind};
+use crate::fetch::Cache;
 use crate::fsutil;
 use crate::git::Prompts;
 use crate::import_guide;
@@ -127,7 +127,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         ),
         Progress::OtherSharedBody => return Err(other_shared_body(&repo, &folder)),
         Progress::NotDone => {
-            let thirds = fetch_sources(&paths, &content, &manifest_text, prompts)?;
+            let thirds = fetch_sources(&paths, &repo, &content, &manifest_text, prompts)?;
             test_hook::at("import", "fetched");
             let manifest_text = with_ref_kinds(manifest_text, &thirds)?;
             let lock_text = lock_text(&thirds)?;
@@ -515,14 +515,14 @@ fn refuse_violations(
     Err(Failure::refused(message))
 }
 
-/// One third-party skill's upstream, fetched at its declared ref.
+/// One third-party skill's upstream at its declared ref, fetched now or before.
 struct Third {
     name: String,
     source: SourceRecord,
     snapshot: Snapshot,
     entry: LockEntry,
-    /// The derived kind of `source.ref`.
-    ref_kind: Option<RefKind>,
+    /// The kind of `source.ref`: derived when fetched, else the skill repo's.
+    ref_kind: Option<&'static str>,
     /// `at <commit> (tag v1)`, `(local folder)`.
     version: String,
 }
@@ -540,9 +540,12 @@ impl Third {
 }
 
 /// Fetches every declared source at its declared `ref` (the default branch
-/// when there is none) and reads its snapshot; path safety runs on each.
+/// when there is none) and reads its snapshot; path safety runs on each. A
+/// source the skill repo already holds ([`fetched_before`]) is not fetched
+/// again.
 fn fetch_sources(
     paths: &Paths,
+    repo: &SkillRepo,
     content: &Folder,
     manifest_text: &str,
     prompts: Prompts,
@@ -560,6 +563,10 @@ fn fetch_sources(
         let url = &source.url;
         let kind = check_url(url)
             .map_err(|why| refuse(&format!("unsupported `url` `{url}`: it {why}")))?;
+        if let Some(third) = fetched_before(repo, &name, &source) {
+            thirds.push(third);
+            continue;
+        }
         let upstream = if kind == UrlKind::Local {
             if source.git_ref.is_some() {
                 return Err(refuse("a local folder has no versions; drop `ref`"));
@@ -572,7 +579,7 @@ fn fetch_sources(
         let snapshot = upstream.snapshot(&source.path)?;
         thirds.push(Third {
             entry: upstream.lock_entry(&snapshot),
-            ref_kind: upstream.resolved().map(|r| r.kind),
+            ref_kind: upstream.resolved().map(|r| r.kind.as_str()),
             version: upstream.version(),
             name,
             source,
@@ -582,12 +589,35 @@ fn fetch_sources(
     Ok(thirds)
 }
 
-/// `manifest` with each source's `ref_kind` set to the derived kind, or
-/// removed when the source has no `ref` (a hand-written `ref_kind` is never trusted).
+/// The third-party skill `name` as the skill repo holds it, when an earlier
+/// run fetched it from a git upstream as `source` declares it: the repo's
+/// source table names the same `url`, `path` and `ref`, and its lock entry
+/// (with that `ref` and a commit) matches `upstream/<name>`. Fetching it
+/// again would move a branch or tag that moved since, and needs the network.
+fn fetched_before(repo: &SkillRepo, name: &str, source: &SourceRecord) -> Option<Third> {
+    let manifest = Manifest::load(repo).ok()?;
+    let recorded = manifest.source(name)?;
+    let entry = Lockfile::load(repo).ok()?.entry(name)?;
+    let version = format!("at {} (as the skill repo holds it)", entry.commit.as_ref()?);
+    let same = (&recorded.url, &recorded.path, &recorded.git_ref)
+        == (&source.url, &source.path, &source.git_ref)
+        && entry.git_ref == source.git_ref;
+    let snapshot = Snapshot::from_folder(&repo.upstream_dir(name)).ok()?;
+    (same && snapshot.tree_hash() == entry.snapshot).then(|| Third {
+        name: name.to_owned(),
+        source: source.clone(),
+        version,
+        ref_kind: recorded.ref_kind,
+        snapshot,
+        entry,
+    })
+}
+
+/// `manifest` with each source's `ref_kind` set to its [`Third`]'s, or removed
+/// when the source has no `ref`: a `ref_kind` the folder holds is never kept.
 fn with_ref_kinds(manifest: String, thirds: &[Third]) -> Result<String, Failure> {
     thirds.iter().try_fold(manifest, |text, t| {
-        let kind = t.ref_kind.map(RefKind::as_str);
-        manifest::with_source_ref(&text, &t.name, t.source.git_ref.as_deref(), kind)
+        manifest::with_source_ref(&text, &t.name, t.source.git_ref.as_deref(), t.ref_kind)
             .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))
     })
 }

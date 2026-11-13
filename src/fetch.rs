@@ -235,8 +235,9 @@ impl Cache {
     }
 }
 
-/// What a ref names (`ref_kind`). Always derived by skiman, never read
-/// from a hand-written `ref_kind`.
+/// What a ref names (`ref_kind`). Derived by skiman when it resolves the
+/// ref, never taken from a hand-written `ref_kind`; import keeps the one
+/// the skill repo holds for a source it does not fetch again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefKind {
     Branch,

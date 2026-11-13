@@ -451,7 +451,7 @@ fn a_file_written_where_sync_is_about_to_link_is_kept_and_the_same_command_moves
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn a_branch_that_moved_after_a_kill_before_the_last_skill_is_fetched_again_and_the_old_snapshot_kept_in_a_backup()
+fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_skill_repo_holds_unless_the_ref_changed()
  {
     let sandbox = Sandbox::new();
     let Setup {
@@ -463,36 +463,62 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_is_fetched_again_and_t
     write(&manifest, read(&manifest).replace(&commit, "main"));
     import_killed_at(&sandbox, &folder, "rename:skills/notes");
     upstream.write("skills/pdf/reference.md", "# Reference v2\n");
+    upstream.commit("v2");
+    // Unreachable now: the run must not fetch.
+    let moved = sandbox.root().join("moved-upstream");
+    std::fs::rename(upstream.path(), &moved).unwrap();
+
+    let output = import(&sandbox, &folder);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "(third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (as the skill repo holds it))"
+        )),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("to the backup, then write"), "{stdout}");
+    let repo = sandbox.skill_repo();
+    assert_eq!(
+        read(repo.join("upstream/pdf/reference.md")),
+        "# Reference\n"
+    );
+    assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{commit}\"")));
+    sandbox.skiman().arg("check").assert().code(0);
+
+    // The import folder now names another ref: fetched again, at that ref.
+    let sandbox = Sandbox::new();
+    let Setup {
+        folder,
+        upstream,
+        commit,
+    } = setup(&sandbox);
+    let manifest = folder.join("skiman.toml");
+    write(&manifest, read(&manifest).replace(&commit, "main"));
+    import_killed_at(&sandbox, &folder, "rename:skills/notes");
+    upstream.write("skills/pdf/reference.md", "# Reference v2\n");
     let v2 = upstream.commit("v2");
+    write(
+        &manifest,
+        read(&manifest).replace("\"main\"", &format!("\"{v2}\"")),
+    );
 
     let output = import(&sandbox, &folder);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let repo = sandbox.skill_repo();
-    for replaced in ["upstream/pdf", "skiman.lock"] {
-        assert!(
-            stdout.contains(&format!(
-                "  move {} to the backup, then write the import's\n",
-                repo.join(replaced).display()
-            )),
-            "{stdout}"
-        );
-    }
-    // Written before the kill and the same now: not listed.
-    assert!(!stdout.contains("skiman.toml to the backup"), "{stdout}");
-    assert!(!stdout.contains("shared.md to the backup"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "  move {} to the backup, then write the import's\n",
+            repo.join("upstream/pdf").display()
+        )),
+        "{stdout}"
+    );
     assert_eq!(
         read(repo.join("upstream/pdf/reference.md")),
         "# Reference v2\n"
     );
     assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{v2}\"")));
-    assert!(
-        backup_dirs(&sandbox).iter().any(|dir| {
-            dir.join("repo/upstream/pdf/reference.md").is_file()
-                && read(dir.join("repo/upstream/pdf/reference.md")) == "# Reference\n"
-        }),
-        "the old snapshot is in no backup"
-    );
 }
 
 /// The skill repo, the home folder (tool directories, instruction files,

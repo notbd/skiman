@@ -834,6 +834,53 @@ fn a_local_folder_with_several_skills_installs_the_selected_one() {
 }
 
 #[test]
+fn a_candidate_whose_skill_md_is_over_the_size_limit_is_skipped_unread() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("src/many");
+    std::fs::create_dir_all(dir.join("pdf")).unwrap();
+    std::fs::write(dir.join("pdf/SKILL.md"), skill_md("pdf")).unwrap();
+    std::fs::create_dir_all(dir.join("huge")).unwrap();
+    let size = 10 * 1024 * 1024 + 1;
+    std::fs::write(dir.join("huge/SKILL.md"), vec![b'x'; size]).unwrap();
+
+    sandbox
+        .skiman()
+        .args(["add", "~/src/many", "--all", "--dry-run"])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+skill pdf from ~/src/many (pdf) (local folder):
+  SKILL.md
+dry run: nothing was written
+
+"#]])
+        .stderr_eq(format!(
+            "warning: ~/src/many holds huge/SKILL.md of {size} bytes, over the limit of 10485760 bytes; the skill there is skipped\n"
+        ));
+
+    // The same in a git upstream, whose sizes come from `ls-tree -l`.
+    let up = sandbox.upstream("acme/many");
+    up.write("pdf/SKILL.md", skill_md("pdf"))
+        .write("huge/SKILL.md", vec![b'x'; size]);
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/many", "--all", "--dry-run"])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+skill pdf from https://github.com/acme/many.git (pdf) at [..] (default branch main):
+  SKILL.md
+dry run: nothing was written
+
+"#]])
+        .stderr_eq(format!(
+            "warning: https://github.com/acme/many.git holds huge/SKILL.md of {size} bytes, over the limit of 10485760 bytes; the skill there is skipped\n"
+        ));
+}
+
+#[test]
 fn a_local_folder_that_is_a_link_is_read_through_it_by_add_and_update() {
     let sandbox = Sandbox::new();
     init(&sandbox);

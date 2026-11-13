@@ -224,42 +224,50 @@ impl Tree for Listing<'_> {
     }
 }
 
-/// The path and blob id of every file and symlink below folder `path` of
-/// `commit` (relative to it, names that are not UTF-8 converted lossily),
+/// The path, blob id and size of every file and symlink below folder `path`
+/// of `commit` (relative to it, names that are not UTF-8 converted lossily),
 /// without reading any content: what skill discovery looks at. A `path` that
 /// is not a folder at `commit` is refused (exit 1).
-pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, String)>, Failure> {
+pub fn list(
+    cache: &Cache,
+    commit: &str,
+    path: &str,
+) -> Result<Vec<(String, String, u64)>, Failure> {
     let treeish = folder(cache, commit, path)?;
     let mut ls = cache.git();
-    ls.args(["ls-tree", "-r", "-z", "--full-tree", &treeish]);
+    ls.args(["ls-tree", "-r", "-z", "-l", "--full-tree", &treeish]);
     let listing = git::run(ls, &format!("listing {treeish} of {}", cache.url()))?;
     Ok(listing
         .split(|b| *b == 0)
         .filter(|record| !record.starts_with(b"160000 "))
         .filter_map(|record| {
             let tab = record.iter().position(|b| *b == b'\t')?;
-            // `<mode> SP <type> SP <oid> TAB <path>`
-            let oid = std::str::from_utf8(&record[..tab])
-                .ok()?
-                .split(' ')
-                .nth(2)?;
+            // `<mode> SP <type> SP <oid> SP+ <size> TAB <path>`
+            let head = std::str::from_utf8(&record[..tab]).ok()?;
+            let [_, _, oid, size] = head.split_whitespace().collect::<Vec<_>>()[..] else {
+                return None;
+            };
             let path = String::from_utf8_lossy(&record[tab + 1..]).into_owned();
-            Some((path, oid.to_owned()))
+            Some((path, oid.to_owned(), size.parse().ok()?))
         })
         .collect())
 }
 
-/// The paths of every non-folder entry below the local folder `dir`,
-/// never looking inside `.git`. A missing `dir` is refused (exit 1).
-pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
+/// The path and size (0 for anything but a regular file) of every
+/// non-folder entry below the local folder `dir`, never looking inside
+/// `.git`. A missing `dir` is refused (exit 1).
+pub fn list_local(dir: &Path) -> Result<Vec<(String, u64)>, Failure> {
     require_folder(dir)?;
     let folder = LocalFolder::new(dir, false)
         .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))?;
     Ok(folder
         .entries
         .into_iter()
-        .filter(|e| e.kind != Kind::Dir)
-        .map(|e| e.path)
+        .filter_map(|e| match e.kind {
+            Kind::Dir => None,
+            Kind::File { size, .. } => Some((e.path, size)),
+            _ => Some((e.path, 0)),
+        })
         .collect())
 }
 

@@ -63,16 +63,16 @@ impl Upstream {
         })
     }
 
-    /// Every file below `path`: its path relative to `path`, and what
-    /// [`Upstream::read_files`] reads it by: its blob id in a git upstream,
+    /// Every file below `path`: its path relative to `path`, what
+    /// [`Upstream::read_files`] reads it by (its blob id in a git upstream,
     /// so no name can break `cat-file`'s line protocol, or its path from the
-    /// upstream's root in a local folder.
-    pub fn list(&self, path: &str) -> Result<Vec<(String, String)>, Failure> {
+    /// upstream's root in a local folder), and its size.
+    pub fn list(&self, path: &str) -> Result<Vec<(String, String, u64)>, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
             Upstream::Local { dir } => Ok(snapshot::list_local(&local_folder(dir, path))?
                 .into_iter()
-                .map(|file| (file.clone(), discovery::join(path, &file)))
+                .map(|(file, size)| (file.clone(), discovery::join(path, &file), size))
                 .collect()),
         }
     }

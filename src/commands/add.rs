@@ -22,7 +22,7 @@ use crate::path_safety;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
-use crate::rules::{self, Scope};
+use crate::rules::{self, LIMITS, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
@@ -178,20 +178,33 @@ fn fetch(
 /// folder name here; it is refused only if it is selected. A candidate whose
 /// folder path has a name path safety refuses is skipped with a warning.
 fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Failure> {
-    let listing: BTreeMap<String, String> = upstream.list(&source.path)?.into_iter().collect();
+    let listing: BTreeMap<String, (String, u64)> = upstream
+        .list(&source.path)?
+        .into_iter()
+        .map(|(path, key, size)| (path, (key, size)))
+        .collect();
     let files: Vec<String> = listing.keys().cloned().collect();
     let mut folders = discovery::candidates(&files);
     folders.retain(|folder| {
+        let path = discovery::join(&source.path, folder);
+        let size = listing[&discovery::join(folder, "SKILL.md")].1;
         // `""` is the source folder itself.
-        let safe = folder.is_empty() || path_safety::is_safe_path(folder);
-        if !safe {
-            err!(
-                "warning: {} holds {}; the skill there is skipped",
-                source.url,
-                path_safety::unsafe_path(&discovery::join(&source.path, folder))
-            );
-        }
-        safe
+        let skipped = if !folder.is_empty() && !path_safety::is_safe_path(folder) {
+            path_safety::unsafe_path(&path)
+        } else if size > LIMITS.file_bytes {
+            let skill_md = discovery::join(&path, "SKILL.md");
+            format!(
+                "{skill_md} of {size} bytes, over the limit of {} bytes",
+                LIMITS.file_bytes
+            )
+        } else {
+            return true;
+        };
+        err!(
+            "warning: {} holds {skipped}; the skill there is skipped",
+            source.url
+        );
+        false
     });
     if folders.is_empty() {
         let at = if source.path.is_empty() {
@@ -211,7 +224,7 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
     // Every candidate was found by its listed `SKILL.md`.
     let skill_mds: Vec<&str> = folders
         .iter()
-        .map(|f| listing[&discovery::join(f, "SKILL.md")].as_str())
+        .map(|f| listing[&discovery::join(f, "SKILL.md")].0.as_str())
         .collect();
     let contents = upstream.read_files(&skill_mds)?;
     Ok(paths

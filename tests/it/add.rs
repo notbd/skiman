@@ -564,10 +564,19 @@ fn an_unwritable_backups_folder_stops_add_with_exit_4_and_keeps_the_tmp_leftover
 
 /// `date -u` for `secs` since the epoch, as `YYYYMMDDTHHMMSSZ`.
 fn utc_stamp(secs: u64) -> String {
+    // BSD `date` takes the seconds with `-r`, GNU `date` with `-d @`.
+    let at = if cfg!(target_os = "macos") {
+        ["-r".to_owned(), secs.to_string()]
+    } else {
+        ["-d".to_owned(), format!("@{secs}")]
+    };
     let out = std::process::Command::new("date")
-        .args(["-u", "-r", &secs.to_string(), "+%Y%m%dT%H%M%SZ"])
+        .arg("-u")
+        .args(at)
+        .arg("+%Y%m%dT%H%M%SZ")
         .output()
         .unwrap();
+    assert!(out.status.success(), "{out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 

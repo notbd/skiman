@@ -267,7 +267,8 @@ fn doctor_reports_aliased_tool_directories_and_instruction_locations() {
     );
 }
 
-/// A `git` that only prints a version, first on a `PATH` without the real one.
+/// A `git` that only prints a version, alone on the `PATH` (the real one is
+/// in `/bin` on a system that merged it with `/usr/bin`).
 fn fake_git(sandbox: &Sandbox, version_line: Option<&str>) -> String {
     let bin = sandbox.root().join("fake-bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -276,7 +277,7 @@ fn fake_git(sandbox: &Sandbox, version_line: Option<&str>) -> String {
         write(&git, format!("#!/bin/sh\necho '{line}'\n"));
         std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
-    format!("{}:/bin", bin.display())
+    bin.display().to_string()
 }
 
 #[test]

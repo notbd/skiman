@@ -1,10 +1,12 @@
-//! Writes across filesystems, each test with a folder on a small disk image
-//! (`hdiutil`, no sudo): a move to a backup on another filesystem (spec Data
-//! formats, Machine state) copies, verifies, then deletes the original; and
-//! `project restore` on a volume without hard links (exFAT) fails without
-//! touching the project file. Where no image can be attached, the test prints
+//! Writes across filesystems, each test with a folder on a second filesystem
+//! (no sudo): a small disk image on macOS (`hdiutil`), `/dev/shm` on Linux.
+//! A move to a backup on another filesystem (spec Data formats, Machine
+//! state) copies, verifies, then deletes the original; and `project restore`
+//! on a volume without hard links (exFAT, macOS only) fails without touching
+//! the project file. Where there is no second filesystem, the test prints
 //! why and skips, except in CI (`CI` is set), where it fails.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -63,11 +65,42 @@ impl Drop for DiskImage {
     }
 }
 
-/// The attached `disk`, or `None` after printing why there is none; in CI
+/// A folder on another filesystem than the sandbox's; what keeps it there
+/// is dropped with it.
+struct Volume {
+    dir: PathBuf,
+    _keep: Box<dyn std::any::Any>,
+}
+
+/// A volume with hard links and symlinks: an HFS+ disk image on macOS, a
+/// folder in `/dev/shm` (a tmpfs) elsewhere.
+fn second_filesystem(sandbox: &Sandbox) -> Result<Volume, String> {
+    if cfg!(target_os = "macos") {
+        let image = DiskImage::attach(sandbox, "HFS+", "state")?;
+        return Ok(Volume {
+            dir: image.mount.clone(),
+            _keep: Box::new(image),
+        });
+    }
+    let temp = tempfile::Builder::new()
+        .prefix("skiman-test-")
+        .tempdir_in("/dev/shm")
+        .map_err(|e| format!("cannot create a folder in /dev/shm: {e}"))?;
+    let device = |path: &Path| std::fs::metadata(path).map(|m| m.dev()).ok();
+    if device(temp.path()) == device(sandbox.root()) {
+        return Err("/dev/shm is on the sandbox's filesystem".to_owned());
+    }
+    Ok(Volume {
+        dir: temp.path().to_owned(),
+        _keep: Box::new(temp),
+    })
+}
+
+/// The attached `volume`, or `None` after printing why there is none; in CI
 /// that fails the test instead.
-fn attached(disk: Result<DiskImage, String>) -> Option<DiskImage> {
-    match disk {
-        Ok(disk) => Some(disk),
+fn attached<T>(volume: Result<T, String>) -> Option<T> {
+    match volume {
+        Ok(volume) => Some(volume),
         Err(why) if std::env::var_os("CI").is_some() => {
             panic!("no second filesystem in CI: {why}")
         }
@@ -91,7 +124,7 @@ fn the_only_backup(state: &Path) -> PathBuf {
 #[test]
 fn a_file_and_a_symlink_move_to_a_backup_on_another_filesystem() {
     let sandbox = Sandbox::new();
-    let Some(disk) = attached(DiskImage::attach(&sandbox, "HFS+", "state")) else {
+    let Some(state) = attached(second_filesystem(&sandbox)) else {
         return;
     };
     init(&sandbox);
@@ -108,12 +141,12 @@ fn a_file_and_a_symlink_move_to_a_backup_on_another_filesystem() {
 
     sandbox
         .skiman()
-        .env("XDG_STATE_HOME", &disk.mount)
+        .env("XDG_STATE_HOME", &state.dir)
         .args(["add", "acme/pdf", "--yes"])
         .assert()
         .code(0);
 
-    let saved = the_only_backup(&disk.mount).join("repo/.skiman/tmp");
+    let saved = the_only_backup(&state.dir).join("repo/.skiman/tmp");
     assert_eq!(
         std::fs::read_to_string(saved.join("stray.md")).unwrap(),
         "left behind\n"
@@ -131,6 +164,7 @@ fn a_file_and_a_symlink_move_to_a_backup_on_another_filesystem() {
     assert!(std::fs::symlink_metadata(tmp.join("link")).is_err());
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn restore_over_a_file_on_a_volume_without_hard_links_fails_and_leaves_the_file_in_place() {
     let sandbox = Sandbox::new();

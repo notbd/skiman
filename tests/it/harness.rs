@@ -78,6 +78,7 @@ fn sandbox_creates_the_agent_tool_directories_it_is_asked_for() {
     assert!(!sandbox.skill_repo().exists());
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn confined_commands_cannot_write_outside_the_sandbox() {
     let sandbox = Sandbox::new();
@@ -103,6 +104,7 @@ fn confined_commands_cannot_write_outside_the_sandbox() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn skiman_writes_nothing_outside_the_sandbox() {
     let sandbox = Sandbox::new();
@@ -125,7 +127,7 @@ fn github_urls_resolve_to_local_upstreams_without_network() {
     upstream.switch("main");
     assert_eq!(upstream.url(), "https://github.com/acme/skills.git");
 
-    // Confinement denies all network access, so only the rewrite can succeed.
+    // Confinement (macOS) denies all network access, so only the rewrite can succeed.
     let refs = sandbox
         .confined("git")
         .args(["ls-remote", "--", &upstream.url()])

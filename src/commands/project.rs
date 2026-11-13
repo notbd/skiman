@@ -898,11 +898,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             }
             let backup = match &mut backup {
                 Some(b) => b,
-                None => backup.insert(Backup::create(&ctx.paths).map_err(|e| {
-                    Failure::operational(format!(
-                        "cannot create a backup folder: {e}; nothing was changed"
-                    ))
-                })?),
+                None => backup.insert(Backup::create(&ctx.paths, "nothing was changed")?),
             };
             match backup.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {

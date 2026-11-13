@@ -548,7 +548,7 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
             out!("  {}  [{}]", file.path, flags.join(", "));
         }
     }
-    print_not_installed(&install.snapshot);
+    print_not_installed(&install.snapshot, "  ");
     if install.renamed_skill_md.is_some() {
         out!(
             "the `name` line of skills/{0}/SKILL.md is set to `{0}` (a local modification; upstream/{0} keeps the upstream text)",

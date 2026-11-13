@@ -134,7 +134,8 @@ pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
 }
 
 /// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.
-/// Everything else keeps its bytes.
+/// Everything else keeps its bytes, except a `projects` table written inline,
+/// which becomes a standard table (`subtable`).
 pub fn with_project(text: &str, id: &str, path: &str) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     let mut table = Table::new();
@@ -260,7 +261,9 @@ pub struct SourceRecord {
 }
 
 /// `text` (a `skiman.toml`) with a new `[skills.<name>.source]` table added.
-/// Everything else keeps its bytes: comments, layout and key order.
+/// Everything else keeps its bytes (comments, layout and key order), except
+/// a `skills` or `skills.<name>` table written inline, which becomes a
+/// standard table (`subtable`).
 pub fn with_source(text: &str, name: &str, source: &SourceRecord) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     let mut table = Table::new();
@@ -332,13 +335,19 @@ pub fn with_upstream_name(text: &str, name: &str, upstream_name: &str) -> Result
     Ok(doc.to_string())
 }
 
-/// The table `key` of `parent`, created as an implicit table (no header of
-/// its own) when missing; `None` when `key` holds something else.
+/// The table `key` of `parent` as a standard table that tables can join. A
+/// missing table is added and one written inline converted (a comment on its
+/// line is lost), both at the end; either gets a header only when it holds
+/// values of its own. `None` when `key` holds a value of another kind, such
+/// as a string or an array (the rules report it).
 pub(crate) fn subtable<'a>(parent: &'a mut Table, key: &str) -> Option<&'a mut Table> {
-    let item = parent.entry(key).or_insert_with(|| {
-        let mut table = Table::new();
+    if let None | Some(Item::Value(Value::InlineTable(_))) = parent.get(key) {
+        let mut table = parent
+            .remove(key)
+            .and_then(|item| item.into_table().ok())
+            .unwrap_or_default();
         table.set_implicit(true);
-        Item::Table(table)
-    });
-    item.as_table_mut()
+        parent.insert(key, Item::Table(table));
+    }
+    parent.get_mut(key)?.as_table_mut()
 }

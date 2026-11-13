@@ -175,12 +175,7 @@ fn move_folders(paths: &Paths, found: &Found) -> Result<Option<PathBuf>, Failure
     if found.folders.is_empty() {
         return Ok(None);
     }
-    let backup = Backup::create(paths).map_err(|e| {
-        Failure::operational(format!(
-            "cannot create a backup folder in {}: {e}; nothing was removed",
-            paths.state_dir().join("backups").display()
-        ))
-    })?;
+    let backup = Backup::create(paths, "nothing was removed")?;
     for (path, rel) in &found.folders {
         let dest = backup
             .move_in(path, &Path::new("repo").join(rel))

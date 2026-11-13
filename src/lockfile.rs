@@ -66,7 +66,9 @@ pub struct LockEntry {
 }
 
 /// `text` (a `skiman.lock`, possibly empty) with the entry of `name` set and
-/// `version = 1` added when missing. Other entries keep their bytes.
+/// `version = 1` added when missing. Other entries keep their bytes, except
+/// that a `skills` table written inline becomes a standard table
+/// (`manifest::subtable`).
 pub fn with_entry(text: &str, name: &str, entry: &LockEntry) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     if !doc.contains_key("version") {

@@ -265,6 +265,15 @@ fn folder_names(tree: &dyn Tree, dir: &str) -> io::Result<BTreeSet<String>> {
         .collect())
 }
 
+/// Whether `skiman.toml` and `skiman.lock` parse and Consistency holds for
+/// every name in `tree` (no other rule is run).
+pub fn consistent(tree: &dyn Tree) -> io::Result<bool> {
+    let records = config::Records::read(tree)?;
+    let mut out = BTreeSet::new();
+    consistency::check(tree, &records, &Scope::all(tree)?.consistency, &mut out)?;
+    Ok(records.parsed() && out.is_empty())
+}
+
 /// Every rule on everything in `tree`, sorted by path and line.
 pub fn check_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     check(tree, &Scope::all(tree)?)

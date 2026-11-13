@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
+use crate::failure::Failure;
 use crate::paths::Paths;
 use crate::tree::{self, IGNORED_NAMES};
 
@@ -76,26 +77,34 @@ pub struct Backup {
 }
 
 impl Backup {
-    pub fn create(paths: &Paths) -> io::Result<Backup> {
-        Ok(Backup {
-            dir: fresh_dir(&paths.state_dir().join("backups"))?,
-        })
-    }
-
-    /// The backup folder `dir` an earlier run created (a resumed import
-    /// keeps using its own).
-    pub fn existing(dir: PathBuf) -> Backup {
-        Backup { dir }
+    /// A fresh folder under `backups/`. The failure names where it could
+    /// not be created and ends with `then`: what the caller left as it was,
+    /// or what to do next.
+    pub fn create(paths: &Paths, then: &str) -> Result<Backup, Failure> {
+        let parent = paths.state_dir().join("backups");
+        let dir = fresh_dir(&parent).map_err(|e| {
+            Failure::operational(format!(
+                "cannot create a backup folder in {}: {e}; {then}",
+                parent.display()
+            ))
+        })?;
+        Ok(Backup { dir })
     }
 
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
-    /// Moves `original` to `<backup>/<rel>` (a symlink as a symlink). Across
-    /// filesystems: copy, verify, then delete the original; an original
-    /// holding a special file is refused and left in place.
-    pub fn move_in(&self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
+    /// Writes `content`, the content of a file about to be replaced in one
+    /// step, to `<backup>/<rel>`.
+    pub fn save(&self, rel: &Path, content: &[u8]) -> io::Result<PathBuf> {
+        let dest = self.fresh(rel)?;
+        std::fs::write(&dest, content)?;
+        Ok(dest)
+    }
+
+    /// `<backup>/<rel>` with its parent folders created; refuses a taken one.
+    fn fresh(&self, rel: &Path) -> io::Result<PathBuf> {
         let dest = self.dir.join(rel);
         if std::fs::symlink_metadata(&dest).is_ok() {
             return Err(io::Error::new(
@@ -104,6 +113,14 @@ impl Backup {
             ));
         }
         std::fs::create_dir_all(dest.parent().expect("backup path has a parent"))?;
+        Ok(dest)
+    }
+
+    /// Moves `original` to `<backup>/<rel>` (a symlink as a symlink). Across
+    /// filesystems: copy, verify, then delete the original; an original
+    /// holding a special file is refused and left in place.
+    pub fn move_in(&self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
+        let dest = self.fresh(rel)?;
         match std::fs::rename(original, &dest) {
             Ok(()) => Ok(dest),
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
@@ -116,7 +133,12 @@ impl Backup {
 }
 
 fn move_across_filesystems(original: &Path, dest: &Path) -> io::Result<()> {
-    refuse_special_files(original)?;
+    if let Some(special) = special_files(original)?.first() {
+        return Err(io::Error::other(format!(
+            "{} is a special file (FIFO, socket or device); move it away by hand",
+            special.display()
+        )));
+    }
     let copied = copy_all(original, dest).and_then(|()| verify(original, dest));
     if let Err(e) = copied {
         let _ = remove(dest);
@@ -150,17 +172,17 @@ fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {
     Ok(out)
 }
 
-fn refuse_special_files(path: &Path) -> io::Result<()> {
-    for (entry, meta) in entries(path)? {
-        let kind = meta.file_type();
-        if !(kind.is_file() || kind.is_dir() || kind.is_symlink()) {
-            return Err(io::Error::other(format!(
-                "{} is a special file (FIFO, socket or device); move it away by hand",
-                entry.display()
-            )));
-        }
-    }
-    Ok(())
+/// Every special file (FIFO, socket, device) at or below `path`, never
+/// following symlinks: what a move across filesystems refuses.
+pub fn special_files(path: &Path) -> io::Result<Vec<PathBuf>> {
+    Ok(entries(path)?
+        .into_iter()
+        .filter(|(_, meta)| {
+            let kind = meta.file_type();
+            !(kind.is_file() || kind.is_dir() || kind.is_symlink())
+        })
+        .map(|(entry, _)| entry)
+        .collect())
 }
 
 /// Where `entry` (at or below `from`) goes below `to`; `from` itself goes to

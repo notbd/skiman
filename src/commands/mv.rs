@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::Exit;
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
-use crate::fsutil::{rewrite_atomic, write_atomic};
+use crate::fsutil::{read_text, rewrite_atomic, write_atomic};
 use crate::lockfile;
 use crate::manifest;
 use crate::names;
@@ -82,15 +82,8 @@ impl Plan {
         let edit = |path: PathBuf,
                     rename: fn(&str, &str, &str) -> Result<String, String>|
          -> Result<Option<String>, Failure> {
-            let text = match std::fs::read_to_string(&path) {
-                Ok(text) => text,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => {
-                    return Err(Failure::operational(format!(
-                        "cannot read {}: {e}",
-                        path.display()
-                    )));
-                }
+            let Some(text) = read_text(&path)? else {
+                return Ok(None);
             };
             let renamed = rename(&text, old, new)
                 .map_err(|e| Failure::refused(format!("{}: {e}", path.display())))?;

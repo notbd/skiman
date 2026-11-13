@@ -13,7 +13,7 @@ use crate::commands::{ask, confirm, has_terminal, prompts};
 use crate::discovery;
 use crate::failure::{Failure, finish};
 use crate::fetch::Cache;
-use crate::fsutil::{self, write_atomic};
+use crate::fsutil::{self, read_text, write_atomic};
 use crate::git::Prompts;
 use crate::lockfile;
 use crate::manifest::{self, SourceRecord};
@@ -28,8 +28,8 @@ use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
-use crate::tree::{self, Overlay, WorkingTree};
-use crate::upstream::{Upstream, print_not_installed};
+use crate::tree::{Overlay, WorkingTree};
+use crate::upstream::{Upstream, print_not_installed, run_flags};
 
 pub fn run(args: Args) -> Exit {
     finish(add(args))
@@ -415,18 +415,8 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
         );
     }
     for file in &install.snapshot.files {
-        let mut flags = Vec::new();
-        if is_script(&file.path, &file.content) {
-            flags.push("script");
-        }
-        if file.executable {
-            flags.push("executable");
-        }
-        if flags.is_empty() {
-            out!("  {}", file.path);
-        } else {
-            out!("  {}  [{}]", file.path, flags.join(", "));
-        }
+        let flags = run_flags(&file.path, &file.content, file.executable);
+        out!("  {}{flags}", file.path);
     }
     print_not_installed(&install.snapshot, "  ");
     if install.renamed_skill_md.is_some() {
@@ -435,33 +425,6 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
             install.name
         );
     }
-}
-
-/// A file agents may run: it starts with `#!` or has a script extension.
-fn is_script(path: &str, content: &[u8]) -> bool {
-    const EXTENSIONS: &[&str] = &[
-        "sh",
-        "bash",
-        "zsh",
-        "fish",
-        "py",
-        "rb",
-        "pl",
-        "php",
-        "js",
-        "mjs",
-        "cjs",
-        "ts",
-        "ps1",
-        "bat",
-        "cmd",
-        "applescript",
-        "scpt",
-    ];
-    content.starts_with(b"#!")
-        || tree::basename(path)
-            .rsplit_once('.')
-            .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 /// The new `skiman.toml` and `skiman.lock` texts.
@@ -477,20 +440,12 @@ impl Records {
         installs: &[Install],
         upstream: &Upstream,
     ) -> Result<Records, Failure> {
-        let read = |path: &Path| match std::fs::read_to_string(path) {
-            Ok(text) => Ok(Some(text)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Failure::operational(format!(
-                "cannot read {}: {e}",
-                path.display()
-            ))),
-        };
         let manifest_file = repo.manifest_file();
         let lock_file = repo.lockfile();
         let refuse = |path: &Path, e: String| Failure::refused(format!("{}: {e}", path.display()));
         let resolved = upstream.resolved();
-        let mut manifest = read(&manifest_file)?.unwrap_or_default();
-        let old_lock = read(&lock_file)?;
+        let mut manifest = read_text(&manifest_file)?.unwrap_or_default();
+        let old_lock = read_text(&lock_file)?;
         let mut lock = old_lock.clone().unwrap_or_default();
         for install in installs {
             let source = SourceRecord {

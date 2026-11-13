@@ -35,7 +35,7 @@ use crate::backup::Backup;
 use crate::commands::prompts;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
-use crate::fsutil::{self, write_atomic};
+use crate::fsutil::{self, read_text, write_atomic};
 use crate::git::Prompts;
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::manifest::{self, Manifest, SourceRecord};
@@ -245,17 +245,6 @@ fn refuse_unresolved(repo: &SkillRepo, name: &str) -> Result<(), Failure> {
         )));
     }
     Ok(())
-}
-
-fn read_text(path: &Path) -> Result<Option<String>, Failure> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Failure::operational(format!(
-            "cannot read {}: {e}",
-            path.display()
-        ))),
-    }
 }
 
 /// The version an update moves to.

@@ -523,20 +523,8 @@ struct Third {
     entry: LockEntry,
     /// The kind of `source.ref`: derived when fetched, else the skill repo's.
     ref_kind: Option<&'static str>,
-    /// `at <commit> (tag v1)`, `(local folder)`.
+    /// `at <commit> (tag v1)`, `(local folder)`: after the source in the preview.
     version: String,
-}
-
-impl Third {
-    /// `<url> (<path>) at <commit> (<how>)` or `<url> (local folder)`.
-    fn describe(&self) -> String {
-        let path = if self.source.path.is_empty() {
-            String::new()
-        } else {
-            format!(" ({})", self.source.path)
-        };
-        format!("{}{path} {}", self.source.url, self.version)
-    }
 }
 
 /// Fetches every declared source at its declared `ref` (the default branch
@@ -1039,10 +1027,14 @@ fn print_writes(repo: &SkillRepo, candidate: &Candidate, todo: &[(Piece, Step)])
                 } else {
                     "; files that differ from upstream:"
                 };
-                out!(
-                    "  {verb} skill {name} (third-party, from {}){summary}",
-                    third.describe()
-                );
+                let (url, path) = (&third.source.url, &third.source.path);
+                let path = if path.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({path})")
+                };
+                let version = &third.version;
+                out!("  {verb} skill {name} (third-party, from {url}{path} {version}){summary}");
                 for change in changes {
                     out!("      {change}");
                 }

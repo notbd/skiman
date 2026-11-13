@@ -13,6 +13,7 @@ use crate::lockfile::LockEntry;
 use crate::paths::Paths;
 use crate::snapshot::{self, Snapshot};
 use crate::source::{Source, SourceKind};
+use crate::tree;
 
 /// An upstream at one version, ready to read.
 pub enum Upstream {
@@ -186,4 +187,29 @@ pub fn print_not_installed(snapshot: &Snapshot, indent: &str) {
     for path in &snapshot.git_files {
         out!("{indent}{path}  [not installed]");
     }
+}
+
+/// `  [script, executable]` after a path in a file list, flagging what
+/// agents may run; empty for anything else.
+pub fn run_flags(path: &str, content: &[u8], executable: bool) -> String {
+    let script = is_script(path, content).then_some("script");
+    let flags: Vec<&str> = script
+        .into_iter()
+        .chain(executable.then_some("executable"))
+        .collect();
+    if flags.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", flags.join(", "))
+    }
+}
+
+/// A file agents may run: it starts with `#!` or has a script extension.
+fn is_script(path: &str, content: &[u8]) -> bool {
+    const EXTENSIONS: &str =
+        "sh bash zsh fish py rb pl php js mjs cjs ts ps1 bat cmd applescript scpt";
+    content.starts_with(b"#!")
+        || tree::basename(path)
+            .rsplit_once('.')
+            .is_some_and(|(_, ext)| EXTENSIONS.split(' ').any(|e| e.eq_ignore_ascii_case(ext)))
 }

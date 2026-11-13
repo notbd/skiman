@@ -69,7 +69,7 @@ impl Upstream {
     pub fn list(&self, path: &str) -> Result<Vec<(String, String)>, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
-            Upstream::Local { dir } => Ok(snapshot::list_local(&join(dir, path))?
+            Upstream::Local { dir } => Ok(snapshot::list_local(&local_folder(dir, path))?
                 .into_iter()
                 .map(|file| (file.clone(), discovery::join(path, &file)))
                 .collect()),
@@ -103,7 +103,7 @@ impl Upstream {
     pub fn snapshot(&self, path: &str) -> Result<Snapshot, Failure> {
         match self {
             Upstream::Git { cache, commit, .. } => Snapshot::read(cache, commit, path),
-            Upstream::Local { dir } => Snapshot::read_local_upstream(&join(dir, path)),
+            Upstream::Local { dir } => Snapshot::read_local_upstream(&local_folder(dir, path)),
         }
     }
 
@@ -156,6 +156,16 @@ pub fn local_root(paths: &Paths, url: &str) -> Result<PathBuf, Failure> {
         unreachable!("a `/` or `~` source is a local folder");
     };
     Ok(dir)
+}
+
+/// `dir/path` as it is read: a link there is followed, so a source that is
+/// a link reads the folder it points to. Links below it never are.
+fn local_folder(dir: &Path, path: &str) -> PathBuf {
+    let folder = join(dir, path);
+    match folder.canonicalize() {
+        Ok(target) if folder.is_symlink() => target,
+        _ => folder,
+    }
 }
 
 /// `dir/rel`, or `dir` for `""`.

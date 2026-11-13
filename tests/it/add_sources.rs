@@ -751,6 +751,26 @@ fn a_local_folder_with_several_skills_installs_the_selected_one() {
 }
 
 #[test]
+fn a_local_folder_that_is_a_link_is_read_through_it_by_add_and_update() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = local_upstream(&sandbox);
+    std::fs::create_dir_all(sandbox.home().join("links")).unwrap();
+    std::os::unix::fs::symlink(&dir, sandbox.home().join("links/pdf")).unwrap();
+    let repo = sandbox.skill_repo();
+
+    sandbox
+        .skiman()
+        .args(["add", "~/links/pdf", "--yes"])
+        .assert()
+        .code(0);
+    assert!(read(repo.join("skiman.toml")).contains("url = \"~/links/pdf\"\n"));
+    std::fs::write(dir.join("lib/forms.md"), "# forms v2\n").unwrap();
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    assert_eq!(read(repo.join("skills/pdf/lib/forms.md")), "# forms v2\n");
+}
+
+#[test]
 fn a_local_folder_with_a_symlink_or_a_ref_or_that_is_missing_is_refused() {
     let sandbox = Sandbox::new();
     init(&sandbox);

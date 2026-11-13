@@ -101,13 +101,9 @@ impl Snapshot {
         } else {
             format!("{} ({path})", cache.url())
         };
-        Snapshot::read_tree(
-            || cache.git(),
-            &treeish(commit, path),
-            &origin,
-            Content::Upstream,
-        )
-        .map(Snapshot::without_git_files)
+        let treeish = folder(cache, commit, path)?;
+        Snapshot::read_tree(|| cache.git(), &treeish, &origin, Content::Upstream)
+            .map(Snapshot::without_git_files)
     }
 
     /// Reads the local folder `dir` as a third-party upstream:
@@ -228,54 +224,50 @@ impl Tree for Listing<'_> {
     }
 }
 
-/// The path and blob id of every file and symlink below folder `path` of
-/// `commit` (relative to it, names that are not UTF-8 converted lossily),
+/// The path, blob id and size of every file and symlink below folder `path`
+/// of `commit` (relative to it, names that are not UTF-8 converted lossily),
 /// without reading any content: what skill discovery looks at. A `path` that
 /// is not a folder at `commit` is refused (exit 1).
-pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, String)>, Failure> {
-    let treeish = treeish(commit, path);
-    let mut kind = cache.git();
-    kind.args(["cat-file", "-t", &treeish]);
-    let is_tree = kind
-        .output()
-        .is_ok_and(|o| o.status.success() && o.stdout == b"tree\n");
-    if !is_tree {
-        return Err(Failure::refused(format!(
-            "{} has no folder `{path}` at {commit}",
-            cache.url()
-        )));
-    }
+pub fn list(
+    cache: &Cache,
+    commit: &str,
+    path: &str,
+) -> Result<Vec<(String, String, u64)>, Failure> {
+    let treeish = folder(cache, commit, path)?;
     let mut ls = cache.git();
-    ls.args(["ls-tree", "-r", "-z", "--full-tree", &treeish]);
+    ls.args(["ls-tree", "-r", "-z", "-l", "--full-tree", &treeish]);
     let listing = git::run(ls, &format!("listing {treeish} of {}", cache.url()))?;
     Ok(listing
         .split(|b| *b == 0)
         .filter(|record| !record.starts_with(b"160000 "))
         .filter_map(|record| {
             let tab = record.iter().position(|b| *b == b'\t')?;
-            // `<mode> SP <type> SP <oid> TAB <path>`
-            let oid = std::str::from_utf8(&record[..tab])
-                .ok()?
-                .split(' ')
-                .nth(2)?;
+            // `<mode> SP <type> SP <oid> SP+ <size> TAB <path>`
+            let head = std::str::from_utf8(&record[..tab]).ok()?;
+            let [_, _, oid, size] = head.split_whitespace().collect::<Vec<_>>()[..] else {
+                return None;
+            };
             let path = String::from_utf8_lossy(&record[tab + 1..]).into_owned();
-            Some((path, oid.to_owned()))
+            Some((path, oid.to_owned(), size.parse().ok()?))
         })
         .collect())
 }
 
-/// The paths of every non-folder entry below the local folder `dir`,
-/// skipping `.git` at any depth. A missing `dir` is refused (exit 1).
-pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
+/// The path and size (0 for anything but a regular file) of every
+/// non-folder entry below the local folder `dir`, never looking inside
+/// `.git`. A missing `dir` is refused (exit 1).
+pub fn list_local(dir: &Path) -> Result<Vec<(String, u64)>, Failure> {
     require_folder(dir)?;
-    let entries = WorkingTree::new(dir)
-        .walk("")
+    let folder = LocalFolder::new(dir, false)
         .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))?;
-    Ok(entries
+    Ok(folder
+        .entries
         .into_iter()
-        .filter(|e| e.kind != Kind::Dir)
-        .filter(|e| !in_dot_git(&e.path))
-        .map(|e| e.path)
+        .filter_map(|e| match e.kind {
+            Kind::Dir => None,
+            Kind::File { size, .. } => Some((e.path, size)),
+            _ => Some((e.path, 0)),
+        })
         .collect())
 }
 
@@ -297,7 +289,7 @@ impl Snapshot {
         let label = dir.display().to_string();
         let io = |e: std::io::Error| Failure::operational(format!("cannot read {label}: {e}"));
         require_folder(dir)?;
-        let folder = LocalFolder::new(dir).map_err(io)?;
+        let folder = LocalFolder::new(dir, true).map_err(io)?;
         path_safety::check(&folder, "", &label, Content::Upstream)?;
         let mut snapshot = Snapshot::default();
         for entry in &folder.entries {
@@ -325,7 +317,7 @@ fn below(entries: &[tree::Entry], dir: &str) -> Vec<tree::Entry> {
 }
 
 /// A local folder without anything inside `.git` (at any depth, any case),
-/// walked once when made. The walk counts what [`path_safety::check`]
+/// walked once when made. A `limited` walk counts what [`path_safety::check`]
 /// counts, the regular files that are not ignored, and stops at the first
 /// one that takes the folder over a skill's limits, so a folder that grew far
 /// past them is refused after about [`LIMITS`]`.files` entries.
@@ -337,7 +329,7 @@ struct LocalFolder {
 }
 
 impl LocalFolder {
-    fn new(dir: &Path) -> std::io::Result<LocalFolder> {
+    fn new(dir: &Path, limited: bool) -> std::io::Result<LocalFolder> {
         let tree = WorkingTree::new(dir);
         let mut entries = Vec::new();
         let (mut files, mut bytes) = (0, 0);
@@ -361,7 +353,7 @@ impl LocalFolder {
                 });
                 match kind {
                     Kind::Dir => folders.push(path),
-                    Kind::File { size, .. } if !is_ignored(&path) => {
+                    Kind::File { size, .. } if limited && !is_ignored(&path) => {
                         files += 1;
                         bytes += size;
                         if files > LIMITS.files
@@ -394,8 +386,27 @@ impl Tree for LocalFolder {
     }
 }
 
-fn in_dot_git(path: &str) -> bool {
-    path.split('/').any(|c| c.eq_ignore_ascii_case(".git"))
+/// The treeish of folder `path` of `commit`. Refused (exit 1) when git
+/// lists no folder at `path`, as when the upstream moved or deleted it; git
+/// failing (a damaged cache) is an error with git's own message (exit 4).
+fn folder(cache: &Cache, commit: &str, path: &str) -> Result<String, Failure> {
+    let treeish = treeish(commit, path);
+    // A `path` ending in `/` makes git list what is inside the folder, so
+    // ask without it, and take only a record of the folder itself.
+    let folder = path.trim_end_matches('/');
+    if folder.is_empty() {
+        return Ok(treeish);
+    }
+    let url = cache.url();
+    let mut ls = cache.git();
+    ls.args(["--literal-pathspecs", "ls-tree", "-z", commit, "--", folder]);
+    let entry = git::run(ls, &format!("listing {path} at {commit} of {url}"))?;
+    if entry.starts_with(b"040000 tree ") && entry.ends_with(format!("\t{folder}\0").as_bytes()) {
+        return Ok(treeish);
+    }
+    Err(Failure::refused(format!(
+        "{url} has no folder `{path}` at {commit}"
+    )))
 }
 
 fn treeish(commit: &str, path: &str) -> String {

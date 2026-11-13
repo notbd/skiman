@@ -223,8 +223,13 @@ impl Sandbox {
 
     /// `program` under macOS `sandbox-exec`: network access fails, and any
     /// write outside the sandbox root (and `/dev`) kills the process with
-    /// SIGKILL, so the command cannot succeed after an escaped write.
+    /// SIGKILL, so the command cannot succeed after an escaped write. Other
+    /// systems have no such tool on every machine: there `program` runs
+    /// like `command()`, and the macOS run is the one that proves it.
     pub fn confined(&self, program: impl AsRef<OsStr>) -> Command {
+        if cfg!(not(target_os = "macos")) {
+            return self.command(program);
+        }
         let profile = format!(
             "(version 1)(allow default)(deny network*)\
              (deny file-write* (with send-signal SIGKILL) (require-not (require-any (subpath \"{}\") (subpath \"/dev\"))))",

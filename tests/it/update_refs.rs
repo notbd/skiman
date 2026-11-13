@@ -129,6 +129,29 @@ fn a_tag_pinned_skill_stays_at_its_locked_commit_after_the_tag_moves_and_reports
 }
 
 #[test]
+fn a_dry_run_reports_a_moved_tag_like_the_update() {
+    let sandbox = Sandbox::new();
+    let (up, one) = upstream(&sandbox);
+    up.tag("v1");
+    add(&sandbox, &["--ref", "v1"]);
+    up.write("VERSION", "2\n");
+    let two = up.commit("two");
+    up.tag("v1");
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf", "--dry-run"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: up to date at {one}\n\
+             \x20 note: tag `v1` now points to {two}; pdf stays at its locked commit, \
+             and `skiman update pdf --ref v1` moves it there\n\
+             dry run: nothing was written\n"
+        ));
+}
+
+#[test]
 fn a_commit_pinned_skill_stays_at_its_commit_when_the_default_branch_moves() {
     let sandbox = Sandbox::new();
     let (up, one) = upstream(&sandbox);

@@ -5,145 +5,34 @@
 //! Never commits.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::Exit;
-use crate::commands::update::print_not_installed;
-use crate::commands::{ask, confirm, has_terminal};
+use crate::cli::AddArgs as Args;
+use crate::commands::{ask, confirm, has_terminal, prompts};
 use crate::discovery;
 use crate::failure::{Failure, finish};
-use crate::fetch::{Cache, RefKind, ResolvedRef};
-use crate::fsutil::{self, write_atomic};
+use crate::fetch::Cache;
+use crate::fsutil::{self, read_text, write_atomic};
 use crate::git::Prompts;
-use crate::lockfile::{self, LockEntry};
+use crate::lockfile;
 use crate::manifest::{self, SourceRecord};
 use crate::names;
 use crate::path_safety;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
-use crate::rules::{self, Scope};
+use crate::rules::{self, LIMITS, Scope};
 use crate::skill_md::SkillMd;
-use crate::snapshot::{self, Snapshot, SnapshotFile};
+use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
-use crate::tree::{self, Overlay, WorkingTree};
-
-#[derive(Debug, Clone)]
-pub struct Args {
-    pub source: String,
-    /// `--skill`: upstream names to install.
-    pub skills: Vec<String>,
-    pub all: bool,
-    pub name: Option<String>,
-    pub git_ref: Option<String>,
-    pub dry_run: bool,
-    pub yes: bool,
-}
+use crate::tree::{Overlay, WorkingTree};
+use crate::upstream::{Upstream, print_not_installed, run_flags};
 
 pub fn run(args: Args) -> Exit {
     finish(add(args))
-}
-
-/// The upstream content `add` reads: a fetched commit or a local folder.
-enum Upstream {
-    Git {
-        cache: Cache,
-        commit: String,
-        /// `None` when following the default branch.
-        resolved: Option<ResolvedRef>,
-        /// The default branch, when following it.
-        default_branch: Option<String>,
-    },
-    Local {
-        dir: PathBuf,
-    },
-}
-
-impl Upstream {
-    /// Every file below `path`: its path relative to `path`, and what
-    /// [`Upstream::read_files`] reads it by: its blob id in a git upstream,
-    /// so no name can break `cat-file`'s line protocol, or its path from the
-    /// upstream's root in a local folder.
-    fn list(&self, path: &str) -> Result<Vec<(String, String)>, Failure> {
-        match self {
-            Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
-            Upstream::Local { dir } => Ok(snapshot::list_local(&local_path(dir, path))?
-                .into_iter()
-                .map(|file| (file.clone(), discovery::join(path, &file)))
-                .collect()),
-        }
-    }
-
-    /// The contents of the files `keys` name, as [`Upstream::list`] gives
-    /// them. In a local folder, anything but a regular file reads as empty: a
-    /// symlink is not followed and a FIFO is not opened.
-    fn read_files(&self, keys: &[&str]) -> Result<Vec<Vec<u8>>, Failure> {
-        match self {
-            Upstream::Git { cache, .. } => snapshot::cat_blobs(cache.git(), keys.iter().copied()),
-            Upstream::Local { dir } => keys
-                .iter()
-                .map(|p| {
-                    let file = local_path(dir, p);
-                    let io = |e: std::io::Error| {
-                        Failure::operational(format!("cannot read {}: {e}", file.display()))
-                    };
-                    if !std::fs::symlink_metadata(&file).map_err(io)?.is_file() {
-                        return Ok(Vec::new());
-                    }
-                    std::fs::read(&file).map_err(io)
-                })
-                .collect(),
-        }
-    }
-
-    fn snapshot(&self, path: &str) -> Result<Snapshot, Failure> {
-        match self {
-            Upstream::Git { cache, commit, .. } => Snapshot::read(cache, commit, path),
-            Upstream::Local { dir } => Snapshot::read_local_upstream(&local_path(dir, path)),
-        }
-    }
-
-    fn commit(&self) -> Option<&str> {
-        match self {
-            Upstream::Git { commit, .. } => Some(commit),
-            Upstream::Local { .. } => None,
-        }
-    }
-
-    fn resolved(&self) -> Option<&ResolvedRef> {
-        match self {
-            Upstream::Git { resolved, .. } => resolved.as_ref(),
-            Upstream::Local { .. } => None,
-        }
-    }
-
-    /// `at <commit> (default branch main)`, `at <commit> (tag v1)`, `(local folder)`.
-    fn version(&self) -> String {
-        match self {
-            Upstream::Git {
-                commit,
-                resolved,
-                default_branch,
-                ..
-            } => match (resolved, default_branch) {
-                (Some(r), _) if r.kind == RefKind::Commit => format!("at {commit} (commit)"),
-                (Some(r), _) => format!("at {commit} ({} {})", r.kind.as_str(), r.name),
-                (None, Some(branch)) => format!("at {commit} (default branch {branch})"),
-                (None, None) => format!("at {commit}"),
-            },
-            Upstream::Local { .. } => "(local folder)".to_owned(),
-        }
-    }
-}
-
-fn local_path(dir: &Path, rel: &str) -> PathBuf {
-    if rel.is_empty() {
-        dir.to_path_buf()
-    } else {
-        dir.join(rel)
-    }
 }
 
 /// A folder of the upstream that holds a `SKILL.md`.
@@ -181,11 +70,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     if let Some(name) = &args.name {
         names::check_new_name(name)?;
     }
-    let prompts = if terminal {
-        Prompts::Allowed
-    } else {
-        Prompts::Never
-    };
+    let prompts = prompts();
     let (source, upstream) = fetch(&paths, source, args.git_ref.as_deref(), prompts)?;
     let candidates = discover(&source, &upstream)?;
 
@@ -199,7 +84,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         return Ok(Exit::Success);
     } else if !terminal {
         return Err(Failure::usage(format!(
-            "missing flag without a terminal: {} holds {} skills; choose with --skill <name> (repeatable) or --all",
+            "missing flag without a terminal: {} holds {} skills; choose with --skill <name> or --skill <folder>/ (repeatable), or --all",
             source.url,
             candidates.len()
         )));
@@ -207,17 +92,20 @@ fn add(args: Args) -> Result<Exit, Failure> {
         print_candidates(&source, &upstream, &candidates, true);
         pick(&candidates)?
     };
-    if args.name.is_some() && selected.len() > 1 {
+    // Skills sharing one name are refused as such by `check_install_names`.
+    let distinct: BTreeSet<_> = selected.iter().map(|c| &c.upstream_name).collect();
+    if args.name.is_some() && selected.len() > 1 && distinct.len() == selected.len() {
         return Err(Failure::usage(
             "--name works with a single skill only; install the others under their upstream names first",
         ));
     }
+    let name = args.name.filter(|_| selected.len() == 1);
 
     let mut installs = Vec::new();
     for candidate in selected {
         let snapshot = upstream.snapshot(&candidate.path)?;
         let source = source.clone().with_path(candidate.path.clone());
-        installs.push(inspect(source, snapshot, candidate, args.name.clone())?);
+        installs.push(inspect(source, snapshot, candidate, name.clone())?);
     }
     check_install_names(&repo, &installs)?;
 
@@ -240,7 +128,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     let lock = RepoLock::wait(&repo)?;
     check_install_names(&repo, &installs)?;
     let files = candidate_files(&installs);
-    let records = Records::build(&repo, &installs, &upstream, &files)?;
+    let records = Records::build(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &files, &records)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     write(&repo, &installs, &files, &records, &staging)?;
@@ -275,36 +163,12 @@ fn fetch(
             }
             let cache = Cache::open(paths, &source.url, prompts)?;
             let (resolved, path) = cache.resolve_tree_tail(tail)?;
-            cache.fetch_commit(&resolved.commit)?;
-            let upstream = Upstream::Git {
-                commit: resolved.commit.clone(),
-                resolved: Some(resolved),
-                default_branch: None,
-                cache,
-            };
+            let upstream = Upstream::at(cache, resolved.commit.clone(), Some(resolved), None)?;
             Ok((source.with_path(path), upstream))
         }
         SourceKind::Git => {
             let cache = Cache::open(paths, &source.url, prompts)?;
-            let (resolved, default_branch, commit) = match git_ref {
-                Some(name) => {
-                    let resolved = cache.resolve_ref(name)?;
-                    let commit = resolved.commit.clone();
-                    (Some(resolved), None, commit)
-                }
-                None => {
-                    let head = cache.default_branch()?;
-                    (None, Some(head.branch), head.commit)
-                }
-            };
-            cache.fetch_commit(&commit)?;
-            let upstream = Upstream::Git {
-                cache,
-                commit,
-                resolved,
-                default_branch,
-            };
-            Ok((source, upstream))
+            Ok((source, Upstream::at_ref(cache, git_ref)?))
         }
     }
 }
@@ -314,20 +178,33 @@ fn fetch(
 /// folder name here; it is refused only if it is selected. A candidate whose
 /// folder path has a name path safety refuses is skipped with a warning.
 fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Failure> {
-    let listing: BTreeMap<String, String> = upstream.list(&source.path)?.into_iter().collect();
+    let listing: BTreeMap<String, (String, u64)> = upstream
+        .list(&source.path)?
+        .into_iter()
+        .map(|(path, key, size)| (path, (key, size)))
+        .collect();
     let files: Vec<String> = listing.keys().cloned().collect();
     let mut folders = discovery::candidates(&files);
     folders.retain(|folder| {
+        let path = discovery::join(&source.path, folder);
+        let size = listing[&discovery::join(folder, "SKILL.md")].1;
         // `""` is the source folder itself.
-        let safe = folder.is_empty() || path_safety::is_safe_path(folder);
-        if !safe {
-            err!(
-                "warning: {} holds {}; the skill there is skipped",
-                source.url,
-                path_safety::unsafe_path(&discovery::join(&source.path, folder))
-            );
-        }
-        safe
+        let skipped = if !folder.is_empty() && !path_safety::is_safe_path(folder) {
+            path_safety::unsafe_path(&path)
+        } else if size > LIMITS.file_bytes {
+            let skill_md = discovery::join(&path, "SKILL.md");
+            format!(
+                "{skill_md} of {size} bytes, over the limit of {} bytes",
+                LIMITS.file_bytes
+            )
+        } else {
+            return true;
+        };
+        err!(
+            "warning: {} holds {skipped}; the skill there is skipped",
+            source.url
+        );
+        false
     });
     if folders.is_empty() {
         let at = if source.path.is_empty() {
@@ -347,7 +224,7 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
     // Every candidate was found by its listed `SKILL.md`.
     let skill_mds: Vec<&str> = folders
         .iter()
-        .map(|f| listing[&discovery::join(f, "SKILL.md")].as_str())
+        .map(|f| listing[&discovery::join(f, "SKILL.md")].0.as_str())
         .collect();
     let contents = upstream.read_files(&skill_mds)?;
     Ok(paths
@@ -365,20 +242,35 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
         .collect())
 }
 
-/// The candidates `--skill` names (by upstream name); an unknown name is refused.
+/// The candidates the `--skill` values name. A value without `/` is an
+/// upstream name; one with `/` is a candidate's folder (`pdf/` for one at
+/// the top), which tells apart two skills with the same name. An unknown
+/// value is refused.
 fn select_named<'a>(
     source: &Source,
     candidates: &'a [Candidate],
-    names: &[String],
+    values: &[String],
 ) -> Result<Vec<&'a Candidate>, Failure> {
-    for name in names {
-        if !candidates.iter().any(|c| &c.upstream_name == name) {
-            let known: Vec<&str> = candidates
+    let names = |c: &Candidate, value: &str| match value.contains('/') {
+        true => c.path == value.trim_end_matches('/'),
+        false => c.upstream_name == value,
+    };
+    for value in values {
+        if !candidates.iter().any(|c| names(c, value)) {
+            let known: Vec<String> = candidates
                 .iter()
-                .map(|c| c.upstream_name.as_str())
+                .map(|c| match c.path.as_str() {
+                    "" => c.upstream_name.clone(),
+                    path => format!("{} ({path}/)", c.upstream_name),
+                })
                 .collect();
+            let what = if value.contains('/') {
+                "in the folder"
+            } else {
+                "named"
+            };
             return Err(Failure::refused(format!(
-                "{} has no skill named `{name}`; it holds: {}",
+                "{} has no skill {what} `{value}`; it holds: {}",
                 source.url,
                 known.join(", ")
             )));
@@ -386,7 +278,7 @@ fn select_named<'a>(
     }
     Ok(candidates
         .iter()
-        .filter(|c| names.contains(&c.upstream_name))
+        .filter(|c| values.iter().any(|value| names(c, value)))
         .collect())
 }
 
@@ -400,7 +292,7 @@ fn print_candidates(
     let choose = if numbered {
         ""
     } else {
-        "; choose with --skill <name> or --all"
+        "; choose with --skill <name>, --skill <folder>/ or --all"
     };
     out!(
         "{} {} holds {} skills{choose}:",
@@ -415,7 +307,7 @@ fn print_candidates(
             String::new()
         };
         out!(
-            "  {number}{}  ({})",
+            "  {number}{}  ({}/)",
             candidate.upstream_name,
             candidate.path
         );
@@ -486,21 +378,22 @@ fn inspect(
 /// Refuses (exit 1) the whole add when any install name is invalid,
 /// reserved or taken (also by another selected skill), pointing to `--name`.
 fn check_install_names(repo: &SkillRepo, installs: &[Install]) -> Result<(), Failure> {
-    let mut seen = BTreeSet::new();
+    let mut seen = BTreeMap::new();
     for install in installs {
         let name = &install.name;
-        let check = if seen.insert(name.as_str()) {
-            names::check_new_name(name).and_then(|()| names::check_not_taken(repo, name))
-        } else {
-            Err(Failure::refused(format!(
-                "two selected skills are both named `{name}`"
-            )))
-        };
+        if let Some(other) = seen.insert(name.as_str(), install.source.path.as_str()) {
+            let path = &install.source.path;
+            return Err(Failure::refused(format!(
+                "the selected skills in {other}/ and {path}/ are both named `{name}`; nothing was installed; install each on its own with `--skill {other}/ --name <new name>` or `--skill {path}/ --name <new name>`"
+            )));
+        }
+        let check = names::check_new_name(name).and_then(|()| names::check_not_taken(repo, name));
         check.map_err(|failure| {
             let hint = if installs.len() == 1 {
-                "install it under another name with `--name <name>`"
+                "install it under another name with `--name <name>`".to_owned()
             } else {
-                "nothing was installed; install that skill on its own with `--skill <name> --name <new name>`"
+                let path = &install.source.path;
+                format!("nothing was installed; install that skill on its own with `--skill {path}/ --name <new name>`")
             };
             Failure::refused(format!("{}; {hint}", failure.message))
         })?;
@@ -535,18 +428,8 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
         );
     }
     for file in &install.snapshot.files {
-        let mut flags = Vec::new();
-        if is_script(&file.path, &file.content) {
-            flags.push("script");
-        }
-        if file.executable {
-            flags.push("executable");
-        }
-        if flags.is_empty() {
-            out!("  {}", file.path);
-        } else {
-            out!("  {}  [{}]", file.path, flags.join(", "));
-        }
+        let flags = run_flags(&file.path, &file.content, file.executable);
+        out!("  {}{flags}", file.path);
     }
     print_not_installed(&install.snapshot, "  ");
     if install.renamed_skill_md.is_some() {
@@ -555,33 +438,6 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
             install.name
         );
     }
-}
-
-/// A file agents may run: it starts with `#!` or has a script extension.
-fn is_script(path: &str, content: &[u8]) -> bool {
-    const EXTENSIONS: &[&str] = &[
-        "sh",
-        "bash",
-        "zsh",
-        "fish",
-        "py",
-        "rb",
-        "pl",
-        "php",
-        "js",
-        "mjs",
-        "cjs",
-        "ts",
-        "ps1",
-        "bat",
-        "cmd",
-        "applescript",
-        "scpt",
-    ];
-    content.starts_with(b"#!")
-        || tree::basename(path)
-            .rsplit_once('.')
-            .is_some_and(|(_, ext)| EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
 /// The new `skiman.toml` and `skiman.lock` texts.
@@ -596,42 +452,24 @@ impl Records {
         repo: &SkillRepo,
         installs: &[Install],
         upstream: &Upstream,
-        files: &[SnapshotFile],
     ) -> Result<Records, Failure> {
-        let read = |path: &Path| match std::fs::read_to_string(path) {
-            Ok(text) => Ok(Some(text)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(Failure::operational(format!(
-                "cannot read {}: {e}",
-                path.display()
-            ))),
-        };
         let manifest_file = repo.manifest_file();
         let lock_file = repo.lockfile();
         let refuse = |path: &Path, e: String| Failure::refused(format!("{}: {e}", path.display()));
         let resolved = upstream.resolved();
-        let mut manifest = read(&manifest_file)?.unwrap_or_default();
-        let old_lock = read(&lock_file)?;
+        let mut manifest = read_text(&manifest_file)?.unwrap_or_default();
+        let old_lock = read_text(&lock_file)?;
         let mut lock = old_lock.clone().unwrap_or_default();
-        let working_tree = WorkingTree::new(repo.root());
-        let candidate = overlay(&working_tree, files, Vec::new());
         for install in installs {
             let source = SourceRecord {
                 url: install.source.url.clone(),
                 path: install.source.path.clone(),
                 git_ref: resolved.map(|r| r.name.clone()),
                 ref_kind: resolved.map(|r| r.kind.as_str()),
-                upstream_name: (install.upstream_name != install.name)
-                    .then(|| install.upstream_name.clone()),
             };
             manifest = manifest::with_source(&manifest, &install.name, &source)
                 .map_err(|e| refuse(&manifest_file, e))?;
-            let entry = LockEntry {
-                commit: upstream.commit().map(str::to_owned),
-                git_ref: resolved.map(|r| r.name.clone()),
-                snapshot: tree::tree_hash(&candidate, &format!("upstream/{}", install.name))
-                    .map_err(|e| Failure::operational(format!("cannot hash the snapshot: {e}")))?,
-            };
+            let entry = upstream.lock_entry(&install.snapshot);
             lock = lockfile::with_entry(&lock, &install.name, &entry)
                 .map_err(|e| refuse(&lock_file, e))?;
         }
@@ -641,25 +479,6 @@ impl Records {
             lock_existed: old_lock.is_some(),
         })
     }
-}
-
-/// Every file `add` writes laid over the skill repo's working tree, plus `extra`.
-fn overlay<'a>(
-    working_tree: &'a WorkingTree,
-    files: &[SnapshotFile],
-    extra: Vec<(String, Vec<u8>)>,
-) -> Overlay<'a> {
-    let executable = files
-        .iter()
-        .filter(|file| file.executable)
-        .map(|file| file.path.clone())
-        .collect();
-    let mut contents: Vec<(String, Vec<u8>)> = files
-        .iter()
-        .map(|file| (file.path.clone(), file.content.clone()))
-        .collect();
-    contents.extend(extra);
-    Overlay::new(working_tree, contents).with_executable(executable)
 }
 
 /// Every file `add` writes, with repo-relative paths.
@@ -698,17 +517,23 @@ fn validate(
     records: &Records,
 ) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
-    let texts = vec![
-        (
-            rules::MANIFEST.to_owned(),
-            records.manifest.clone().into_bytes(),
-        ),
-        (
-            rules::LOCKFILE.to_owned(),
-            records.lock.clone().into_bytes(),
-        ),
-    ];
-    let candidate = overlay(&working_tree, files, texts);
+    let executable = files
+        .iter()
+        .filter(|f| f.executable)
+        .map(|f| f.path.clone());
+    let mut contents: Vec<(String, Vec<u8>)> = files
+        .iter()
+        .map(|f| (f.path.clone(), f.content.clone()))
+        .collect();
+    contents.push((
+        rules::MANIFEST.to_owned(),
+        records.manifest.clone().into_bytes(),
+    ));
+    contents.push((
+        rules::LOCKFILE.to_owned(),
+        records.lock.clone().into_bytes(),
+    ));
+    let candidate = Overlay::new(&working_tree, contents).with_executable(executable.collect());
     let names: BTreeSet<String> = installs.iter().map(|i| i.name.clone()).collect();
     let scope = Scope {
         files: files.iter().map(|file| file.path.clone()).collect(),

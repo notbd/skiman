@@ -193,6 +193,11 @@ fn is_string(item: &Item) -> bool {
     item.as_str().is_some()
 }
 
+fn is_strings(item: &Item) -> bool {
+    item.as_array()
+        .is_some_and(|a| a.iter().all(|v| v.as_str().is_some()))
+}
+
 /// `skiman.toml` and `skiman.lock` of a tree.
 pub struct Records {
     pub manifest: ConfigFile,
@@ -342,11 +347,7 @@ impl Records {
         if let Some(tools) = root.get("tools").and_then(Item::as_table_like) {
             let tools = m.section(tools, "[tools]", m.key_line(root, "tools", Some(1)));
             tools.unknown_keys(&["enabled"], out);
-            let strings: fn(&Item) -> bool = |i| {
-                i.as_array()
-                    .is_some_and(|a| a.iter().all(|v| v.as_str().is_some()))
-            };
-            tools.value("enabled", false, "an array of tool ids", strings, out);
+            tools.value("enabled", false, "an array of tool ids", is_strings, out);
         }
         if let Some(projects) = root.get("projects").and_then(Item::as_table_like) {
             let line = m.key_line(root, "projects", Some(1));
@@ -422,12 +423,8 @@ impl Records {
                 path,
                 out,
             );
-            let strings: fn(&Item) -> bool = |i| {
-                i.as_array()
-                    .is_some_and(|a| a.iter().all(|v| v.as_str().is_some()))
-            };
-            section.value("exclude", false, "an array of strings", strings, out);
-            section.value("skill_dirs", false, "an array of strings", strings, out);
+            section.value("exclude", false, "an array of strings", is_strings, out);
+            section.value("skill_dirs", false, "an array of strings", is_strings, out);
             let strings_of = |key: &str| -> Vec<String> {
                 table
                     .get(key)

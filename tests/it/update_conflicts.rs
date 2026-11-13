@@ -99,7 +99,8 @@ type Edit<'a> = (&'a str, Option<&'a [u8]>);
 
 /// Installs `base`, applies `ours` to `skills/pdf` and `theirs` to the
 /// upstream, runs `skiman update pdf` and asserts exit 3. Returns stdout
-/// and the files of the skill.
+/// and the files of the skill. A dry run first lists the same conflicts
+/// (exit 0) and changes nothing.
 fn conflicting_update(
     base: &[(&str, &[u8])],
     ours: &[Edit],
@@ -121,6 +122,15 @@ fn conflicting_update(
         };
     }
     up.commit("v2");
+    let before = files(&skill);
+    let dry = sandbox
+        .skiman()
+        .args(["update", "pdf", "--dry-run"])
+        .assert()
+        .code(0)
+        .stderr_eq("");
+    let dry = String::from_utf8(dry.get_output().stdout.clone()).unwrap();
+    assert_eq!(files(&skill), before);
     let assert = sandbox
         .skiman()
         .args(["update", "pdf"])
@@ -128,6 +138,13 @@ fn conflicting_update(
         .code(3)
         .stderr_eq("");
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    let dry_list = dry
+        .split_once("would write these conflicts into skills/pdf:\n")
+        .unwrap_or_else(|| panic!("no conflict list in:\n{dry}"))
+        .1
+        .strip_suffix("dry run: nothing was written\n")
+        .unwrap();
+    assert_eq!(dry_list.lines().collect::<Vec<_>>(), conflict_list(&stdout));
     let mut files = files(&skill);
     assert_eq!(
         files.remove("SKILL.md").as_deref(),

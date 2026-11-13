@@ -1105,28 +1105,6 @@ fn a_local_source_outside_the_entries_that_move_is_imported_and_updated_afterwar
 
 #[test]
 fn a_local_source_that_update_would_read_another_way_is_refused_before_anything_changes() {
-    let broken = "it breaks the rules once its upstreams are fetched";
-    let no_snapshot = "[skills.pdf.source] has no upstream snapshot upstream/pdf";
-
-    // A link in the tool directory, written with a trailing `/`.
-    let sandbox = Sandbox::new();
-    init(&sandbox);
-    let source = sandbox.home().join("src/pdf");
-    write(source.join("SKILL.md"), skill_md("pdf"));
-    std::os::unix::fs::symlink(&source, sandbox.tool_dir(Tool::ClaudeCode).join("pdf")).unwrap();
-    let folder = local_pdf_folder(&sandbox, "~/.claude/skills/pdf/", "");
-    assert_refused(&sandbox, &folder, 1, &[broken, no_snapshot]);
-
-    // A link outside the tool directories, written with a trailing `/`.
-    let sandbox = Sandbox::new();
-    init(&sandbox);
-    let source = sandbox.home().join("src/pdf");
-    write(source.join("SKILL.md"), skill_md("pdf"));
-    std::fs::create_dir_all(sandbox.home().join("links")).unwrap();
-    std::os::unix::fs::symlink(&source, sandbox.home().join("links/pdf")).unwrap();
-    let folder = local_pdf_folder(&sandbox, "~/links/pdf/", "");
-    assert_refused(&sandbox, &folder, 1, &[broken, no_snapshot]);
-
     // A link followed by `..`, which leads elsewhere than the same path
     // read by the letter, where nothing is.
     let sandbox = Sandbox::new();
@@ -1142,6 +1120,45 @@ fn a_local_source_that_update_would_read_another_way_is_refused_before_anything_
         sandbox.home().join("links/pdf").display()
     );
     assert_refused(&sandbox, &folder, 1, &[&missing]);
+}
+
+#[test]
+fn a_local_source_that_is_a_link_is_read_through_it_unless_the_import_moves_the_link() {
+    // A link in the tool directory, written with a trailing `/`: the import
+    // would move it to the backup.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.home().join("src/pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    std::os::unix::fs::symlink(&source, sandbox.tool_dir(Tool::ClaudeCode).join("pdf")).unwrap();
+    let folder = local_pdf_folder(&sandbox, "~/.claude/skills/pdf/", "");
+    assert_refused(
+        &sandbox,
+        &folder,
+        1,
+        &["is in, holds or is reached through an entry the import moves to the backup"],
+    );
+
+    // A link outside the tool directories, written with a trailing `/`.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.home().join("src/pdf");
+    write(source.join("SKILL.md"), skill_md("pdf"));
+    std::fs::create_dir_all(sandbox.home().join("links")).unwrap();
+    std::os::unix::fs::symlink(&source, sandbox.home().join("links/pdf")).unwrap();
+    let folder = local_pdf_folder(&sandbox, "~/links/pdf/", "");
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert_eq!(
+        read(sandbox.skill_repo().join("upstream/pdf/SKILL.md")),
+        skill_md("pdf")
+    );
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
 }
 
 #[test]

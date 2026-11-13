@@ -68,7 +68,10 @@ git URL, or a local folder path.
 Flags for `skiman add`:
 
 - `--skill <name>` (repeatable) or `--all`: required for a source that holds
-  several skills; `--dry-run` without them lists the candidates.
+  several skills; `--dry-run` without them lists the candidates. A value
+  with a `/` names a candidate by its folder instead, as the list shows it
+  (`pdf/` for one at the top): that tells apart two skills with the same
+  name.
 - `--name <name>`: install a single skill under another name, when the
   upstream name is invalid, reserved or already taken.
 - `--ref <branch|tag|commit>`: follow a branch other than the default branch,
@@ -97,6 +100,10 @@ reports the size limit of the enabled agent tools.
 
 1. Run `skiman update <name>`, or `skiman update` for every third-party skill.
    With a single name, `--ref <branch|tag|commit>` switches what it follows.
+   `--dry-run` first shows each new version, the files it would change
+   (scripts and executables flagged) and any conflicts, and changes nothing
+   in the skill repo; show that to the user before updating a skill they
+   have not reviewed.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
    it in `<SKILL_REPO>/skills/<name>/`:
    - Text between `<<<<<<< local (skiman)`, `=======` and

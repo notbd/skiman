@@ -54,6 +54,7 @@ mod sync;
 mod test_hook;
 mod tools;
 mod tree;
+mod upstream;
 
 pub use exit::Exit;
 

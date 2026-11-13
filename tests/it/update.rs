@@ -299,20 +299,25 @@ fn an_upstream_commit_that_does_not_touch_the_skill_advances_only_the_lock_commi
 fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
     let sandbox = Sandbox::new();
     let pdf = installed(&sandbox);
-    let docx = sandbox.upstream("acme/docx");
-    docx.write(
-        "SKILL.md",
-        "---\nname: docx\ndescription: Edit Word files\n---\n",
-    );
-    docx.commit("v1");
-    sandbox
-        .skiman()
-        .args(["add", "acme/docx", "--yes"])
-        .assert()
-        .code(0);
+    let [docx, xlsx] = ["docx", "xlsx"].map(|name| {
+        let up = sandbox.upstream(&format!("acme/{name}"));
+        up.write(
+            "SKILL.md",
+            format!("---\nname: {name}\ndescription: Edit {name} files\n---\n"),
+        );
+        up.commit("v1");
+        sandbox
+            .skiman()
+            .args(["add", &format!("acme/{name}"), "--yes"])
+            .assert()
+            .code(0);
+        up
+    });
     std::fs::remove_dir_all(docx.path()).unwrap();
     pdf.write("reference.md", lines(&[(5, "upstream fix")]));
     let commit = pdf.commit("v2");
+    xlsx.write("reference.md", "# xlsx\n");
+    let xlsx_commit = xlsx.commit("v2");
 
     sandbox
         .skiman()
@@ -321,7 +326,9 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
         .code(4)
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  modified reference.md\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders and records of pdf to [..]\n\
+             skill xlsx: updated to {xlsx_commit}; changed files:\n  added reference.md\n\
+             saved the old folders and records of xlsx to [..]\n"
         ))
         .stderr_eq(
             "error: skill docx: reading the default branch of https://github.com/acme/docx.git failed: [..]\n...",
@@ -331,7 +338,16 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
         read(sandbox.skill_repo().join("skills/pdf/reference.md")),
         lines(&[(5, "upstream fix")])
     );
-    assert!(read(sandbox.skill_repo().join("skiman.lock")).contains(&commit));
+    // Each skill's records are written from the files as they are then,
+    // so the second does not put back the first one's old lock entry.
+    let lock = read(sandbox.skill_repo().join("skiman.lock"));
+    for (name, commit) in [("pdf", &commit), ("xlsx", &xlsx_commit)] {
+        assert!(
+            lock.contains(&format!("[skills.{name}]\ncommit = \"{commit}\"\n")),
+            "{lock}"
+        );
+    }
+    sandbox.skiman().arg("check").assert().code(0);
 }
 
 #[test]
@@ -621,14 +637,7 @@ fn an_upstream_rename_of_the_frontmatter_name_keeps_the_install_name() {
         .stderr_eq("");
 
     assert_eq!(read(repo.join("skills/pdf/SKILL.md")), PDF_SKILL_MD);
-    assert!(read(repo.join("skiman.toml")).contains("upstream_name = \"pdf-tools\"\n"));
     sandbox.skiman().args(["check"]).assert().code(0);
-
-    up.write("SKILL.md", PDF_SKILL_MD);
-    up.commit("v3");
-    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
-    assert_eq!(read(repo.join("skills/pdf/SKILL.md")), PDF_SKILL_MD);
-    assert!(!read(repo.join("skiman.toml")).contains("upstream_name"));
 }
 
 /// Clarification 3: tmp leftovers move before the command's first write,
@@ -756,4 +765,77 @@ fn update_lists_the_submodules_it_does_not_fetch() {
         ))
         .stderr_eq("");
     assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
+}
+
+#[test]
+fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/skills");
+    up.write("skills/pdf/SKILL.md", PDF_SKILL_MD)
+        .write("README.md", "# Skills\n");
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/skills", "--yes"])
+        .assert()
+        .code(0);
+    // A hand-written `path` may end in `/`, as `check` allows.
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let text = read(&manifest);
+    assert!(text.contains("path = \"skills/pdf\"\n"));
+    write(&manifest, text.replace("\"skills/pdf\"", "\"skills/pdf/\""));
+    up.write("README.md", "# Skills, v2\n");
+    up.commit("v2");
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    up.remove("skills/pdf");
+    let commit = up.commit("v3");
+    let before = tree(sandbox.skill_repo());
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(format!(
+            "error: skill pdf: https://github.com/acme/skills.git has no folder `skills/pdf/` at {commit}\n"
+        ));
+    assert_eq!(tree(sandbox.skill_repo()), before);
+}
+
+#[test]
+fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    up.write("forms.md", lines(&[(5, "theirs")]))
+        .write_executable("reference.md", lines(&[]))
+        .write_executable("scripts/fill.sh", "#!/bin/sh\n");
+    let commit = up.commit("v2");
+    let files = "  modified forms.md\n  modified reference.md  [executable]\n  added scripts/fill.sh  [script, executable]\n";
+    let before = tree(sandbox.skill_repo());
+    // A dry run writes nothing, so it does not need the repo lock.
+    let lock = std::fs::File::open(sandbox.skill_repo().join(".skiman/lock")).unwrap();
+    lock.lock().unwrap();
+
+    sandbox
+        .skiman()
+        .args(["update", "--dry-run"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: would update to {commit}; changed files:\n{files}dry run: nothing was written\n"
+        ))
+        .stderr_eq("");
+    assert_eq!(tree(sandbox.skill_repo()), before);
+    drop(lock);
+
+    sandbox
+        .skiman()
+        .args(["update"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "skill pdf: updated to {commit}; changed files:\n{files}saved the old folders and records of pdf to [..]\n"
+        ));
 }

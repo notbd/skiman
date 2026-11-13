@@ -229,9 +229,7 @@ folder holds exactly one canonical copy per skill.
      TOML, delete that file. Then run the import again.
    - 2: there is no terminal and no `--yes`.
    - 4, or the import was interrupted: run the same command again (see
-     below). When the message names a `shallow.lock` file in skiman's cache,
-     wait until no other skiman is running; if the file is still there,
-     delete it.
+     below).
 
 ## Run it again
 
@@ -245,9 +243,13 @@ import writes it, writes the rest, and moves each original still in place.
   import are spread over these folders. The folder printed after
   `moved tmp leftovers to` holds copies skiman had staged, not originals.
 - Until the skill repo holds every piece of the import, a run fetches the
-  upstreams again. One not pinned to a commit (a branch, a tag, the default
-  branch, a local folder) may bring newer content: the preview shows the
-  new commit, and the old snapshot goes to the backup.
+  upstreams again, except a git upstream the skill repo already holds as
+  declared: the same `url`, `path` and `ref` in its `skiman.toml`, and the
+  commit `skiman.lock` records with the snapshot that goes with it. That one
+  stays at its commit, without the network. Any other upstream not pinned to
+  a commit (a branch, a tag, the default branch, a local folder) may bring
+  newer content: the preview shows the new commit, and the old snapshot
+  goes to the backup.
 - The skill repo holds the whole import when it has exactly the import
   folder's skills, each the same, the same sources (`url` and `path`), the
   snapshots and `skiman.lock` that go with them, and the same shared body (a
@@ -290,13 +292,13 @@ before:
   keep it, then run it again. That run imports everything, the import
   folder's `skiman.toml` included.
 - When you cannot tell, copy. Emptying the file on a skill repo the import
-  has run on imports everything again: an upstream that follows a branch
-  moves to its newest commit while the skill stays as it was (`skiman diff`
-  then shows the upstream's new lines as local deletions), and the skill
-  repo's `skiman.toml` becomes the import folder's again, dropping the
-  `enabled`, `[tools]` and `ref` changes made since. If that run cannot
-  fetch an upstream, it stops with the shared body empty: copy the shared
-  body you want back into the skill repo and run it again.
+  has run on imports everything again: the skill repo's `skiman.toml`
+  becomes the import folder's again, dropping the `enabled`, `[tools]` and
+  `ref` changes made since, and an upstream whose `ref` changed since is
+  fetched again at the import folder's `ref` while the skill stays as it
+  was (`skiman diff` then shows the difference as local modifications). If
+  that run cannot fetch an upstream, it stops with the shared body empty:
+  copy the shared body you want back into the skill repo and run it again.
 
 ### Known limits
 

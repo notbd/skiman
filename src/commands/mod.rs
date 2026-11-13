@@ -19,11 +19,21 @@ pub mod update;
 use std::io::{IsTerminal, Write};
 
 use crate::failure::Failure;
+use crate::git::Prompts;
 
 /// Whether the user can answer a prompt. Without one, flags that would
 /// otherwise be asked for are required (exit 2).
 pub fn has_terminal() -> bool {
     std::io::stdin().is_terminal()
+}
+
+/// Whether git may ask for credentials: only when someone can answer.
+pub fn prompts() -> Prompts {
+    if has_terminal() {
+        Prompts::Allowed
+    } else {
+        Prompts::Never
+    }
 }
 
 /// Asks `question` on stderr and returns the line answered, trimmed.

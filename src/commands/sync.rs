@@ -15,7 +15,7 @@ pub fn run(hook: bool) -> Exit {
     };
     let paths = match Paths::from_env() {
         Ok(paths) => paths,
-        Err(e) => return sync::report_failure(e.into(), output),
+        Err(e) => return sync::report_failure(e, output),
     };
     let repo = match SkillRepo::from_config(&paths) {
         Ok(repo) => repo,

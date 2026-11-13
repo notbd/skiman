@@ -67,6 +67,18 @@ fn replace_atomic(
     result
 }
 
+/// The text of the file at `path`; `None` when there is none.
+pub fn read_text(path: &Path) -> Result<Option<String>, Failure> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Failure::operational(format!(
+            "cannot read {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
 /// Writes `contents` to a temporary file in the same directory, then renames
 /// it to `path`. The new file gets the mode `std::fs::write` would give it.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {

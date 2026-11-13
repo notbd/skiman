@@ -43,31 +43,20 @@ fn list() -> Result<Exit, Failure> {
             .map_err(io)?
             .is_empty();
         let enabled = enabled.get(&name).is_none_or(|e| e.enabled);
-        let row = match manifest.source(&name) {
-            None => [
-                name,
-                "own".to_owned(),
-                "-".to_owned(),
-                "-".to_owned(),
-                "-".to_owned(),
-                yes_no(conflicts),
-                yes_no(enabled),
-            ],
+        let [kind, source, version, modified] = match manifest.source(&name) {
+            None => ["own", "-", "-", "-"].map(str::to_owned),
             Some(source) => {
                 let commit = lockfile.entry(&name).and_then(|entry| entry.commit);
-                let modified = modified(&tree, &name).map_err(io)?;
                 [
-                    name,
                     "third-party".to_owned(),
                     source_text(&source),
                     version(&source, commit.as_deref()),
-                    modified,
-                    yes_no(conflicts),
-                    yes_no(enabled),
+                    modified(&tree, &name).map_err(io)?,
                 ]
             }
         };
-        rows.push(row);
+        let (conflicts, enabled) = (yes_no(conflicts), yes_no(enabled));
+        rows.push([name, kind, source, version, modified, conflicts, enabled]);
     }
     print_columns(&rows);
     Ok(Exit::Success)

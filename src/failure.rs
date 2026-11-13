@@ -52,9 +52,3 @@ impl fmt::Display for Failure {
 pub fn finish(result: Result<Exit, Failure>) -> Exit {
     result.unwrap_or_else(Failure::report)
 }
-
-impl From<crate::paths::PathsError> for Failure {
-    fn from(error: crate::paths::PathsError) -> Self {
-        Failure::operational(error.to_string())
-    }
-}

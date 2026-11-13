@@ -1,5 +1,7 @@
 //! The three-way merge of `update` (spec Merge semantics) in a temporary
-//! bare git repository under `.skiman/tmp/`, run in the MERGE profile
+//! bare git repository in the system's temporary folder (`update` merges
+//! before it takes the repo lock, so not under `.skiman/tmp/`, whose
+//! content another command would move away), run in the MERGE profile
 //! (`git::merge_command`): no hooks, filters, external merge drivers, user
 //! config or user attributes.
 //!
@@ -15,9 +17,10 @@
 //! `.skiman-conflicts/` when the record's path is taken.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use crate::backup::fresh_named_dir;
 use crate::failure::Failure;
 use crate::git;
 use crate::path_safety::Content;
@@ -35,11 +38,17 @@ const BINARY_PROBE: usize = 8000;
 const NEUTRAL_ATTRIBUTES: &str =
     "* !merge !conflict-marker-size !text !eol !crlf !diff !filter !ident !working-tree-encoding\n";
 
-/// A temporary bare repository for merging one skill.
+/// A temporary bare repository for merging one skill, removed when dropped.
 #[derive(Debug)]
 pub struct MergeRepo {
     git_dir: PathBuf,
     home: PathBuf,
+}
+
+impl Drop for MergeRepo {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.home);
+    }
 }
 
 /// What `merge-tree` produced.
@@ -97,9 +106,18 @@ struct Side {
 }
 
 impl MergeRepo {
-    /// Creates `<dir>/merge.git` (bare, no templates) and its neutral
-    /// attributes; `dir` is the temporary `HOME` of every git call.
-    pub fn create(dir: &Path) -> Result<MergeRepo, Failure> {
+    /// Creates `skiman-merge-<timestamp>/merge.git` (bare, no templates)
+    /// in the system's temporary folder, with its neutral attributes. The
+    /// folder, which only the user can read (it holds their local
+    /// modifications), is the temporary `HOME` of every git call.
+    pub fn create() -> Result<MergeRepo, Failure> {
+        let parent = std::env::temp_dir();
+        let dir = fresh_named_dir(&parent, "skiman-merge-", 0o700).map_err(|e| {
+            Failure::operational(format!(
+                "cannot create a folder in {}: {e}",
+                parent.display()
+            ))
+        })?;
         let repo = MergeRepo {
             git_dir: dir.join("merge.git"),
             home: dir.to_path_buf(),

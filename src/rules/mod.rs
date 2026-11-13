@@ -9,8 +9,8 @@
 //! - [`allow_hint`]: the ready-to-paste `[[secrets.allow]]` entries for the
 //!   secret violations in a list.
 //!
-//! [`warnings`] and [`warnings_all`] return what is printed as a warning but
-//! never fails: the shared body at 80 % of its size limit.
+//! [`warnings_all`] returns what is printed as a warning but never fails:
+//! the shared body at 80 % of its size limit.
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
 //! of content about to be written, or another snapshot.
@@ -418,18 +418,11 @@ pub fn allow_hint(violations: &[Violation]) -> Option<String> {
     ))
 }
 
-/// Warnings on what `scope` names, sorted by path and line.
-pub fn warnings(tree: &dyn Tree, scope: &Scope) -> io::Result<Vec<Violation>> {
-    let mut out = BTreeSet::new();
-    if scope.files.contains(shared_body::PATH) {
-        shared_body::warnings(tree, &config::Records::read(tree)?, &mut out)?;
-    }
-    Ok(out.into_iter().collect())
-}
-
-/// Warnings on everything in `tree`.
+/// Warnings on everything in `tree`, sorted by path and line.
 pub fn warnings_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
-    warnings(tree, &Scope::all(tree)?)
+    let mut out = BTreeSet::new();
+    shared_body::warnings(tree, &config::Records::read(tree)?, &mut out)?;
+    Ok(out.into_iter().collect())
 }
 
 /// `true` when `kind` is a regular file within the per-file size limit, so

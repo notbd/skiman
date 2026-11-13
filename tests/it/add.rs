@@ -356,7 +356,7 @@ created [..]/skill-repo/skills/pdf-forms
     assert_eq!(read(repo.join("upstream/pdf-forms/SKILL.md")), skill_md);
     assert!(
         read(repo.join("skiman.toml")).ends_with(
-            "[skills.pdf-forms.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\nupstream_name = \"pdf\"\n"
+            "[skills.pdf-forms.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n"
         ),
         "{}",
         read(repo.join("skiman.toml"))
@@ -389,10 +389,6 @@ fn an_upstream_without_a_name_line_gets_one_inserted_and_is_named_after_the_repo
         "---\nname: notes\ndescription: Take notes\n---\n\n# Notes\n"
     );
     assert_eq!(read(repo.join("upstream/notes/SKILL.md")), skill_md);
-    assert!(
-        !read(repo.join("skiman.toml")).contains("upstream_name"),
-        "the upstream name equals the install name"
-    );
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
@@ -564,10 +560,19 @@ fn an_unwritable_backups_folder_stops_add_with_exit_4_and_keeps_the_tmp_leftover
 
 /// `date -u` for `secs` since the epoch, as `YYYYMMDDTHHMMSSZ`.
 fn utc_stamp(secs: u64) -> String {
+    // BSD `date` takes the seconds with `-r`, GNU `date` with `-d @`.
+    let at = if cfg!(target_os = "macos") {
+        ["-r".to_owned(), secs.to_string()]
+    } else {
+        ["-d".to_owned(), format!("@{secs}")]
+    };
     let out = std::process::Command::new("date")
-        .args(["-u", "-r", &secs.to_string(), "+%Y%m%dT%H%M%SZ"])
+        .arg("-u")
+        .args(at)
+        .arg("+%Y%m%dT%H%M%SZ")
         .output()
         .unwrap();
+    assert!(out.status.success(), "{out:?}");
     String::from_utf8(out.stdout).unwrap().trim().to_owned()
 }
 

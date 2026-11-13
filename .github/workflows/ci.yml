@@ -20,7 +20,12 @@ jobs:
     # macOS minutes bill at 10x: a pull request from this repo is already
     # covered by the push run of its branch, so pull_request runs only for forks.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: macos-latest
+    strategy:
+      # Each system reports on its own: one failing does not cancel the other.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99.1
@@ -28,6 +33,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
+        if: runner.os == 'Linux'
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo build --release --locked
       - run: cargo test --locked

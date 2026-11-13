@@ -5,7 +5,7 @@
 use std::fmt;
 use std::sync::LazyLock;
 
-use regex::bytes::{Captures, Regex, RegexBuilder};
+use regex::bytes::{Captures, Regex};
 use sha2::{Digest, Sha256};
 
 use super::skill::{CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR};
@@ -16,7 +16,6 @@ use crate::tree::hex;
 pub struct Detector {
     pub id: &'static str,
     pub pattern: &'static str,
-    pub case_insensitive: bool,
     /// Extra conditions on a match (`content` is the whole file, so the
     /// bytes around the match can be looked at): `None` rejects it;
     /// otherwise the end of the secret, the text its fingerprint covers,
@@ -39,42 +38,36 @@ pub const DETECTORS: &[Detector] = &[
     Detector {
         id: "private-key",
         pattern: r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-        case_insensitive: false,
         accept: private_key,
         on_reject: Resume::AtEnd,
     },
     Detector {
         id: "aws-access-key",
         pattern: r"AKIA[0-9A-Z]{16}",
-        case_insensitive: false,
         accept: always,
         on_reject: Resume::AtEnd,
     },
     Detector {
         id: "github-token",
         pattern: r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,}",
-        case_insensitive: false,
         accept: always,
         on_reject: Resume::AtEnd,
     },
     Detector {
         id: "openai-key",
         pattern: r"sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}",
-        case_insensitive: false,
         accept: openai_key,
         on_reject: Resume::AtEnd,
     },
     Detector {
         id: "slack-token",
         pattern: r"xox[abprs]-[A-Za-z0-9-]{10,}",
-        case_insensitive: false,
         accept: always,
         on_reject: Resume::AtEnd,
     },
     Detector {
         id: "secret-assignment",
-        pattern: r#"(password|secret|token)\s*[:=]\s*["']([^"'\s]{8,})["']"#,
-        case_insensitive: true,
+        pattern: r#"(?i)(password|secret|token)\s*[:=]\s*["']([^"'\s]{8,})["']"#,
         accept: secret_assignment,
         on_reject: Resume::AfterStart,
     },
@@ -140,12 +133,7 @@ fn secret_assignment(_: &[u8], m: &Captures) -> Option<usize> {
 static COMPILED: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     DETECTORS
         .iter()
-        .map(|d| {
-            RegexBuilder::new(d.pattern)
-                .case_insensitive(d.case_insensitive)
-                .build()
-                .expect("detector patterns are valid")
-        })
+        .map(|d| Regex::new(d.pattern).expect("detector patterns are valid"))
         .collect()
 });
 
@@ -199,17 +187,11 @@ pub fn scan(path: &str, content: &[u8], found: &mut Vec<Found>) {
 /// `skills/<n>/<p>` form for matches in a skill, its upstream snapshot or
 /// its conflict records; the path itself elsewhere (`instructions/`).
 pub fn allow_path(path: &str) -> String {
-    let (name, rest) = if let Some(rest) = path.strip_prefix("upstream/") {
-        match rest.split_once('/') {
-            Some(parts) => parts,
-            None => return path.to_owned(),
-        }
-    } else if let Some(rest) = path.strip_prefix("skills/") {
-        match rest.split_once('/') {
-            Some(parts) => parts,
-            None => return path.to_owned(),
-        }
-    } else {
+    let Some((name, rest)) = path
+        .strip_prefix("upstream/")
+        .or_else(|| path.strip_prefix("skills/"))
+        .and_then(|rest| rest.split_once('/'))
+    else {
         return path.to_owned();
     };
     let rest = rest

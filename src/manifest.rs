@@ -83,7 +83,6 @@ impl Manifest {
                     .into_iter()
                     .find(|known| *known == kind)
             }),
-            upstream_name: field("upstream_name"),
         })
     }
 }
@@ -183,30 +182,12 @@ pub fn without_skill(text: &str, name: &str) -> Result<String, String> {
 }
 
 /// `text` (a `skiman.toml`) with the skill `old` renamed to `new`: its
-/// `[skills.<old>]` table (with `enabled` and `source`), the source's
-/// `upstream_name` (written when `new` differs from the upstream name,
-/// removed when it equals it), and every `[[secrets.allow]]` path under
-/// `skills/<old>/` or `upstream/<old>/`. Everything else keeps its bytes.
+/// `[skills.<old>]` table (with `enabled` and `source`) and every
+/// `[[secrets.allow]]` path under `skills/<old>/` or `upstream/<old>/`.
+/// Everything else keeps its bytes.
 pub fn with_skill_renamed(text: &str, old: &str, new: &str) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     rename_skill_table(&mut doc, old, new);
-    if let Some(source) = doc
-        .get_mut("skills")
-        .and_then(|skills| skills.get_mut(new))
-        .and_then(|skill| skill.get_mut("source"))
-        .and_then(Item::as_table_like_mut)
-    {
-        let upstream_name = source
-            .get("upstream_name")
-            .and_then(Item::as_str)
-            .unwrap_or(old)
-            .to_owned();
-        if upstream_name == new {
-            source.remove("upstream_name");
-        } else {
-            source.insert("upstream_name", value(upstream_name));
-        }
-    }
     if let Some(Item::ArrayOfTables(allows)) = doc
         .get_mut("secrets")
         .and_then(|secrets| secrets.get_mut("allow"))
@@ -257,7 +238,6 @@ pub struct SourceRecord {
     pub path: String,
     pub git_ref: Option<String>,
     pub ref_kind: Option<&'static str>,
-    pub upstream_name: Option<String>,
 }
 
 /// `text` (a `skiman.toml`) with a new `[skills.<name>.source]` table added.
@@ -274,9 +254,6 @@ pub fn with_source(text: &str, name: &str, source: &SourceRecord) -> Result<Stri
     }
     if let Some(kind) = source.ref_kind {
         table.insert("ref_kind", value(kind));
-    }
-    if let Some(upstream_name) = &source.upstream_name {
-        table.insert("upstream_name", value(upstream_name));
     }
     table.decor_mut().set_prefix("\n");
     let skill = subtable(doc.as_table_mut(), "skills")
@@ -313,24 +290,6 @@ pub fn with_source_ref(
                 source.remove(key);
             }
         }
-    }
-    Ok(doc.to_string())
-}
-
-/// `text` (a `skiman.toml`) with the skill's `source.upstream_name` set to
-/// `upstream_name`, or removed when it equals `name`.
-pub fn with_upstream_name(text: &str, name: &str, upstream_name: &str) -> Result<String, String> {
-    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    let source = doc
-        .get_mut("skills")
-        .and_then(|skills| skills.get_mut(name))
-        .and_then(|skill| skill.get_mut("source"))
-        .and_then(Item::as_table_like_mut)
-        .ok_or_else(|| format!("[skills.{name}.source] is not a table"))?;
-    if upstream_name == name {
-        source.remove("upstream_name");
-    } else if source.get("upstream_name").and_then(Item::as_str) != Some(upstream_name) {
-        source.insert("upstream_name", value(upstream_name));
     }
     Ok(doc.to_string())
 }

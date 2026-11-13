@@ -637,14 +637,7 @@ fn an_upstream_rename_of_the_frontmatter_name_keeps_the_install_name() {
         .stderr_eq("");
 
     assert_eq!(read(repo.join("skills/pdf/SKILL.md")), PDF_SKILL_MD);
-    assert!(read(repo.join("skiman.toml")).contains("upstream_name = \"pdf-tools\"\n"));
     sandbox.skiman().args(["check"]).assert().code(0);
-
-    up.write("SKILL.md", PDF_SKILL_MD);
-    up.commit("v3");
-    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
-    assert_eq!(read(repo.join("skills/pdf/SKILL.md")), PDF_SKILL_MD);
-    assert!(!read(repo.join("skiman.toml")).contains("upstream_name"));
 }
 
 /// Clarification 3: tmp leftovers move before the command's first write,

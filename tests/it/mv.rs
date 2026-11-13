@@ -121,7 +121,7 @@ linked [..]/home/.gemini/config/skills/memo
 }
 
 #[test]
-fn mv_of_a_third_party_skill_renames_its_records_and_snapshot_and_records_the_upstream_name() {
+fn mv_of_a_third_party_skill_renames_its_records_and_snapshot() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
@@ -158,7 +158,7 @@ linked [..]/home/.gemini/config/skills/forms
     let manifest = read(repo.join("skiman.toml"));
     assert!(
         manifest.contains(
-            "[skills.forms.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\nupstream_name = \"pdf\"\n"
+            "[skills.forms.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n"
         ),
         "{manifest}"
     );
@@ -170,14 +170,11 @@ linked [..]/home/.gemini/config/skills/forms
     assert_linked_only_as(&sandbox, "forms", "pdf");
     check_is_clean(&sandbox);
 
-    // Back to the upstream name: `upstream_name` is no longer needed.
     sandbox
         .skiman()
         .args(["mv", "forms", "pdf"])
         .assert()
         .code(0);
-    let manifest = read(repo.join("skiman.toml"));
-    assert!(!manifest.contains("upstream_name"), "{manifest}");
     assert_eq!(read(repo.join("skiman.lock")), lock_before);
     assert_linked_only_as(&sandbox, "pdf", "forms");
     check_is_clean(&sandbox);

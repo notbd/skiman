@@ -546,7 +546,7 @@ fn ref_installs_a_branch_a_tag_or_a_full_commit_and_records_its_kind() {
         assert!(
             toml.contains(&format!(
                 "[skills.{name}.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n\
-                 ref = \"{git_ref}\"\nref_kind = \"{kind}\"\nupstream_name = \"pdf\"\n"
+                 ref = \"{git_ref}\"\nref_kind = \"{kind}\"\n"
             )),
             "{toml}"
         );
@@ -719,7 +719,7 @@ fn absolute_and_dot_relative_local_folders_are_recorded_as_absolute_paths() {
     for name in ["pdf-dot", "pdf-abs"] {
         assert!(
             toml.contains(&format!(
-                "[skills.{name}.source]\nurl = \"{}\"\npath = \"\"\nupstream_name = \"pdf\"\n",
+                "[skills.{name}.source]\nurl = \"{}\"\npath = \"\"\n",
                 dir.display()
             )),
             "{toml}"

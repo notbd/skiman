@@ -1,9 +1,9 @@
 //! `skiman mv <old> <new>`: rename a skill. Renames `skills/<old>`, its
 //! `SKILL.md` `name` line, `upstream/<old>`, the `[skills.<old>]` table of
-//! `skiman.toml` (with `enabled` and `source`, writing `upstream_name` when
-//! needed), the lock entry and the `[[secrets.allow]]` paths, then syncs,
-//! which links the new name and removes the old links. Nothing is backed up:
-//! every piece is renamed in place.
+//! `skiman.toml` (with `enabled` and `source`), the lock entry and the
+//! `[[secrets.allow]]` paths, then syncs, which links the new name and
+//! removes the old links. Nothing is backed up: every piece is renamed in
+//! place.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

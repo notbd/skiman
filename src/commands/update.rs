@@ -369,8 +369,7 @@ fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
     if !unchanged {
         return Err(changed(name));
     }
-    let manifest_text =
-        new_manifest_text(name, &current, target.resolved.as_ref(), &target.snapshot)?;
+    let manifest_text = new_manifest_text(name, &current, target.resolved.as_ref())?;
 
     let Some(merge) = merge else {
         if target.entry == current.entry && manifest_text.is_none() {
@@ -557,33 +556,20 @@ fn pick_commit(
 }
 
 /// `skiman.toml` with the skill's `source.ref` and `ref_kind` derived from
-/// `resolved` (both removed without one) and its `source.upstream_name`
-/// from the snapshot's `SKILL.md`; `None` when nothing changes.
+/// `resolved` (both removed without one); `None` when nothing changes.
 fn new_manifest_text(
     name: &str,
     current: &Current,
     resolved: Option<&ResolvedRef>,
-    snapshot: &Snapshot,
 ) -> Result<Option<String>, Failure> {
-    let refused = |e: String| Failure::refused(format!("skiman.toml: {e}"));
-    let mut text = manifest::with_source_ref(
+    let text = manifest::with_source_ref(
         &current.manifest_text,
         name,
         resolved.map(|r| r.name.as_str()),
         resolved.map(|r| r.kind.as_str()),
     )
-    .map_err(refused)?;
-    if let Some(upstream_name) = upstream_name(snapshot) {
-        text = manifest::with_upstream_name(&text, name, &upstream_name).map_err(refused)?;
-    }
+    .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
     Ok((text != current.manifest_text).then_some(text))
-}
-
-/// The frontmatter `name` of the snapshot's `SKILL.md`, when it has one.
-fn upstream_name(snapshot: &Snapshot) -> Option<String> {
-    let file = snapshot.file("SKILL.md")?;
-    let skill_md = SkillMd::parse_for_rename("SKILL.md", &file.content).ok()?;
-    skill_md.name().map(str::to_owned)
 }
 
 /// `merged` with its `SKILL.md` `name` line set back to the install name
@@ -726,8 +712,8 @@ fn stopped(
     Failure::operational(message)
 }
 
-/// The skill's new `skiman.toml` (when its `source.ref`, `ref_kind` or
-/// `upstream_name` changes) and `skiman.lock` texts.
+/// The skill's new `skiman.toml` (when its `source.ref` or `ref_kind`
+/// changes) and `skiman.lock` texts.
 struct Records<'a> {
     manifest: Option<&'a str>,
     lock: &'a str,

@@ -479,8 +479,6 @@ impl Records {
                 path: install.source.path.clone(),
                 git_ref: resolved.map(|r| r.name.clone()),
                 ref_kind: resolved.map(|r| r.kind.as_str()),
-                upstream_name: (install.upstream_name != install.name)
-                    .then(|| install.upstream_name.clone()),
             };
             manifest = manifest::with_source(&manifest, &install.name, &source)
                 .map_err(|e| refuse(&manifest_file, e))?;

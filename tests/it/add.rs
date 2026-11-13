@@ -356,7 +356,7 @@ created [..]/skill-repo/skills/pdf-forms
     assert_eq!(read(repo.join("upstream/pdf-forms/SKILL.md")), skill_md);
     assert!(
         read(repo.join("skiman.toml")).ends_with(
-            "[skills.pdf-forms.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\nupstream_name = \"pdf\"\n"
+            "[skills.pdf-forms.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n"
         ),
         "{}",
         read(repo.join("skiman.toml"))
@@ -389,10 +389,6 @@ fn an_upstream_without_a_name_line_gets_one_inserted_and_is_named_after_the_repo
         "---\nname: notes\ndescription: Take notes\n---\n\n# Notes\n"
     );
     assert_eq!(read(repo.join("upstream/notes/SKILL.md")), skill_md);
-    assert!(
-        !read(repo.join("skiman.toml")).contains("upstream_name"),
-        "the upstream name equals the install name"
-    );
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 

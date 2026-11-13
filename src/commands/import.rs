@@ -31,8 +31,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
 use crate::backup::{self, Backup};
-use crate::commands::update::print_not_installed;
-use crate::commands::{confirm, has_terminal};
+use crate::commands::{confirm, has_terminal, prompts};
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind};
 use crate::fsutil;
@@ -49,11 +48,12 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::Snapshot;
-use crate::source::{Source, SourceKind, UrlKind, check_url};
+use crate::source::{UrlKind, check_url};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::{self, Kind, Overlay, Tree, WorkingTree};
+use crate::upstream::{self, Upstream, print_not_installed};
 
 pub fn guide() -> Exit {
     finish(
@@ -110,11 +110,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
             ))
         }
     })?;
-    let prompts = if terminal {
-        Prompts::Allowed
-    } else {
-        Prompts::Never
-    };
+    let prompts = prompts();
 
     let content = Folder::read(&folder)?;
     let manifest_text = merge_repo_config(&content.manifest, &repo_manifest)?;
@@ -523,36 +519,23 @@ fn refuse_violations(
 struct Third {
     name: String,
     source: SourceRecord,
-    /// `None` for a local-folder source.
-    commit: Option<String>,
+    snapshot: Snapshot,
+    entry: LockEntry,
     /// The derived kind of `source.ref`.
     ref_kind: Option<RefKind>,
-    snapshot: Snapshot,
+    /// `at <commit> (tag v1)`, `(local folder)`.
+    version: String,
 }
 
 impl Third {
-    fn lock_entry(&self) -> LockEntry {
-        LockEntry {
-            commit: self.commit.clone(),
-            git_ref: self.source.git_ref.clone(),
-            snapshot: self.snapshot.tree_hash(),
-        }
-    }
-
-    /// `<url> (<path>) at <commit>` or `<url> (local folder)`.
+    /// `<url> (<path>) at <commit> (<how>)` or `<url> (local folder)`.
     fn describe(&self) -> String {
         let path = if self.source.path.is_empty() {
             String::new()
         } else {
             format!(" ({})", self.source.path)
         };
-        let version = match (&self.commit, self.ref_kind, &self.source.git_ref) {
-            (None, _, _) => "(local folder)".to_owned(),
-            (Some(commit), Some(RefKind::Commit), _) => format!("at {commit} (commit)"),
-            (Some(commit), Some(kind), Some(r)) => format!("at {commit} ({} {r})", kind.as_str()),
-            (Some(commit), _, _) => format!("at {commit} (default branch)"),
-        };
-        format!("{}{path} {version}", self.source.url)
+        format!("{}{path} {}", self.source.url, self.version)
     }
 }
 
@@ -577,35 +560,23 @@ fn fetch_sources(
         let url = &source.url;
         let kind = check_url(url)
             .map_err(|why| refuse(&format!("unsupported `url` `{url}`: it {why}")))?;
-        if kind == UrlKind::Local {
+        let upstream = if kind == UrlKind::Local {
             if source.git_ref.is_some() {
                 return Err(refuse("a local folder has no versions; drop `ref`"));
             }
-            let dir = local_source(paths, &source).map_err(|f| refuse(&f.message))?;
-            thirds.push(Third {
-                snapshot: Snapshot::read_local_upstream(&dir)?,
-                name,
-                source,
-                commit: None,
-                ref_kind: None,
-            });
-            continue;
-        }
-        let cache = Cache::open(paths, url, prompts)?;
-        let (commit, ref_kind) = match &source.git_ref {
-            Some(r) => {
-                let resolved = cache.resolve_ref(r)?;
-                (resolved.commit, Some(resolved.kind))
-            }
-            None => (cache.default_branch()?.commit, None),
+            let dir = upstream::local_root(paths, url).map_err(|f| refuse(&f.message))?;
+            Upstream::Local { dir }
+        } else {
+            Upstream::at_ref(Cache::open(paths, url, prompts)?, source.git_ref.as_deref())?
         };
-        cache.fetch_commit(&commit)?;
+        let snapshot = upstream.snapshot(&source.path)?;
         thirds.push(Third {
-            snapshot: Snapshot::read(&cache, &commit, &source.path)?,
+            entry: upstream.lock_entry(&snapshot),
+            ref_kind: upstream.resolved().map(|r| r.kind),
+            version: upstream.version(),
             name,
             source,
-            commit: Some(commit),
-            ref_kind,
+            snapshot,
         });
     }
     Ok(thirds)
@@ -621,26 +592,11 @@ fn with_ref_kinds(manifest: String, thirds: &[Third]) -> Result<String, Failure>
     })
 }
 
-/// The local folder a third-party skill is read from, as `update` reads it:
-/// its `url` as [`Source::parse`] makes it absolute (`~` expanded, `.` and
-/// `..` taken by the letter, not through links), then its `path` as written.
-fn local_source(paths: &Paths, source: &SourceRecord) -> Result<PathBuf, Failure> {
-    let SourceKind::Local { dir } = Source::parse(&source.url, paths.home(), Path::new("/"))?.kind
-    else {
-        unreachable!("a `/` or `~` source is a local folder");
-    };
-    Ok(if source.path.is_empty() {
-        dir
-    } else {
-        dir.join(&source.path)
-    })
-}
-
 /// The `skiman.lock` text with one entry per third-party skill.
 fn lock_text(thirds: &[Third]) -> Result<String, Failure> {
     let mut text = format!("version = {}\n", 1);
     for third in thirds {
-        text = lockfile::with_entry(&text, &third.name, &third.lock_entry())
+        text = lockfile::with_entry(&text, &third.name, &third.entry)
             .map_err(|e| Failure::operational(format!("skiman.lock: {e}")))?;
     }
     Ok(text)
@@ -922,17 +878,17 @@ fn refuse_special_files(plan: &Plan) -> Result<(), Failure> {
 }
 
 /// Refuses (exit 1) when the local folder a third-party skill is read from
-/// ([`local_source`]) would be gone after the takeover, so that neither
-/// `update` nor this import run again could read it: its path, resolved
-/// like [`resolution`], passes through an entry that moves (a link
-/// included), or it is in, or holds, the real folder of one. Being in one
-/// compares the source's canonical path, so it also holds where the written
-/// path is spelt otherwise than on disk, such as in another case. Moving a
-/// link that leads to a source elsewhere leaves the source where it is; a
-/// source whose path passes through that link is refused all the same.
-/// Entries compare by their real path, byte for byte. The sources come from
-/// `manifest`, the `skiman.toml` the takeover plan follows; a source folder
-/// that does not exist is skipped.
+/// ([`upstream::local_root`] joined with its `path`) would be gone after
+/// the takeover, so that neither `update` nor this import run again could
+/// read it: its path, resolved like [`resolution`], passes through an entry
+/// that moves (a link included), or it is in, or holds, the real folder of
+/// one. Being in one compares the source's canonical path, so it also holds
+/// where the written path is spelt otherwise than on disk, such as in
+/// another case. Moving a link that leads to a source elsewhere leaves the
+/// source where it is; a source whose path passes through that link is
+/// refused all the same. Entries compare by their real path, byte for byte.
+/// The sources come from `manifest`, the `skiman.toml` the takeover plan
+/// follows; a source folder that does not exist is skipped.
 fn refuse_moving_sources(
     paths: &Paths,
     content: &Folder,
@@ -944,9 +900,10 @@ fn refuse_moving_sources(
         if !matches!(check_url(&record.url), Ok(UrlKind::Local)) {
             continue;
         }
-        let Ok(written) = local_source(paths, &record) else {
+        let Ok(root) = upstream::local_root(paths, &record.url) else {
             continue;
         };
+        let written = upstream::join(&root, &record.path);
         let Ok(source) = written.canonicalize() else {
             continue;
         };

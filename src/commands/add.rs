@@ -5,18 +5,17 @@
 //! Never commits.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::Exit;
 use crate::cli::AddArgs as Args;
-use crate::commands::update::print_not_installed;
-use crate::commands::{ask, confirm, has_terminal};
+use crate::commands::{ask, confirm, has_terminal, prompts};
 use crate::discovery;
 use crate::failure::{Failure, finish};
-use crate::fetch::{Cache, RefKind, ResolvedRef};
+use crate::fetch::Cache;
 use crate::fsutil::{self, write_atomic};
 use crate::git::Prompts;
-use crate::lockfile::{self, LockEntry};
+use crate::lockfile;
 use crate::manifest::{self, SourceRecord};
 use crate::names;
 use crate::path_safety;
@@ -25,114 +24,15 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
-use crate::snapshot::{self, Snapshot, SnapshotFile};
+use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::tree::{self, Overlay, WorkingTree};
+use crate::upstream::{Upstream, print_not_installed};
 
 pub fn run(args: Args) -> Exit {
     finish(add(args))
-}
-
-/// The upstream content `add` reads: a fetched commit or a local folder.
-enum Upstream {
-    Git {
-        cache: Cache,
-        commit: String,
-        /// `None` when following the default branch.
-        resolved: Option<ResolvedRef>,
-        /// The default branch, when following it.
-        default_branch: Option<String>,
-    },
-    Local {
-        dir: PathBuf,
-    },
-}
-
-impl Upstream {
-    /// Every file below `path`: its path relative to `path`, and what
-    /// [`Upstream::read_files`] reads it by: its blob id in a git upstream,
-    /// so no name can break `cat-file`'s line protocol, or its path from the
-    /// upstream's root in a local folder.
-    fn list(&self, path: &str) -> Result<Vec<(String, String)>, Failure> {
-        match self {
-            Upstream::Git { cache, commit, .. } => snapshot::list(cache, commit, path),
-            Upstream::Local { dir } => Ok(snapshot::list_local(&local_path(dir, path))?
-                .into_iter()
-                .map(|file| (file.clone(), discovery::join(path, &file)))
-                .collect()),
-        }
-    }
-
-    /// The contents of the files `keys` name, as [`Upstream::list`] gives
-    /// them. In a local folder, anything but a regular file reads as empty: a
-    /// symlink is not followed and a FIFO is not opened.
-    fn read_files(&self, keys: &[&str]) -> Result<Vec<Vec<u8>>, Failure> {
-        match self {
-            Upstream::Git { cache, .. } => snapshot::cat_blobs(cache.git(), keys.iter().copied()),
-            Upstream::Local { dir } => keys
-                .iter()
-                .map(|p| {
-                    let file = local_path(dir, p);
-                    let io = |e: std::io::Error| {
-                        Failure::operational(format!("cannot read {}: {e}", file.display()))
-                    };
-                    if !std::fs::symlink_metadata(&file).map_err(io)?.is_file() {
-                        return Ok(Vec::new());
-                    }
-                    std::fs::read(&file).map_err(io)
-                })
-                .collect(),
-        }
-    }
-
-    fn snapshot(&self, path: &str) -> Result<Snapshot, Failure> {
-        match self {
-            Upstream::Git { cache, commit, .. } => Snapshot::read(cache, commit, path),
-            Upstream::Local { dir } => Snapshot::read_local_upstream(&local_path(dir, path)),
-        }
-    }
-
-    fn commit(&self) -> Option<&str> {
-        match self {
-            Upstream::Git { commit, .. } => Some(commit),
-            Upstream::Local { .. } => None,
-        }
-    }
-
-    fn resolved(&self) -> Option<&ResolvedRef> {
-        match self {
-            Upstream::Git { resolved, .. } => resolved.as_ref(),
-            Upstream::Local { .. } => None,
-        }
-    }
-
-    /// `at <commit> (default branch main)`, `at <commit> (tag v1)`, `(local folder)`.
-    fn version(&self) -> String {
-        match self {
-            Upstream::Git {
-                commit,
-                resolved,
-                default_branch,
-                ..
-            } => match (resolved, default_branch) {
-                (Some(r), _) if r.kind == RefKind::Commit => format!("at {commit} (commit)"),
-                (Some(r), _) => format!("at {commit} ({} {})", r.kind.as_str(), r.name),
-                (None, Some(branch)) => format!("at {commit} (default branch {branch})"),
-                (None, None) => format!("at {commit}"),
-            },
-            Upstream::Local { .. } => "(local folder)".to_owned(),
-        }
-    }
-}
-
-fn local_path(dir: &Path, rel: &str) -> PathBuf {
-    if rel.is_empty() {
-        dir.to_path_buf()
-    } else {
-        dir.join(rel)
-    }
 }
 
 /// A folder of the upstream that holds a `SKILL.md`.
@@ -170,11 +70,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     if let Some(name) = &args.name {
         names::check_new_name(name)?;
     }
-    let prompts = if terminal {
-        Prompts::Allowed
-    } else {
-        Prompts::Never
-    };
+    let prompts = prompts();
     let (source, upstream) = fetch(&paths, source, args.git_ref.as_deref(), prompts)?;
     let candidates = discover(&source, &upstream)?;
 
@@ -229,7 +125,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     let lock = RepoLock::wait(&repo)?;
     check_install_names(&repo, &installs)?;
     let files = candidate_files(&installs);
-    let records = Records::build(&repo, &installs, &upstream, &files)?;
+    let records = Records::build(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &files, &records)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     write(&repo, &installs, &files, &records, &staging)?;
@@ -264,36 +160,12 @@ fn fetch(
             }
             let cache = Cache::open(paths, &source.url, prompts)?;
             let (resolved, path) = cache.resolve_tree_tail(tail)?;
-            cache.fetch_commit(&resolved.commit)?;
-            let upstream = Upstream::Git {
-                commit: resolved.commit.clone(),
-                resolved: Some(resolved),
-                default_branch: None,
-                cache,
-            };
+            let upstream = Upstream::at(cache, resolved.commit.clone(), Some(resolved), None)?;
             Ok((source.with_path(path), upstream))
         }
         SourceKind::Git => {
             let cache = Cache::open(paths, &source.url, prompts)?;
-            let (resolved, default_branch, commit) = match git_ref {
-                Some(name) => {
-                    let resolved = cache.resolve_ref(name)?;
-                    let commit = resolved.commit.clone();
-                    (Some(resolved), None, commit)
-                }
-                None => {
-                    let head = cache.default_branch()?;
-                    (None, Some(head.branch), head.commit)
-                }
-            };
-            cache.fetch_commit(&commit)?;
-            let upstream = Upstream::Git {
-                cache,
-                commit,
-                resolved,
-                default_branch,
-            };
-            Ok((source, upstream))
+            Ok((source, Upstream::at_ref(cache, git_ref)?))
         }
     }
 }
@@ -585,7 +457,6 @@ impl Records {
         repo: &SkillRepo,
         installs: &[Install],
         upstream: &Upstream,
-        files: &[SnapshotFile],
     ) -> Result<Records, Failure> {
         let read = |path: &Path| match std::fs::read_to_string(path) {
             Ok(text) => Ok(Some(text)),
@@ -602,8 +473,6 @@ impl Records {
         let mut manifest = read(&manifest_file)?.unwrap_or_default();
         let old_lock = read(&lock_file)?;
         let mut lock = old_lock.clone().unwrap_or_default();
-        let working_tree = WorkingTree::new(repo.root());
-        let candidate = overlay(&working_tree, files, Vec::new());
         for install in installs {
             let source = SourceRecord {
                 url: install.source.url.clone(),
@@ -615,12 +484,7 @@ impl Records {
             };
             manifest = manifest::with_source(&manifest, &install.name, &source)
                 .map_err(|e| refuse(&manifest_file, e))?;
-            let entry = LockEntry {
-                commit: upstream.commit().map(str::to_owned),
-                git_ref: resolved.map(|r| r.name.clone()),
-                snapshot: tree::tree_hash(&candidate, &format!("upstream/{}", install.name))
-                    .map_err(|e| Failure::operational(format!("cannot hash the snapshot: {e}")))?,
-            };
+            let entry = upstream.lock_entry(&install.snapshot);
             lock = lockfile::with_entry(&lock, &install.name, &entry)
                 .map_err(|e| refuse(&lock_file, e))?;
         }
@@ -630,25 +494,6 @@ impl Records {
             lock_existed: old_lock.is_some(),
         })
     }
-}
-
-/// Every file `add` writes laid over the skill repo's working tree, plus `extra`.
-fn overlay<'a>(
-    working_tree: &'a WorkingTree,
-    files: &[SnapshotFile],
-    extra: Vec<(String, Vec<u8>)>,
-) -> Overlay<'a> {
-    let executable = files
-        .iter()
-        .filter(|file| file.executable)
-        .map(|file| file.path.clone())
-        .collect();
-    let mut contents: Vec<(String, Vec<u8>)> = files
-        .iter()
-        .map(|file| (file.path.clone(), file.content.clone()))
-        .collect();
-    contents.extend(extra);
-    Overlay::new(working_tree, contents).with_executable(executable)
 }
 
 /// Every file `add` writes, with repo-relative paths.
@@ -687,17 +532,23 @@ fn validate(
     records: &Records,
 ) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
-    let texts = vec![
-        (
-            rules::MANIFEST.to_owned(),
-            records.manifest.clone().into_bytes(),
-        ),
-        (
-            rules::LOCKFILE.to_owned(),
-            records.lock.clone().into_bytes(),
-        ),
-    ];
-    let candidate = overlay(&working_tree, files, texts);
+    let executable = files
+        .iter()
+        .filter(|f| f.executable)
+        .map(|f| f.path.clone());
+    let mut contents: Vec<(String, Vec<u8>)> = files
+        .iter()
+        .map(|f| (f.path.clone(), f.content.clone()))
+        .collect();
+    contents.push((
+        rules::MANIFEST.to_owned(),
+        records.manifest.clone().into_bytes(),
+    ));
+    contents.push((
+        rules::LOCKFILE.to_owned(),
+        records.lock.clone().into_bytes(),
+    ));
+    let candidate = Overlay::new(&working_tree, contents).with_executable(executable.collect());
     let names: BTreeSet<String> = installs.iter().map(|i| i.name.clone()).collect();
     let scope = Scope {
         files: files.iter().map(|file| file.path.clone()).collect(),

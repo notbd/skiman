@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::Backup;
-use crate::commands::has_terminal;
+use crate::commands::prompts;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
 use crate::fsutil::{self, write_atomic};
@@ -41,11 +41,12 @@ use crate::repo_lock::RepoLock;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::skill_md::SkillMd;
 use crate::snapshot::Snapshot;
-use crate::source::{Source, SourceKind, check_url};
+use crate::source::{UrlKind, check_url};
 use crate::staging::{self, Staging};
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::{Overlay, WorkingTree, tree_hash_of_dir};
+use crate::upstream::{self, Upstream, print_not_installed};
 
 pub fn run(names: Vec<String>, git_ref: Option<String>) -> Exit {
     finish(update(names, git_ref))
@@ -77,11 +78,7 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
     }
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
-    let prompts = if has_terminal() {
-        Prompts::Allowed
-    } else {
-        Prompts::Never
-    };
+    let prompts = prompts();
     let lock = RepoLock::wait(&repo)?;
     let names = if names.is_empty() {
         let manifest = Manifest::load(&repo)?;
@@ -348,17 +345,6 @@ fn update_to(
     Ok(Exit::NeedsAttention)
 }
 
-/// The snapshot's submodules and git files, which are not installed, as
-/// `add`, `update` and `import` list them, each line after `indent`.
-pub(crate) fn print_not_installed(snapshot: &Snapshot, indent: &str) {
-    for submodule in &snapshot.submodules {
-        out!("{indent}{submodule}  [submodule, not fetched]");
-    }
-    for path in &snapshot.git_files {
-        out!("{indent}{path}  [not installed]");
-    }
-}
-
 /// One line of the conflict list, naming the file and its record.
 fn describe(conflict: &Conflict) -> String {
     let path = &conflict.path;
@@ -378,7 +364,9 @@ fn describe(conflict: &Conflict) -> String {
 /// one, the default branch. A branch moves to its head. A tag or commit
 /// stays at the locked commit unless the ref changes (`--ref`, or
 /// `source.ref` differing from the lock's `ref`); a moved tag is reported.
-/// `ref_kind` is always derived, never read.
+/// A local folder is re-read as it is now and versioned by its tree hash;
+/// it has no refs, and a missing one is an error (exit 4) that keeps the
+/// current content. `ref_kind` is always derived, never read.
 fn fetch(
     context: &Context,
     name: &str,
@@ -386,30 +374,47 @@ fn fetch(
     requested: Option<&str>,
 ) -> Result<Target, Failure> {
     let source = &current.source;
-    if source.url.starts_with(['/', '~']) {
-        return fetch_local(context, name, current, requested);
-    }
-    let cache = Cache::open(&context.paths, &source.url, context.prompts)?;
     let mut notes = Vec::new();
-    let (resolved, commit) = match requested.or(source.git_ref.as_deref()) {
-        None => (None, cache.default_branch()?.commit),
-        Some(git_ref) => {
-            let resolved = cache.resolve_ref(git_ref)?;
-            let changing = requested.is_some() || source.git_ref != current.entry.git_ref;
-            let commit = pick_commit(name, &resolved, current, changing, &mut notes);
-            (Some(resolved), commit)
+    let upstream = if check_url(&source.url) == Ok(UrlKind::Local) {
+        let unpinned = format!("remove `ref` from [skills.{name}.source] in skiman.toml");
+        if let Some(remedy) = requested
+            .map(|_| "drop --ref")
+            .or(source.git_ref.as_ref().map(|_| unpinned.as_str()))
+        {
+            return Err(Failure::refused(format!(
+                "{} is a local folder, which has no versions; {remedy}",
+                source.url
+            )));
+        }
+        let dir = upstream::local_root(&context.paths, &source.url)?;
+        let folder = upstream::join(&dir, &source.path);
+        if !folder.is_dir() {
+            return Err(Failure::operational(format!(
+                "the local folder {} does not exist; nothing of {name} changed",
+                folder.display()
+            )));
+        }
+        Upstream::Local { dir }
+    } else {
+        let cache = Cache::open(&context.paths, &source.url, context.prompts)?;
+        match requested.or(source.git_ref.as_deref()) {
+            None => Upstream::at_ref(cache, None)?,
+            Some(git_ref) => {
+                let resolved = cache.resolve_ref(git_ref)?;
+                let changing = requested.is_some() || source.git_ref != current.entry.git_ref;
+                let commit = pick_commit(name, &resolved, current, changing, &mut notes);
+                Upstream::at(cache, commit, Some(resolved), None)?
+            }
         }
     };
-    cache.fetch_commit(&commit)?;
-    let snapshot = Snapshot::read(&cache, &commit, &source.path)?;
-    let entry = LockEntry {
-        commit: Some(commit.clone()),
-        git_ref: resolved.as_ref().map(|r| r.name.clone()),
-        snapshot: snapshot.tree_hash(),
-    };
-    let manifest_text = new_manifest_text(name, current, resolved.as_ref(), &snapshot)?;
+    let snapshot = upstream.snapshot(&source.path)?;
+    let entry = upstream.lock_entry(&snapshot);
+    let manifest_text = new_manifest_text(name, current, upstream.resolved(), &snapshot)?;
     Ok(Target {
-        version: commit,
+        version: entry
+            .commit
+            .clone()
+            .unwrap_or_else(|| entry.snapshot.clone()),
         snapshot,
         entry,
         manifest_text,
@@ -446,59 +451,6 @@ fn pick_commit(
         }
         _ => resolved.commit.clone(),
     }
-}
-
-/// A local-folder source: the folder is re-read as it is now and versioned
-/// by its tree hash; it has no refs. A missing folder is an error (exit 4)
-/// that keeps the current content.
-fn fetch_local(
-    context: &Context,
-    name: &str,
-    current: &Current,
-    requested: Option<&str>,
-) -> Result<Target, Failure> {
-    let source = &current.source;
-    if requested.is_some() {
-        return Err(Failure::refused(format!(
-            "{} is a local folder, which has no versions; drop --ref",
-            source.url
-        )));
-    }
-    if source.git_ref.is_some() {
-        return Err(Failure::refused(format!(
-            "{} is a local folder, which has no versions; remove `ref` from [skills.{name}.source] in skiman.toml",
-            source.url
-        )));
-    }
-    let parsed = Source::parse(&source.url, context.paths.home(), Path::new("/"))?;
-    let SourceKind::Local { dir } = parsed.kind else {
-        unreachable!("a `/` or `~` source is a local folder");
-    };
-    let dir = if source.path.is_empty() {
-        dir
-    } else {
-        dir.join(&source.path)
-    };
-    if !dir.is_dir() {
-        return Err(Failure::operational(format!(
-            "the local folder {} does not exist; nothing of {name} changed",
-            dir.display()
-        )));
-    }
-    let snapshot = Snapshot::read_local_upstream(&dir)?;
-    let entry = LockEntry {
-        commit: None,
-        git_ref: None,
-        snapshot: snapshot.tree_hash(),
-    };
-    let manifest_text = new_manifest_text(name, current, None, &snapshot)?;
-    Ok(Target {
-        version: entry.snapshot.clone(),
-        snapshot,
-        entry,
-        manifest_text,
-        notes: Vec::new(),
-    })
 }
 
 /// `skiman.toml` with the skill's `source.ref` and `ref_kind` derived from

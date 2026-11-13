@@ -265,16 +265,15 @@ pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, Stri
 }
 
 /// The paths of every non-folder entry below the local folder `dir`,
-/// skipping `.git` at any depth. A missing `dir` is refused (exit 1).
+/// never looking inside `.git`. A missing `dir` is refused (exit 1).
 pub fn list_local(dir: &Path) -> Result<Vec<String>, Failure> {
     require_folder(dir)?;
-    let entries = WorkingTree::new(dir)
-        .walk("")
+    let folder = LocalFolder::new(dir, false)
         .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))?;
-    Ok(entries
+    Ok(folder
+        .entries
         .into_iter()
         .filter(|e| e.kind != Kind::Dir)
-        .filter(|e| !in_dot_git(&e.path))
         .map(|e| e.path)
         .collect())
 }
@@ -297,7 +296,7 @@ impl Snapshot {
         let label = dir.display().to_string();
         let io = |e: std::io::Error| Failure::operational(format!("cannot read {label}: {e}"));
         require_folder(dir)?;
-        let folder = LocalFolder::new(dir).map_err(io)?;
+        let folder = LocalFolder::new(dir, true).map_err(io)?;
         path_safety::check(&folder, "", &label, Content::Upstream)?;
         let mut snapshot = Snapshot::default();
         for entry in &folder.entries {
@@ -325,7 +324,7 @@ fn below(entries: &[tree::Entry], dir: &str) -> Vec<tree::Entry> {
 }
 
 /// A local folder without anything inside `.git` (at any depth, any case),
-/// walked once when made. The walk counts what [`path_safety::check`]
+/// walked once when made. A `limited` walk counts what [`path_safety::check`]
 /// counts, the regular files that are not ignored, and stops at the first
 /// one that takes the folder over a skill's limits, so a folder that grew far
 /// past them is refused after about [`LIMITS`]`.files` entries.
@@ -337,7 +336,7 @@ struct LocalFolder {
 }
 
 impl LocalFolder {
-    fn new(dir: &Path) -> std::io::Result<LocalFolder> {
+    fn new(dir: &Path, limited: bool) -> std::io::Result<LocalFolder> {
         let tree = WorkingTree::new(dir);
         let mut entries = Vec::new();
         let (mut files, mut bytes) = (0, 0);
@@ -361,7 +360,7 @@ impl LocalFolder {
                 });
                 match kind {
                     Kind::Dir => folders.push(path),
-                    Kind::File { size, .. } if !is_ignored(&path) => {
+                    Kind::File { size, .. } if limited && !is_ignored(&path) => {
                         files += 1;
                         bytes += size;
                         if files > LIMITS.files
@@ -392,10 +391,6 @@ impl Tree for LocalFolder {
     fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
         self.tree.read(path)
     }
-}
-
-fn in_dot_git(path: &str) -> bool {
-    path.split('/').any(|c| c.eq_ignore_ascii_case(".git"))
 }
 
 fn treeish(commit: &str, path: &str) -> String {

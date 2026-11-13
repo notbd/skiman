@@ -4,22 +4,28 @@
 //! Each skill is processed on its own; the exit code is the highest per-skill
 //! result. Ends with a sync; never commits.
 //!
-//! One skill goes through these steps (`update_skill`); later tickets hook in
-//! where marked:
+//! First, without the repo lock, so that fetching (network, credentials)
+//! holds up no other command, each skill is [`prepare`]d:
 //!
 //! 1. [`Current::read`]: the skill's records; refusals before anything is
 //!    fetched (unresolved conflicts, a snapshot that differs from the lock).
+//!    A refusal is read again under the repo lock, as another command may
+//!    have been writing the skill; only a refusal there stands.
 //! 2. [`fetch`]: the version to move to (spec Version semantics) and its
 //!    snapshot; a local folder is re-read.
-//! 3. Same snapshot: up to date, or [`advance_records`] (fragments to a fresh
-//!    backup, then `source.ref` and `ref_kind`, then the lock entry).
-//! 4. Otherwise [`merge`] in `tmp/<timestamp>/merge/<name>/` (conflicts are
-//!    written into the result, exit 3), [`validate`] the candidate output
-//!    (path safety, rules), stage it in `tmp/<timestamp>/new/`,
-//!    then [`swap`]: re-hash, fragments, re-hash, renames through
-//!    `tmp/<timestamp>/old/`, `source.ref` and `ref_kind`, lock entry (last
-//!    write), old folders to the backup; a failure before the lock entry
-//!    prints the recovery ([`stopped`]).
+//! 3. When the snapshot changes, [`merge`] in a temporary repository
+//!    (conflicts are written into the result, exit 3).
+//!
+//! Then, under the repo lock, [`update_to`] refuses a skill whose records,
+//! `skills/<name>` or `upstream/<name>` changed since, and moves the others:
+//!
+//! 4. Same snapshot: up to date, or [`advance_records`] (fragments to a
+//!    fresh backup, then `source.ref` and `ref_kind`, then the lock entry).
+//! 5. Otherwise [`validate`] the candidate output (path safety, rules),
+//!    stage it in `tmp/<timestamp>/new/`, then [`swap`]: re-hash, fragments,
+//!    re-hash, renames through `tmp/<timestamp>/old/`, `source.ref` and
+//!    `ref_kind`, lock entry (last write), old folders to the backup; a
+//!    failure before the lock entry prints the recovery ([`stopped`]).
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -52,12 +58,11 @@ pub fn run(names: Vec<String>, git_ref: Option<String>) -> Exit {
     finish(update(names, git_ref))
 }
 
-/// What every skill's update shares.
+/// What every skill's write shares, under the repo lock.
 struct Context {
     paths: Paths,
     repo: SkillRepo,
     lock: RepoLock,
-    prompts: Prompts,
     /// The command's `tmp/<timestamp>/`, begun before the first skill writes
     /// (a merge or a records-only advance), so tmp leftovers move first.
     staging: Option<Staging>,
@@ -79,7 +84,6 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
     let prompts = prompts();
-    let lock = RepoLock::wait(&repo)?;
     let names = if names.is_empty() {
         let manifest = Manifest::load(&repo)?;
         let names: Vec<String> = manifest
@@ -99,18 +103,38 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
             .collect()
     };
 
+    // Without the repo lock: fetching may use the network and ask for
+    // credentials, and other commands go on meanwhile.
+    let mut exit = Exit::Success;
+    let mut prepared = Vec::new();
+    for name in &names {
+        match prepare(&paths, &repo, prompts, name, git_ref.as_deref()) {
+            Ok(skill) => prepared.push(skill),
+            Err(failure) => {
+                err!("error: skill {name}: {}", failure.message);
+                exit = exit.combine(failure.exit);
+            }
+        }
+    }
+    if prepared.is_empty() && !names.is_empty() {
+        return Ok(exit);
+    }
+
+    let lock = RepoLock::wait(&repo)?;
     let mut context = Context {
         paths,
         repo,
         lock,
-        prompts,
         staging: None,
     };
-    let mut exit = Exit::Success;
     let mut any_done = names.is_empty();
-    for name in &names {
-        match update_skill(&mut context, name, git_ref.as_deref()) {
+    for skill in &prepared {
+        let name = &skill.name;
+        match update_to(&mut context, skill) {
             Ok(result) => {
+                for note in &skill.target.notes {
+                    out!("  note: {note}");
+                }
                 any_done = true;
                 exit = exit.combine(result);
             }
@@ -125,7 +149,6 @@ fn update(names: Vec<String>, git_ref: Option<String>) -> Result<Exit, Failure> 
         repo,
         lock,
         staging,
-        ..
     } = context;
     drop(staging);
     if any_done {
@@ -242,40 +265,121 @@ struct Target {
     snapshot: Snapshot,
     /// The new lock entry.
     entry: LockEntry,
-    /// `skiman.toml` with the new `source.ref`, `ref_kind` and
-    /// `upstream_name`; `None` when they stay the same.
-    manifest_text: Option<String>,
+    /// The ref it was read at; `None` for the default branch or a local folder.
+    resolved: Option<ResolvedRef>,
     /// `  note: ...` lines printed after the skill's result.
     notes: Vec<String>,
 }
 
-/// Updates one skill; `NeedsAttention` when conflicts were written.
-fn update_skill(context: &mut Context, name: &str, git_ref: Option<&str>) -> Result<Exit, Failure> {
-    let current = Current::read(&context.repo, name)?;
-    let target = fetch(context, name, &current, git_ref)?;
-    let result = update_to(context, name, &current, &target)?;
-    for note in &target.notes {
-        out!("  note: {note}");
-    }
-    Ok(result)
+/// One skill as [`prepare`] read it: its records, the version to move to
+/// and, when the snapshot changes, the merge.
+struct Prepared {
+    name: String,
+    current: Current,
+    target: Target,
+    merge: Option<Merge>,
 }
 
-/// Moves the skill to `target`: records only when its snapshot is the same,
-/// else merge, validate and swap.
-fn update_to(
-    context: &mut Context,
+/// A merge, with `skills/<name>` as merged.
+struct Merge {
+    ours: Snapshot,
+    merged: Snapshot,
+    conflicts: Vec<Conflict>,
+}
+
+/// Reads the skill's records, fetches its new version and merges it;
+/// writes nothing.
+fn prepare(
+    paths: &Paths,
+    repo: &SkillRepo,
+    prompts: Prompts,
     name: &str,
-    current: &Current,
-    target: &Target,
-) -> Result<Exit, Failure> {
-    if target.entry.snapshot == current.entry.snapshot {
-        if target.entry == current.entry && target.manifest_text.is_none() {
+    git_ref: Option<&str>,
+) -> Result<Prepared, Failure> {
+    // Read without the lock: another command may be writing the skill.
+    // Under the lock the records are whole: a refusal then is real, and
+    // records read there are checked again by `update_to` like any others.
+    let current = Current::read(repo, name).or_else(|_| {
+        test_hook::at(name, "read-again");
+        let _lock = RepoLock::wait(repo)?;
+        Current::read(repo, name)
+    })?;
+    let target = fetch(paths, prompts, name, &current, git_ref)?;
+    let merge = if target.entry.snapshot == current.entry.snapshot {
+        None
+    } else {
+        let ours = Snapshot::from_folder(&repo.skill_dir(name))?;
+        let base = Snapshot::from_folder(&repo.upstream_dir(name))?;
+        // `Current::read` found `upstream/<name>` matching the lock entry;
+        // under the lock it does again, and the entry must be the same.
+        if base.tree_hash() != current.entry.snapshot {
+            return Err(changed(name));
+        }
+        let (merged, conflicts) = match merge(&base, &ours, &target.snapshot)? {
+            Outcome::Clean(merged) => (merged, Vec::new()),
+            Outcome::Conflicts { merged, conflicts } => (merged, conflicts),
+        };
+        Some(Merge {
+            merged: with_install_name(name, merged),
+            ours,
+            conflicts,
+        })
+    };
+    test_hook::at(name, "prepared");
+    Ok(Prepared {
+        name: name.to_owned(),
+        current,
+        target,
+        merge,
+    })
+}
+
+/// The refusal (exit 1) of a skill whose records or folders changed after
+/// [`prepare`] read them.
+fn changed(name: &str) -> Failure {
+    Failure::refused(format!(
+        "skills/{name}, upstream/{name} or their records changed after the update read them; nothing of {name} changed, run the update again"
+    ))
+}
+
+/// Under the repo lock: refuses the skill (exit 1) when its records or
+/// `skills/<name>` changed since [`prepare`] read them (`upstream/<name>`
+/// is checked by `Current::read` against the same lock entry), then moves
+/// it to its target: records only when its snapshot is the same, else
+/// validate and swap. `NeedsAttention` when conflicts were written.
+fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
+    let Prepared {
+        name,
+        target,
+        merge,
+        ..
+    } = skill;
+    let repo = &context.repo;
+    let current = Current::read(repo, name)?;
+    let hash = |dir: &Path| {
+        tree_hash_of_dir(dir)
+            .map_err(|e| Failure::operational(format!("cannot read {}: {e}", dir.display())))
+    };
+    let unchanged = (&current.source, &current.entry)
+        == (&skill.current.source, &skill.current.entry)
+        && match merge {
+            Some(m) => hash(&repo.skill_dir(name))? == m.ours.tree_hash(),
+            None => true,
+        };
+    if !unchanged {
+        return Err(changed(name));
+    }
+    let manifest_text =
+        new_manifest_text(name, &current, target.resolved.as_ref(), &target.snapshot)?;
+
+    let Some(merge) = merge else {
+        if target.entry == current.entry && manifest_text.is_none() {
             out!("skill {name}: up to date at {}", target.version);
             print_not_installed(&target.snapshot, "  ");
             return Ok(Exit::Success);
         }
         context.staging()?;
-        let backup = advance_records(context, name, current, target)?;
+        let backup = advance_records(context, name, &current, target, manifest_text)?;
         out!(
             "skill {name}: now at {}; no file of the skill changed",
             target.version
@@ -283,36 +387,35 @@ fn update_to(
         print_not_installed(&target.snapshot, "  ");
         out!("saved the records of {name} to {}", backup.dir().display());
         return Ok(Exit::Success);
-    }
-
-    let ours = Snapshot::from_folder(&context.repo.skill_dir(name))?;
-    let base = Snapshot::from_folder(&context.repo.upstream_dir(name))?;
-    let staging = context.staging()?;
-    let work = Workspace::new(staging, name);
-    let (merged, conflicts) = match merge(&work, &base, &ours, &target.snapshot)? {
-        Outcome::Clean(merged) => (merged, Vec::new()),
-        Outcome::Conflicts { merged, conflicts } => (merged, conflicts),
     };
-    let merged = with_install_name(name, merged);
-    let changes = changes(&ours, &merged);
+
+    let Merge {
+        ours,
+        merged,
+        conflicts,
+        ..
+    } = merge;
+    let changes = changes(ours, merged);
     let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
         .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
     let records = Records {
-        manifest: target.manifest_text.as_deref(),
+        manifest: manifest_text.as_deref(),
         lock: &lock_text,
     };
     validate(
         &context.repo,
         name,
-        &merged,
+        merged,
         &target.snapshot,
         &records,
         &changes,
-        &conflicts,
+        conflicts,
     )?;
-    work.stage(&merged, &target.snapshot)?;
+    let staging = context.staging()?;
+    let work = Workspace::new(staging, name);
+    work.stage(merged, &target.snapshot)?;
     let (backup, old_folders_saved) =
-        swap(context, &work, name, current, &ours.tree_hash(), &records)?;
+        swap(context, &work, name, &current, &ours.tree_hash(), &records)?;
 
     let with_conflicts = if conflicts.is_empty() {
         ""
@@ -339,7 +442,7 @@ fn update_to(
     out!(
         "skill {name}: resolve these conflicts in skills/{name}, then delete the conflict records:"
     );
-    for conflict in &conflicts {
+    for conflict in conflicts {
         out!("  {}", describe(conflict));
     }
     Ok(Exit::NeedsAttention)
@@ -368,7 +471,8 @@ fn describe(conflict: &Conflict) -> String {
 /// it has no refs, and a missing one is an error (exit 4) that keeps the
 /// current content. `ref_kind` is always derived, never read.
 fn fetch(
-    context: &Context,
+    paths: &Paths,
+    prompts: Prompts,
     name: &str,
     current: &Current,
     requested: Option<&str>,
@@ -386,7 +490,7 @@ fn fetch(
                 source.url
             )));
         }
-        let dir = upstream::local_root(&context.paths, &source.url)?;
+        let dir = upstream::local_root(paths, &source.url)?;
         let folder = upstream::join(&dir, &source.path);
         if !folder.is_dir() {
             return Err(Failure::operational(format!(
@@ -396,7 +500,7 @@ fn fetch(
         }
         Upstream::Local { dir }
     } else {
-        let cache = Cache::open(&context.paths, &source.url, context.prompts)?;
+        let cache = Cache::open(paths, &source.url, prompts)?;
         match requested.or(source.git_ref.as_deref()) {
             None => Upstream::at_ref(cache, None)?,
             Some(git_ref) => {
@@ -409,15 +513,14 @@ fn fetch(
     };
     let snapshot = upstream.snapshot(&source.path)?;
     let entry = upstream.lock_entry(&snapshot);
-    let manifest_text = new_manifest_text(name, current, upstream.resolved(), &snapshot)?;
     Ok(Target {
         version: entry
             .commit
             .clone()
             .unwrap_or_else(|| entry.snapshot.clone()),
+        resolved: upstream.resolved().cloned(),
         snapshot,
         entry,
-        manifest_text,
         notes,
     })
 }
@@ -529,13 +632,14 @@ fn advance_records(
     name: &str,
     current: &Current,
     target: &Target,
+    manifest_text: Option<String>,
 ) -> Result<Backup, Failure> {
     let lock_text = lockfile::with_entry(&current.lock_text, name, &target.entry)
         .map_err(|e| Failure::refused(format!("skiman.lock: {e}")))?;
     let backup = save_fragments(&context.paths, name, current)?;
     let mut completed = Vec::new();
     let failed = |e, completed: &[String]| stopped(e, completed, &context.repo, name, &backup, &[]);
-    if let Some(text) = &target.manifest_text {
+    if let Some(text) = &manifest_text {
         write_record(&context.repo.manifest_file(), text).map_err(|e| failed(e, &completed))?;
         completed.push(format!(
             "wrote the new `source.ref` and `ref_kind` of {name} to skiman.toml"
@@ -635,12 +739,10 @@ fn write_record(path: &Path, text: &str) -> Result<(), Failure> {
 }
 
 /// One skill's disposable staging inside the command's `tmp/<timestamp>/`:
-/// `merge/<name>/` (the temporary merge repository) and
 /// `new/skills/<name>`, `new/upstream/<name>` (the merged skill and the new
 /// snapshot, renamed into place by the swap). Removed when dropped; the
 /// swapped-out folders in `old/` are not part of it.
 struct Workspace {
-    merge_dir: PathBuf,
     new_skill: PathBuf,
     new_upstream: PathBuf,
     old_skill: PathBuf,
@@ -651,7 +753,6 @@ impl Workspace {
     fn new(staging: &Staging, name: &str) -> Workspace {
         let dir = staging.dir();
         Workspace {
-            merge_dir: dir.join("merge").join(name),
             new_skill: dir.join("new/skills").join(name),
             new_upstream: dir.join("new/upstream").join(name),
             old_skill: staging.old_dir().join("skills").join(name),
@@ -667,24 +768,16 @@ impl Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
-        for dir in [&self.merge_dir, &self.new_skill, &self.new_upstream] {
+        for dir in [&self.new_skill, &self.new_upstream] {
             let _ = std::fs::remove_dir_all(dir);
         }
     }
 }
 
-/// base = current `upstream/<name>`, ours = current `skills/<name>` (working
-/// tree, including uncommitted edits), theirs = the new snapshot.
-fn merge(
-    work: &Workspace,
-    base: &Snapshot,
-    ours: &Snapshot,
-    theirs: &Snapshot,
-) -> Result<Outcome, Failure> {
-    std::fs::create_dir_all(&work.merge_dir).map_err(|e| {
-        Failure::operational(format!("cannot create {}: {e}", work.merge_dir.display()))
-    })?;
-    let repo = MergeRepo::create(&work.merge_dir)?;
+/// base = `upstream/<name>`, ours = `skills/<name>` (working tree,
+/// including uncommitted edits), theirs = the new snapshot.
+fn merge(base: &Snapshot, ours: &Snapshot, theirs: &Snapshot) -> Result<Outcome, Failure> {
+    let repo = MergeRepo::create()?;
     let base = repo.commit("base", &base.files)?;
     let ours = repo.commit("ours", &ours.files)?;
     let theirs = repo.commit("theirs", &theirs.files)?;

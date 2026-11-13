@@ -1,7 +1,8 @@
 //! `skiman update` failure paths (spec Merge semantics; clarifications 1, 2
-//! and 7 on #1): re-hash mismatches, failures before the lock entry with
-//! the printed recovery, a failed old-folder backup after the lock entry,
-//! and an unwritable backups directory.
+//! and 7 on #1): a change between the merge and the repo lock, re-hash
+//! mismatches, failures before the lock entry with the printed recovery, a
+//! failed old-folder backup after the lock entry, and an unwritable backups
+//! directory.
 //!
 //! A precise step is hit with the test-only hook: `SKIMAN_TEST_HOOK` names
 //! `<skill>:<point>` and `SKIMAN_TEST_HOOK_RUN` is the shell command debug
@@ -62,6 +63,191 @@ fn update_with_hook(
         .env("SKIMAN_TEST_HOOK", at)
         .env("SKIMAN_TEST_HOOK_RUN", command)
         .assert()
+}
+
+/// update fetches and merges without the repo lock: another command run
+/// meanwhile goes through, and the merge leaves no folder behind.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn another_command_runs_while_update_fetches_and_merges() {
+    let sandbox = Sandbox::new();
+    let up = pdf_with_an_update(&sandbox);
+    let repo = sandbox.skill_repo();
+    let skiman = env!("CARGO_BIN_EXE_skiman");
+
+    update_with_hook(
+        &sandbox,
+        &["pdf"],
+        "pdf:prepared",
+        &format!("'{skiman}' new notes -d 'Takes notes'"),
+    )
+    .code(0);
+    assert!(repo.join("skills/notes/SKILL.md").is_file());
+    assert_eq!(
+        read(repo.join("skills/pdf/reference.md")),
+        lines(&[(20, "upstream fix")])
+    );
+    assert!(read(repo.join("skiman.lock")).contains(&up.head()));
+    assert_eq!(std::fs::read_dir(sandbox.tmp_dir()).unwrap().count(), 0);
+}
+
+/// Under the repo lock, update checks what it decided from: a change to
+/// `skills/<name>`, `upstream/<name>` or the skill's records after the
+/// merge refuses the skill (exit 1), and nothing of it changes. A changed
+/// snapshot no longer matches the lock, which says so first. Another update
+/// of the same skill meanwhile changes its lock entry: its result stays.
+/// `upstream/<name>` changed while the update fetches and changed back
+/// before the lock is caught by checking the merge's base against the lock.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
+    let changed = "skills/pdf, upstream/pdf or their records changed after the update read them; nothing of pdf changed, run the update again";
+    for (file, line, error) in [
+        ("skills/pdf/forms.md", "an edit\n", changed),
+        ("skiman.toml", "ref = \"main\"\n", changed),
+        (
+            "upstream/pdf/forms.md",
+            "an edit\n",
+            "upstream/pdf does not match skiman.lock",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let up = pdf_with_an_update(&sandbox);
+        let repo = sandbox.skill_repo();
+        let lock = read(repo.join("skiman.lock"));
+
+        let assert = update_with_hook(
+            &sandbox,
+            &["pdf"],
+            "pdf:prepared",
+            &format!("printf '{line}' >> '{}'", repo.join(file).display()),
+        )
+        .code(1)
+        .stdout_eq("");
+        let stderr = stderr_of(&assert);
+        assert!(
+            stderr.starts_with(&format!("error: skill pdf: {error}")),
+            "{stderr}"
+        );
+        assert!(read(repo.join(file)).ends_with(line), "{file}");
+        assert_eq!(read(repo.join("skills/pdf/reference.md")), lines(&[]));
+        assert_eq!(read(repo.join("skiman.lock")), lock);
+        assert!(!lock.contains(&up.head()));
+        assert!(backup_dirs(&sandbox).is_empty(), "{file}");
+    }
+
+    let sandbox = Sandbox::new();
+    let up = pdf_with_an_update(&sandbox);
+    let skiman = env!("CARGO_BIN_EXE_skiman");
+    let assert = update_with_hook(
+        &sandbox,
+        &["pdf"],
+        "pdf:prepared",
+        &format!("SKIMAN_TEST_HOOK= '{skiman}' update pdf > /dev/null 2>&1"),
+    )
+    .code(1)
+    .stdout_eq("");
+    assert_eq!(stderr_of(&assert), format!("error: skill pdf: {changed}\n"));
+    assert!(read(sandbox.skill_repo().join("skiman.lock")).contains(&up.head()));
+    sandbox.skiman().arg("check").assert().code(0);
+
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/pdf");
+    up.write(
+        "SKILL.md",
+        "---\nname: pdf\ndescription: The pdf skill\n---\n",
+    )
+    .write("forms.md", lines(&[]));
+    up.commit("v1");
+    // An ssh that runs the remote command here, first writing `$EDIT` when
+    // it is set: `upstream/pdf` changes while the update fetches.
+    let ssh = sandbox.root().join("ssh");
+    write(
+        &ssh,
+        "#!/bin/sh\nfor last; do :; done\n[ -z \"$EDIT\" ] || echo edit > \"$EDIT\"\nexec sh -c \"$last\"\n",
+    );
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let url = format!("ssh://fake{}", up.path().display());
+    let skiman = |args: &[&str]| {
+        sandbox
+            .skiman()
+            .args(args)
+            .env("GIT_SSH_COMMAND", &ssh)
+            .env("GIT_SSH_VARIANT", "simple")
+    };
+    skiman(&["add", &url, "--yes"]).assert().code(0);
+    up.write("forms.md", lines(&[(20, "upstream fix")]));
+    up.commit("v2");
+    let repo = sandbox.skill_repo();
+    let forms = repo.join("upstream/pdf/forms.md");
+    let lock = read(repo.join("skiman.lock"));
+
+    let assert = skiman(&["update", "pdf"])
+        .env("EDIT", &forms)
+        .env("SKIMAN_TEST_HOOK", "pdf:prepared")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("printf '%s' '{}' > '{}'", lines(&[]), forms.display()),
+        )
+        .assert()
+        .code(1)
+        .stdout_eq("");
+    assert_eq!(stderr_of(&assert), format!("error: skill pdf: {changed}\n"));
+    assert_eq!(read(repo.join("skills/pdf/forms.md")), lines(&[]));
+    assert_eq!(read(repo.join("skiman.lock")), lock);
+}
+
+/// update reads a skill's records without the repo lock. Read while another
+/// command was writing them, they refuse the skill; read again under the
+/// lock they are whole, so the update goes on with them instead of sending
+/// the user to repair a skill repo that is fine.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn records_read_while_another_command_writes_them_are_read_again_under_the_lock() {
+    let sandbox = Sandbox::new();
+    let up = pdf_with_an_update(&sandbox);
+    let skiman = env!("CARGO_BIN_EXE_skiman");
+    let out = sandbox.root().join("second");
+    let read_once = sandbox.root().join("read-once");
+    // The second update starts while the first is about to write the lock
+    // entry (`upstream/pdf` already new), and the first goes on only after
+    // the second has read (or ended, which it does within the lock wait).
+    let second = format!(
+        "(SKIMAN_TEST_HOOK=pdf:read-again SKIMAN_TEST_HOOK_RUN=\"touch '{once}'\" '{skiman}' update pdf > '{out}.out' 2> '{out}.err'; echo $? > '{out}.code') & while [ ! -e '{once}' ] && [ ! -e '{out}.code' ]; do sleep 0.05; done",
+        once = read_once.display(),
+        out = out.display(),
+    );
+
+    update_with_hook(&sandbox, &["pdf"], "pdf:before-lock", &second).code(0);
+    let code = out.with_extension("code");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !code.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second update never ended"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+
+    assert!(read_once.exists(), "the second update never read again");
+    assert_eq!(read(out.with_extension("err")), "");
+    assert_eq!(read(&code), "0\n");
+    assert!(
+        read(out.with_extension("out"))
+            .starts_with(&format!("skill pdf: up to date at {}\n", up.head()))
+    );
+    assert!(read(sandbox.skill_repo().join("skiman.lock")).contains(&up.head()));
+    sandbox.skiman().arg("check").assert().code(0);
 }
 
 const NEWER: &str = "edit made during the update\n";

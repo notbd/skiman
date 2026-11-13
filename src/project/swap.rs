@@ -327,7 +327,7 @@ fn create(place: Place, dest: &Path) -> io::Result<PathBuf> {
         Place::Mirror { .. } => "",
         Place::Project { .. } => PROJECT_PREFIX,
     };
-    let dir = fresh_named_dir(place.parent(), prefix)?;
+    let dir = fresh_named_dir(place.parent(), prefix, 0o777)?;
     let filled = (|| {
         if let Place::Project { .. } = place {
             std::fs::write(dir.join(".gitignore"), "*\n")?;

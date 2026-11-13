@@ -5,7 +5,7 @@
 //! then deletes the original.
 
 use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,11 +48,12 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// Creates a new folder `<parent>/<timestamp>`, or `<timestamp>-2`, `-3`, ...
 /// when that name exists. Never reuses an existing folder.
 pub fn fresh_dir(parent: &Path) -> io::Result<PathBuf> {
-    fresh_named_dir(parent, "")
+    fresh_named_dir(parent, "", 0o777)
 }
 
-/// [`fresh_dir`] with `prefix` before the timestamp.
-pub fn fresh_named_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
+/// [`fresh_dir`] with `prefix` before the timestamp, created with `mode`
+/// (the umask applies, as for `mkdir`).
+pub fn fresh_named_dir(parent: &Path, prefix: &str, mode: u32) -> io::Result<PathBuf> {
     std::fs::create_dir_all(parent)?;
     let stamp = timestamp();
     for n in 1.. {
@@ -61,7 +62,7 @@ pub fn fresh_named_dir(parent: &Path, prefix: &str) -> io::Result<PathBuf> {
         } else {
             parent.join(format!("{prefix}{stamp}-{n}"))
         };
-        match std::fs::create_dir(&dir) {
+        match std::fs::DirBuilder::new().mode(mode).create(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),

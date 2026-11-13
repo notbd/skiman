@@ -299,20 +299,25 @@ fn an_upstream_commit_that_does_not_touch_the_skill_advances_only_the_lock_commi
 fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
     let sandbox = Sandbox::new();
     let pdf = installed(&sandbox);
-    let docx = sandbox.upstream("acme/docx");
-    docx.write(
-        "SKILL.md",
-        "---\nname: docx\ndescription: Edit Word files\n---\n",
-    );
-    docx.commit("v1");
-    sandbox
-        .skiman()
-        .args(["add", "acme/docx", "--yes"])
-        .assert()
-        .code(0);
+    let [docx, xlsx] = ["docx", "xlsx"].map(|name| {
+        let up = sandbox.upstream(&format!("acme/{name}"));
+        up.write(
+            "SKILL.md",
+            format!("---\nname: {name}\ndescription: Edit {name} files\n---\n"),
+        );
+        up.commit("v1");
+        sandbox
+            .skiman()
+            .args(["add", &format!("acme/{name}"), "--yes"])
+            .assert()
+            .code(0);
+        up
+    });
     std::fs::remove_dir_all(docx.path()).unwrap();
     pdf.write("reference.md", lines(&[(5, "upstream fix")]));
     let commit = pdf.commit("v2");
+    xlsx.write("reference.md", "# xlsx\n");
+    let xlsx_commit = xlsx.commit("v2");
 
     sandbox
         .skiman()
@@ -321,7 +326,9 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
         .code(4)
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  modified reference.md\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders and records of pdf to [..]\n\
+             skill xlsx: updated to {xlsx_commit}; changed files:\n  added reference.md\n\
+             saved the old folders and records of xlsx to [..]\n"
         ))
         .stderr_eq(
             "error: skill docx: reading the default branch of https://github.com/acme/docx.git failed: [..]\n...",
@@ -331,7 +338,16 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
         read(sandbox.skill_repo().join("skills/pdf/reference.md")),
         lines(&[(5, "upstream fix")])
     );
-    assert!(read(sandbox.skill_repo().join("skiman.lock")).contains(&commit));
+    // Each skill's records are written from the files as they are then,
+    // so the second does not put back the first one's old lock entry.
+    let lock = read(sandbox.skill_repo().join("skiman.lock"));
+    for (name, commit) in [("pdf", &commit), ("xlsx", &xlsx_commit)] {
+        assert!(
+            lock.contains(&format!("[skills.{name}]\ncommit = \"{commit}\"\n")),
+            "{lock}"
+        );
+    }
+    sandbox.skiman().arg("check").assert().code(0);
 }
 
 #[test]

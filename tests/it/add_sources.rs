@@ -90,9 +90,9 @@ fn dry_run_on_a_multi_skill_source_without_a_selection_lists_the_candidates() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-https://github.com/acme/skills.git at [..] (default branch main) holds 2 skills; choose with --skill <name> or --all:
-  docx  (skills/docx)
-  pdf  (skills/pdf)
+https://github.com/acme/skills.git at [..] (default branch main) holds 2 skills; choose with --skill <name>, --skill <folder>/ or --all:
+  docx  (skills/docx/)
+  pdf  (skills/pdf/)
 dry run: nothing was written
 
 "#]])
@@ -159,7 +159,7 @@ fn grouped_skills_in_category_folders_are_found_at_every_depth() {
 
     assert_eq!(
         candidates(&sandbox, "acme/grouped"),
-        "x  (.git-like/x)\ncommit  (dev/git/commit)\ndocx  (office/docx)\npdf  (office/pdf)\n"
+        "x  (.git-like/x/)\ncommit  (dev/git/commit/)\ndocx  (office/docx/)\npdf  (office/pdf/)\n"
     );
 }
 
@@ -175,7 +175,7 @@ fn a_skill_md_nested_below_a_candidate_is_not_a_second_candidate() {
 
     assert_eq!(
         candidates(&sandbox, "acme/nested"),
-        "docx  (skills/docx)\npdf  (skills/pdf)\n"
+        "docx  (skills/docx/)\npdf  (skills/pdf/)\n"
     );
 }
 
@@ -193,7 +193,7 @@ fn a_candidate_without_a_frontmatter_name_goes_by_its_folder_name() {
 
     assert_eq!(
         candidates(&sandbox, "acme/skills"),
-        "notes  (a/notes)\nPDF  (b/pdf)\n"
+        "notes  (a/notes/)\nPDF  (b/pdf/)\n"
     );
 }
 
@@ -316,7 +316,7 @@ fn without_a_terminal_a_multi_skill_source_needs_skill_or_all() {
         .code(2)
         .stdout_eq("")
         .stderr_eq(str![[r#"
-error: missing flag without a terminal: https://github.com/acme/skills.git holds 2 skills; choose with --skill <name> (repeatable) or --all
+error: missing flag without a terminal: https://github.com/acme/skills.git holds 2 skills; choose with --skill <name> or --skill <folder>/ (repeatable), or --all
 
 "#]]);
     assert_eq!(world(&sandbox), before);
@@ -343,7 +343,7 @@ fn an_unknown_skill_name_is_refused() {
         .assert()
         .code(1)
         .stderr_eq(str![[r#"
-error: https://github.com/acme/skills.git has no skill named `pptx`; it holds: docx, pdf
+error: https://github.com/acme/skills.git has no skill named `pptx`; it holds: docx (skills/docx/), pdf (skills/pdf/)
 
 "#]]);
     assert_eq!(world(&sandbox), before);
@@ -369,6 +369,89 @@ error: --name works with a single skill only; install the others under their ups
 }
 
 #[test]
+fn a_skill_value_with_a_slash_names_a_folder_and_one_without_a_name() {
+    // Names and folders crossed: `pdf/` holds pdf-tools, `other/` holds pdf.
+    // A value without `/` selects by name only.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("src/crossed");
+    for (folder, name) in [("pdf", "pdf-tools"), ("other", "pdf")] {
+        std::fs::create_dir_all(dir.join(folder)).unwrap();
+        std::fs::write(dir.join(folder).join("SKILL.md"), skill_md(name)).unwrap();
+    }
+    let toml = || read(sandbox.skill_repo().join("skiman.toml"));
+    let add = |args: &[&str]| {
+        sandbox
+            .skiman()
+            .arg("add")
+            .args(args)
+            .arg("--yes")
+            .assert()
+            .code(0);
+    };
+    add(&["~/src/crossed", "--skill", "pdf", "--name", "pdf-other"]);
+    assert!(
+        toml().contains("[skills.pdf-other.source]\nurl = \"~/src/crossed\"\npath = \"other\"\n")
+    );
+    add(&["~/src/crossed", "--skill", "pdf-tools"]);
+    assert!(
+        toml().contains("[skills.pdf-tools.source]\nurl = \"~/src/crossed\"\npath = \"pdf\"\n")
+    );
+
+    // The same name twice, one of them at the top, beside another skill.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("src/same");
+    for (folder, name) in [("pdf", "pdf"), ("legacy/pdf", "pdf"), ("docx", "docx")] {
+        std::fs::create_dir_all(dir.join(folder)).unwrap();
+        std::fs::write(dir.join(folder).join("SKILL.md"), skill_md(name)).unwrap();
+    }
+    let before = world(&sandbox);
+    for selection in [
+        &["--all"][..],
+        &["--skill", "pdf", "--name", "mine"],
+        &["--skill", "pdf", "--skill", "docx", "--name", "mine"],
+    ] {
+        sandbox
+            .skiman()
+            .args(["add", "~/src/same", "--yes"])
+            .args(selection)
+            .assert()
+            .code(1)
+            .stderr_eq(
+                "error: the selected skills in legacy/pdf/ and pdf/ are both named `pdf`; nothing was installed; install each on its own with `--skill legacy/pdf/ --name <new name>` or `--skill pdf/ --name <new name>`\n",
+            );
+    }
+    assert_eq!(world(&sandbox), before);
+    let toml = || read(sandbox.skill_repo().join("skiman.toml"));
+    for (value, name, path) in [
+        ("pdf/", "pdf-top", "pdf"),
+        ("legacy/pdf", "pdf-legacy", "legacy/pdf"),
+    ] {
+        sandbox
+            .skiman()
+            .args([
+                "add",
+                "~/src/same",
+                "--skill",
+                value,
+                "--name",
+                name,
+                "--yes",
+            ])
+            .assert()
+            .code(0);
+        assert!(
+            toml().contains(&format!(
+                "[skills.{name}.source]\nurl = \"~/src/same\"\npath = \"{path}\"\n"
+            )),
+            "{}",
+            toml()
+        );
+    }
+}
+
+#[test]
 fn one_taken_name_among_the_selection_refuses_the_whole_add() {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -386,7 +469,7 @@ fn one_taken_name_among_the_selection_refuses_the_whole_add() {
         .assert()
         .code(1)
         .stderr_eq(str![[r#"
-error: the name `docx` is taken: skills/docx already exists; nothing was installed; install that skill on its own with `--skill <name> --name <new name>`
+error: the name `docx` is taken: skills/docx already exists; nothing was installed; install that skill on its own with `--skill skills/docx/ --name <new name>`
 
 "#]]);
     assert_eq!(world(&sandbox), before);
@@ -401,8 +484,8 @@ fn with_a_terminal_the_user_picks_from_the_candidates() {
 
     let mut pty = sandbox.skiman_pty(["add", "acme/skills"]);
     let shown = pty.expect("Install which skills? Numbers separated by spaces, or `all`: ");
-    assert!(shown.contains("1. docx  (skills/docx)"), "{shown}");
-    assert!(shown.contains("2. pdf  (skills/pdf)"), "{shown}");
+    assert!(shown.contains("1. docx  (skills/docx/)"), "{shown}");
+    assert!(shown.contains("2. pdf  (skills/pdf/)"), "{shown}");
     pty.send_line("2");
     let shown = pty.expect("Install skill pdf? [y/N] ");
     assert!(shown.contains("reference.md"), "{shown}");

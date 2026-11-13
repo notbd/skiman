@@ -68,7 +68,10 @@ git URL, or a local folder path.
 Flags for `skiman add`:
 
 - `--skill <name>` (repeatable) or `--all`: required for a source that holds
-  several skills; `--dry-run` without them lists the candidates.
+  several skills; `--dry-run` without them lists the candidates. A value
+  with a `/` names a candidate by its folder instead, as the list shows it
+  (`pdf/` for one at the top): that tells apart two skills with the same
+  name.
 - `--name <name>`: install a single skill under another name, when the
   upstream name is invalid, reserved or already taken.
 - `--ref <branch|tag|commit>`: follow a branch other than the default branch,

@@ -116,8 +116,9 @@ pub struct AddArgs {
     /// Where the skills come from: <owner>/<repo>, an https:// or ssh:// git URL,
     /// user@host:path, a GitHub tree or blob URL, or a local folder (/, ~ or .)
     pub source: String,
-    /// Install the skill with this upstream name (repeatable)
-    #[arg(long = "skill", value_name = "NAME")]
+    /// Install the skill with this upstream name, or the one in this folder when the value
+    /// holds a `/` (`pdf/` for a folder at the top; repeatable)
+    #[arg(long = "skill", value_name = "NAME|FOLDER/")]
     pub skills: Vec<String>,
     /// Install every skill the source holds
     #[arg(long, conflicts_with = "skills")]

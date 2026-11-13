@@ -84,7 +84,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         return Ok(Exit::Success);
     } else if !terminal {
         return Err(Failure::usage(format!(
-            "missing flag without a terminal: {} holds {} skills; choose with --skill <name> (repeatable) or --all",
+            "missing flag without a terminal: {} holds {} skills; choose with --skill <name> or --skill <folder>/ (repeatable), or --all",
             source.url,
             candidates.len()
         )));
@@ -92,17 +92,20 @@ fn add(args: Args) -> Result<Exit, Failure> {
         print_candidates(&source, &upstream, &candidates, true);
         pick(&candidates)?
     };
-    if args.name.is_some() && selected.len() > 1 {
+    // Skills sharing one name are refused as such by `check_install_names`.
+    let distinct: BTreeSet<_> = selected.iter().map(|c| &c.upstream_name).collect();
+    if args.name.is_some() && selected.len() > 1 && distinct.len() == selected.len() {
         return Err(Failure::usage(
             "--name works with a single skill only; install the others under their upstream names first",
         ));
     }
+    let name = args.name.filter(|_| selected.len() == 1);
 
     let mut installs = Vec::new();
     for candidate in selected {
         let snapshot = upstream.snapshot(&candidate.path)?;
         let source = source.clone().with_path(candidate.path.clone());
-        installs.push(inspect(source, snapshot, candidate, args.name.clone())?);
+        installs.push(inspect(source, snapshot, candidate, name.clone())?);
     }
     check_install_names(&repo, &installs)?;
 
@@ -226,20 +229,35 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
         .collect())
 }
 
-/// The candidates `--skill` names (by upstream name); an unknown name is refused.
+/// The candidates the `--skill` values name. A value without `/` is an
+/// upstream name; one with `/` is a candidate's folder (`pdf/` for one at
+/// the top), which tells apart two skills with the same name. An unknown
+/// value is refused.
 fn select_named<'a>(
     source: &Source,
     candidates: &'a [Candidate],
-    names: &[String],
+    values: &[String],
 ) -> Result<Vec<&'a Candidate>, Failure> {
-    for name in names {
-        if !candidates.iter().any(|c| &c.upstream_name == name) {
-            let known: Vec<&str> = candidates
+    let names = |c: &Candidate, value: &str| match value.contains('/') {
+        true => c.path == value.trim_end_matches('/'),
+        false => c.upstream_name == value,
+    };
+    for value in values {
+        if !candidates.iter().any(|c| names(c, value)) {
+            let known: Vec<String> = candidates
                 .iter()
-                .map(|c| c.upstream_name.as_str())
+                .map(|c| match c.path.as_str() {
+                    "" => c.upstream_name.clone(),
+                    path => format!("{} ({path}/)", c.upstream_name),
+                })
                 .collect();
+            let what = if value.contains('/') {
+                "in the folder"
+            } else {
+                "named"
+            };
             return Err(Failure::refused(format!(
-                "{} has no skill named `{name}`; it holds: {}",
+                "{} has no skill {what} `{value}`; it holds: {}",
                 source.url,
                 known.join(", ")
             )));
@@ -247,7 +265,7 @@ fn select_named<'a>(
     }
     Ok(candidates
         .iter()
-        .filter(|c| names.contains(&c.upstream_name))
+        .filter(|c| values.iter().any(|value| names(c, value)))
         .collect())
 }
 
@@ -261,7 +279,7 @@ fn print_candidates(
     let choose = if numbered {
         ""
     } else {
-        "; choose with --skill <name> or --all"
+        "; choose with --skill <name>, --skill <folder>/ or --all"
     };
     out!(
         "{} {} holds {} skills{choose}:",
@@ -276,7 +294,7 @@ fn print_candidates(
             String::new()
         };
         out!(
-            "  {number}{}  ({})",
+            "  {number}{}  ({}/)",
             candidate.upstream_name,
             candidate.path
         );
@@ -347,21 +365,22 @@ fn inspect(
 /// Refuses (exit 1) the whole add when any install name is invalid,
 /// reserved or taken (also by another selected skill), pointing to `--name`.
 fn check_install_names(repo: &SkillRepo, installs: &[Install]) -> Result<(), Failure> {
-    let mut seen = BTreeSet::new();
+    let mut seen = BTreeMap::new();
     for install in installs {
         let name = &install.name;
-        let check = if seen.insert(name.as_str()) {
-            names::check_new_name(name).and_then(|()| names::check_not_taken(repo, name))
-        } else {
-            Err(Failure::refused(format!(
-                "two selected skills are both named `{name}`"
-            )))
-        };
+        if let Some(other) = seen.insert(name.as_str(), install.source.path.as_str()) {
+            let path = &install.source.path;
+            return Err(Failure::refused(format!(
+                "the selected skills in {other}/ and {path}/ are both named `{name}`; nothing was installed; install each on its own with `--skill {other}/ --name <new name>` or `--skill {path}/ --name <new name>`"
+            )));
+        }
+        let check = names::check_new_name(name).and_then(|()| names::check_not_taken(repo, name));
         check.map_err(|failure| {
             let hint = if installs.len() == 1 {
-                "install it under another name with `--name <name>`"
+                "install it under another name with `--name <name>`".to_owned()
             } else {
-                "nothing was installed; install that skill on its own with `--skill <name> --name <new name>`"
+                let path = &install.source.path;
+                format!("nothing was installed; install that skill on its own with `--skill {path}/ --name <new name>`")
             };
             Failure::refused(format!("{}; {hint}", failure.message))
         })?;

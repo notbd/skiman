@@ -86,7 +86,7 @@ impl Staging {
                 Failure::operational(format!("cannot create {}: {e}", parent.display()))
             })?;
         }
-        fsutil::place_new_or_rename(from, to).map_err(|e| match e.kind() {
+        fsutil::publish(from, to).map_err(|e| match e.kind() {
             io::ErrorKind::AlreadyExists => Failure::operational(format!(
                 "{} appeared while skiman was writing; nothing was put in its place",
                 to.display()

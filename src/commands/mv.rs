@@ -184,7 +184,7 @@ fn rename(from: &Path, to: &Path) -> Result<(), Failure> {
             to.display()
         ))
     };
-    fsutil::place_new_or_rename(from, to).map_err(|e| match e.kind() {
+    fsutil::publish(from, to).map_err(|e| match e.kind() {
         std::io::ErrorKind::AlreadyExists => {
             fail("it appeared while skiman was renaming".to_owned())
         }

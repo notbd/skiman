@@ -58,6 +58,6 @@ pub fn materialise(repo: &SkillRepo) -> io::Result<bool> {
         return Ok(false);
     }
     std::fs::create_dir_all(&dir)?;
-    fsutil::write_atomic(&file, wanted.as_bytes())?;
+    fsutil::write_derived(&file, wanted.as_bytes())?;
     Ok(true)
 }

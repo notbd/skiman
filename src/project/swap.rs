@@ -167,7 +167,7 @@ impl Replace<'_> {
                 )));
             }
             (true, expected) => {
-                if let Err(e) = fsutil::place_new_or_rename(self.dest, &old) {
+                if let Err(e) = fsutil::publish(self.dest, &old) {
                     remove_swap(&swap);
                     return Err(match e.kind() {
                         io::ErrorKind::CrossesDevices => {
@@ -198,7 +198,7 @@ impl Replace<'_> {
             Some(dir) => std::fs::create_dir_all(dir),
             None => Ok(()),
         }
-        .and_then(|()| fsutil::place_new_or_rename(&staged, self.dest));
+        .and_then(|()| fsutil::publish(&staged, self.dest));
         if let Err(e) = placed {
             if set_aside.is_none() {
                 remove_swap(&swap);
@@ -251,7 +251,7 @@ impl Replace<'_> {
     /// and the answer says where, and whether something took its place.
     fn put_back(&self, old: &Path, swap: &Path, outcome: impl Fn(String) -> Outcome) -> Outcome {
         let dest = self.dest.display().to_string();
-        match fsutil::place_new_or_rename(old, self.dest) {
+        match fsutil::publish(old, self.dest) {
             Ok(()) => {
                 remove_swap(swap);
                 outcome(dest)
@@ -297,7 +297,9 @@ fn create(place: Place, dest: &Path) -> io::Result<PathBuf> {
         }
         std::fs::write(dir.join("target"), dest.display().to_string())?;
         std::fs::create_dir(dir.join("new"))?;
-        std::fs::create_dir(dir.join("old"))
+        std::fs::create_dir(dir.join("old"))?;
+        // On the disk before the original moves: it says where the original went.
+        fsutil::flush_tree(&dir)
     })();
     if let Err(e) = filled {
         let _ = std::fs::remove_dir_all(&dir);

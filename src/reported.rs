@@ -56,6 +56,6 @@ impl Reported {
         }
         let file = Reported::file(paths);
         std::fs::create_dir_all(paths.state_dir())?;
-        fsutil::write_atomic(&file, doc.to_string().as_bytes())
+        fsutil::write_derived(&file, doc.to_string().as_bytes())
     }
 }

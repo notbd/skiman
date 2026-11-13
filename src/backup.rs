@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
+use crate::fsutil::{self, entries};
 use crate::paths::Paths;
 use crate::tree::{self, IGNORED_NAMES};
 
@@ -118,7 +119,7 @@ impl Backups {
     /// step, to `<backup>/<rel>`.
     pub fn save(&mut self, rel: &Path, content: &[u8]) -> io::Result<PathBuf> {
         let dest = self.fresh(rel)?;
-        std::fs::write(&dest, content)?;
+        fsutil::write_new(&dest, content)?;
         self.used = true;
         Ok(dest)
     }
@@ -141,7 +142,7 @@ impl Backups {
     /// holding a special file is refused and left in place.
     pub fn move_in(&mut self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
         let dest = self.fresh(rel)?;
-        match std::fs::rename(original, &dest) {
+        match fsutil::publish(original, &dest) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
                 move_across_filesystems(original, &dest)?;
@@ -174,23 +175,6 @@ fn remove(path: &Path) -> io::Result<()> {
     } else {
         std::fs::remove_file(path)
     }
-}
-
-/// Every entry at or below `path`, never following symlinks.
-fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {
-    let mut out = vec![(path.to_path_buf(), std::fs::symlink_metadata(path)?)];
-    let mut i = 0;
-    while i < out.len() {
-        if out[i].1.is_dir() {
-            for entry in std::fs::read_dir(&out[i].0)? {
-                let entry = entry?;
-                let meta = std::fs::symlink_metadata(entry.path())?;
-                out.push((entry.path(), meta));
-            }
-        }
-        i += 1;
-    }
-    Ok(out)
 }
 
 /// Every special file (FIFO, socket, device) at or below `path`, never

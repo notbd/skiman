@@ -1432,11 +1432,12 @@ fn write_repo(
             .zip(todo)
             .filter(|(_, (_, step))| *step != Step::Keep)
     };
-    for ((piece, content), _) in writes() {
+    for ((piece, content), (_, step)) in writes() {
         let path = stage.join(piece.rel());
-        match content {
-            PieceContent::Folder(snapshot) => fsutil::write_files(&path, &snapshot.files)?,
-            PieceContent::File(bytes) => fsutil::write_file(&path, false, bytes)?,
+        match (step, content) {
+            (Step::Replace(_), PieceContent::File(_)) => {}
+            (_, PieceContent::Folder(snapshot)) => fsutil::write_files(&path, &snapshot.files)?,
+            (_, PieceContent::File(bytes)) => fsutil::write_file(&path, false, bytes)?,
         }
     }
     for ((piece, content), (_, step)) in writes() {
@@ -1454,16 +1455,14 @@ fn write_repo(
             // A file is replaced in one step, so the skill repo is never
             // without its `skiman.toml`: the old content is written to the
             // backup, then the new file is renamed over it.
-            (Step::Replace(old), PieceContent::File(_)) => {
+            (Step::Replace(old), PieceContent::File(bytes)) => {
                 let dest = backups.save(&saved, old).map_err(cannot_save)?;
+                // The backup is the only other copy once the file is replaced.
+                fsutil::barrier(&dest).map_err(cannot_save)?;
                 out!("saved the old {} as {}", target.display(), dest.display());
                 test_hook::at("import", &format!("rename:{rel}"));
-                std::fs::rename(&staged, &target).map_err(|e| {
-                    Failure::operational(format!(
-                        "cannot rename {} to {}: {e}",
-                        staged.display(),
-                        target.display()
-                    ))
+                fsutil::write_atomic(&target, bytes).map_err(|e| {
+                    Failure::operational(format!("cannot write {}: {e}", target.display()))
                 })?;
             }
             (step, _) => {

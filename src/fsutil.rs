@@ -2,9 +2,14 @@
 //! never replaces, lexical paths, and the check that a write's parent
 //! folders are real folders.
 
+use std::fs::File;
 use std::io::{self, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+
+use rustix::io::Errno;
 
 use crate::failure::Failure;
 use crate::snapshot::SnapshotFile;
@@ -42,14 +47,16 @@ fn create_temporary_sibling<T>(
 }
 
 /// Writes `contents` to a new temporary file created with `mode` (the umask
-/// applies), sets `permissions` on it when given, then renames it to `path`.
-/// The file is created exclusively, so a symlink planted under its name is
-/// never followed. On failure only that file is removed.
+/// applies), sets `permissions` on it when given, then renames it to `path`;
+/// `durable` flushes the file before the rename and the folder after. The
+/// file is created exclusively, so a symlink planted under its name is never
+/// followed. On failure only that file is removed.
 fn replace_atomic(
     path: &Path,
     contents: &[u8],
     mode: u32,
     permissions: Option<std::fs::Permissions>,
+    durable: bool,
 ) -> io::Result<()> {
     let (tmp, mut file) = create_temporary_sibling(path, |tmp| {
         std::fs::OpenOptions::new()
@@ -61,7 +68,15 @@ fn replace_atomic(
     let result = file
         .write_all(contents)
         .and_then(|()| permissions.map_or(Ok(()), |p| file.set_permissions(p)))
-        .and_then(|()| std::fs::rename(&tmp, path));
+        .and_then(|()| match durable {
+            true => Ok(rustix::fs::fsync(&file)?),
+            false => Ok(()),
+        })
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .and_then(|()| match durable {
+            true => flush_path(path.parent().expect("a file has a parent")),
+            false => Ok(()),
+        });
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
@@ -77,7 +92,6 @@ fn replace_atomic(
 /// cannot be renamed to `to` ([`crossing`]).
 pub fn place_new(from: &Path, to: &Path) -> io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
-    use rustix::io::Errno;
     match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
         Err(e) if [Errno::NOTSUP, Errno::OPNOTSUPP, Errno::INVAL, Errno::NOSYS].contains(&e) => {
             place_without_noreplace(from, to)
@@ -134,6 +148,102 @@ pub fn crossing(from: &Path, to: &Path) -> String {
     )
 }
 
+/// [`place_new_or_rename`] for content that has to last (ADR 0005), then
+/// `to`'s folder flushed. Whoever wrote `from` flushed it; an original is
+/// not skiman's to flush, and `from`'s old folder is not flushed either.
+pub fn publish(from: &Path, to: &Path) -> io::Result<()> {
+    place_new_or_rename(from, to)?;
+    flush_path(to.parent().expect("a destination has a parent"))
+}
+
+/// Writes `contents` to a new file at `path`, which must not exist: under a
+/// temporary name first, flushed, then renamed in without replacing, and
+/// the folder flushed. A reader sees all of it or nothing.
+pub fn write_new(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let (tmp, mut file) = create_temporary_sibling(path, |tmp| File::create_new(tmp))?;
+    let written = file
+        .write_all(contents)
+        .and_then(|()| Ok(rustix::fs::fsync(&file)?));
+    written.and_then(|()| publish(&tmp, path)).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// The devices this run flushed to, each with the last path flushed there.
+static FLUSHED: Mutex<Vec<(u64, PathBuf)>> = Mutex::new(Vec::new());
+
+/// Asks the system to write what the file or folder at `path` holds to the
+/// disk (`fsync`), and remembers its device: on Apple platforms `fsync`
+/// reaches only the drive's own cache, and [`drain`] takes it the rest of
+/// the way. A folder some filesystems refuse to fsync (`EBADF`, `EINVAL`)
+/// counts as flushed, as in PostgreSQL's `fsync_fname_ext`.
+pub fn flush_path(path: &Path) -> io::Result<()> {
+    let file = File::open(path)?;
+    let meta = file.metadata()?;
+    match rustix::fs::fsync(&file) {
+        Err(e) if meta.is_dir() && [Errno::BADF, Errno::INVAL].contains(&e) => {}
+        done => done?,
+    }
+    let device = meta.dev();
+    let mut flushed = FLUSHED.lock().unwrap_or_else(PoisonError::into_inner);
+    flushed.retain(|(d, _)| *d != device);
+    flushed.push((device, path.to_owned()));
+    Ok(())
+}
+
+/// Puts everything flushed on the device that holds `path` on the disk,
+/// the drive's cache included: `F_FULLFSYNC` on Apple platforms, falling
+/// back to `fsync` where a filesystem refuses it, as SQLite does; elsewhere
+/// `fsync` already waits for the device.
+pub fn barrier(path: &Path) -> io::Result<()> {
+    let file = File::open(path)?;
+    #[cfg(target_vendor = "apple")]
+    if rustix::fs::fcntl_fullfsync(&file).is_ok() {
+        return Ok(());
+    }
+    Ok(rustix::fs::fsync(&file)?)
+}
+
+/// [`barrier`] once on every device this run flushed to (on a path that
+/// still exists there); skiman calls it before it exits.
+pub fn drain() -> io::Result<()> {
+    let flushed = std::mem::take(&mut *FLUSHED.lock().unwrap_or_else(PoisonError::into_inner));
+    for (_, path) in flushed {
+        let existing = path.ancestors().find(|p| p.exists()).unwrap_or(&path);
+        let failed = |e: io::Error| format!("cannot flush {}: {e}", existing.display());
+        barrier(existing).map_err(|e| io::Error::new(e.kind(), failed(e)))?;
+    }
+    Ok(())
+}
+
+/// Flushes every file and folder at or below `root`, links not followed.
+pub fn flush_tree(root: &Path) -> io::Result<()> {
+    for (path, meta) in entries(root)? {
+        if !meta.is_symlink() {
+            flush_path(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every entry at or below `path`, parents before what they hold, never
+/// following symlinks.
+pub fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {
+    let mut out = vec![(path.to_path_buf(), std::fs::symlink_metadata(path)?)];
+    let mut i = 0;
+    while i < out.len() {
+        if out[i].1.is_dir() {
+            for entry in std::fs::read_dir(&out[i].0)? {
+                let entry = entry?;
+                let meta = std::fs::symlink_metadata(entry.path())?;
+                out.push((entry.path(), meta));
+            }
+        }
+        i += 1;
+    }
+    Ok(out)
+}
+
 /// The text of the file at `path`; `None` when there is none.
 pub fn read_text(path: &Path) -> Result<Option<String>, Failure> {
     match std::fs::read_to_string(path) {
@@ -146,30 +256,46 @@ pub fn read_text(path: &Path) -> Result<Option<String>, Failure> {
     }
 }
 
-/// Writes `contents` to a temporary file in the same directory, then renames
-/// it to `path`. The new file gets the mode `std::fs::write` would give it.
+/// Writes `contents` to a temporary file in the same directory, flushed,
+/// then renames it to `path` and flushes the folder. The new file gets the
+/// mode `std::fs::write` would give it.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    replace_atomic(path, contents, 0o666, None)
+    replace_atomic(path, contents, 0o666, None, true)
+}
+
+/// [`write_atomic`] without the flushes, for content skiman derives again
+/// when it is lost (sync's own files).
+pub fn write_derived(path: &Path, contents: &[u8]) -> io::Result<()> {
+    replace_atomic(path, contents, 0o666, None, false)
 }
 
 /// Writes `files` below `dir` (created even when `files` is empty), each
-/// with mode `0o755` when executable, else `0o644`.
+/// with mode `0o755` when executable, else `0o644`, each flushed, then
+/// the folders they are in, for [`publish`].
 pub fn write_files(dir: &Path, files: &[SnapshotFile]) -> Result<(), Failure> {
     std::fs::create_dir_all(dir)
         .map_err(|e| Failure::operational(format!("cannot create {}: {e}", dir.display())))?;
     for file in files {
         write_file(&dir.join(&file.path), file.executable, &file.content)?;
     }
-    Ok(())
+    let folders = entries(dir).and_then(|all| {
+        let mut folders = all.into_iter().filter(|(_, meta)| meta.is_dir());
+        folders.try_for_each(|(folder, _)| flush_path(&folder))
+    });
+    folders.map_err(|e| Failure::operational(format!("cannot flush {}: {e}", dir.display())))
 }
 
-/// Writes one file of [`write_files`], creating its parent folders.
+/// Writes one file of [`write_files`], creating its parent folders, and
+/// flushes it, mode included.
 pub fn write_file(path: &Path, executable: bool, content: &[u8]) -> Result<(), Failure> {
     let io = |e: io::Error| Failure::operational(format!("cannot write {}: {e}", path.display()));
     std::fs::create_dir_all(path.parent().expect("file has a parent")).map_err(io)?;
-    std::fs::write(path, content).map_err(io)?;
     let mode = if executable { 0o755 } else { 0o644 };
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(io)
+    let mut file = File::create(path).map_err(io)?;
+    file.write_all(content)
+        .and_then(|()| file.set_permissions(std::fs::Permissions::from_mode(mode)))
+        .and_then(|()| Ok(rustix::fs::fsync(&file)?))
+        .map_err(io)
 }
 
 /// Like [`write_atomic`], with mode `0o755`, so `path` is never seen without its execute bits.
@@ -184,7 +310,7 @@ pub fn rewrite_atomic(
     contents: &[u8],
     permissions: std::fs::Permissions,
 ) -> io::Result<()> {
-    replace_atomic(path, contents, 0o600, Some(permissions))
+    replace_atomic(path, contents, 0o600, Some(permissions), true)
 }
 
 /// Points skiman's own link `link` at `target`: creates the new link under a
@@ -312,6 +438,18 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(dir.join("file2")).unwrap(), "new");
         assert!(std::fs::symlink_metadata(dir.join("link")).is_err() && !dir.join("file").exists());
+    }
+
+    #[test]
+    fn drain_reaches_a_flushed_folder_that_is_gone_through_its_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let gone = temp.path().join("staged");
+        std::fs::create_dir(&gone).unwrap();
+        flush_path(&gone).unwrap();
+        std::fs::remove_dir(&gone).unwrap();
+
+        // Other tests flush on their own threads: only the result is checked.
+        drain().unwrap();
     }
 
     #[test]

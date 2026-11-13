@@ -210,7 +210,7 @@ fn restore_over_a_file_on_a_volume_without_hard_links_fails_and_leaves_the_file_
     );
     assert!(
         stderr.contains(&format!(
-            "error: cannot write {}: the hard-link probe failed (",
+            "error: cannot write {}: this volume cannot put a file in place without replacing what is there (",
             agents.display()
         )),
         "{stderr}"

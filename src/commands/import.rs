@@ -49,7 +49,7 @@ use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
-use crate::staging::{self, Staging};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::{self, Kind, Overlay, Tree, WorkingTree};
@@ -1472,7 +1472,7 @@ fn write_repo(
                     out!("moved {} to {}", target.display(), dest.display());
                 }
                 test_hook::at("import", &format!("rename:{rel}"));
-                staging::rename_into_place(&staged, &target)?;
+                staging.place(&staged, &target)?;
             }
         }
         out!("created {}", target.display());

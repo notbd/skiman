@@ -539,6 +539,7 @@ dependencies = [
  "clap",
  "regex",
  "rexpect",
+ "rustix",
  "saphyr",
  "serde_json",
  "sha2",

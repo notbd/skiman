@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::backup::{self, Backups};
 use crate::failure::Failure;
+use crate::fsutil;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
@@ -21,6 +22,8 @@ use crate::repo_lock::RepoLock;
 #[derive(Debug)]
 pub struct Staging {
     dir: PathBuf,
+    /// The skill repo's root.
+    root: PathBuf,
 }
 
 impl Staging {
@@ -28,14 +31,25 @@ impl Staging {
     /// the command without writing (exit 1 or 2), and before its first write.
     /// Moves tmp leftovers to `backups/<timestamp>/repo/.skiman/tmp/` and
     /// prints that path; if the move fails, stops with exit 4 naming the path
-    /// to move by hand. tmp leftovers are never deleted.
+    /// to move by hand. tmp leftovers are never deleted. Refuses (exit 4) a
+    /// `.skiman/tmp/` reached through a link.
     pub fn begin(paths: &Paths, repo: &SkillRepo, _lock: &RepoLock) -> Result<Staging, Failure> {
         let tmp = repo.tmp_dir();
+        let cannot = |why: String| {
+            Failure::operational(format!(
+                "cannot create a folder in {}: {why}",
+                tmp.display()
+            ))
+        };
+        if let Some(why) = fsutil::broken_chain(repo.root(), &tmp.join("new")) {
+            return Err(cannot(why));
+        }
         move_tmp_leftovers(paths, &tmp)?;
-        let dir = backup::fresh_dir(&tmp).map_err(|e| {
-            Failure::operational(format!("cannot create a folder in {}: {e}", tmp.display()))
-        })?;
-        Ok(Staging { dir })
+        let dir = backup::fresh_dir(&tmp).map_err(|e| cannot(e.to_string()))?;
+        Ok(Staging {
+            dir,
+            root: repo.root().to_owned(),
+        })
     }
 
     pub fn dir(&self) -> &Path {
@@ -49,6 +63,37 @@ impl Staging {
     /// backup. Never disposable.
     pub fn old_dir(&self) -> PathBuf {
         self.dir.join("old")
+    }
+
+    /// Renames `from` (staged under `tmp/`, or an old folder `update` sets
+    /// aside) to `to`, where nothing may be: an entry that appeared there is
+    /// never replaced ([`fsutil::place_new_or_rename`]). Every folder of the
+    /// skill repo on the way to `to` must be a real folder. Fails with exit
+    /// 4, never copying instead.
+    pub fn place(&self, from: &Path, to: &Path) -> Result<(), Failure> {
+        let fail = |why: String| {
+            Failure::operational(format!(
+                "cannot rename {} to {}: {why}",
+                from.display(),
+                to.display()
+            ))
+        };
+        if let Some(why) = fsutil::broken_chain(&self.root, to) {
+            return Err(fail(why));
+        }
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                Failure::operational(format!("cannot create {}: {e}", parent.display()))
+            })?;
+        }
+        fsutil::place_new_or_rename(from, to).map_err(|e| match e.kind() {
+            io::ErrorKind::AlreadyExists => Failure::operational(format!(
+                "{} appeared while skiman was writing; nothing was put in its place",
+                to.display()
+            )),
+            io::ErrorKind::CrossesDevices => Failure::operational(fsutil::crossing(from, to)),
+            _ => fail(e.to_string()),
+        })
     }
 }
 
@@ -126,35 +171,4 @@ fn list(dir: &Path) -> io::Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
-}
-
-/// Renames `from` (staged under `tmp/`) to `to` in the skill repo. A rename
-/// across filesystems fails with exit 4 and never falls back to copying.
-pub fn rename_into_place(from: &Path, to: &Path) -> Result<(), Failure> {
-    if std::fs::symlink_metadata(to).is_ok() {
-        return Err(Failure::operational(format!(
-            "{} appeared while skiman was writing; nothing was put in its place",
-            to.display()
-        )));
-    }
-    if let Some(parent) = to.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            Failure::operational(format!("cannot create {}: {e}", parent.display()))
-        })?;
-    }
-    std::fs::rename(from, to).map_err(|e| {
-        if e.kind() == io::ErrorKind::CrossesDevices {
-            Failure::operational(format!(
-                "cannot rename {} to {}: they are on different filesystems (skiman never copies instead); keep .skiman/ on the skill repo's filesystem",
-                from.display(),
-                to.display()
-            ))
-        } else {
-            Failure::operational(format!(
-                "cannot rename {} to {}: {e}",
-                from.display(),
-                to.display()
-            ))
-        }
-    })
 }

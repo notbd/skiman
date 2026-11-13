@@ -25,7 +25,7 @@ use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
-use crate::staging::{self, Staging};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
@@ -80,7 +80,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
     let dir = backups.dir().map_err(nothing)?;
     let copy = repo.skill_dir(name);
-    staging::rename_into_place(&staged, &copy)?;
+    staging.place(&staged, &copy)?;
     out!("created {}", copy.display());
     let rel = Path::new(tool.id).join(name);
     let moved = backups.move_in(&entry, &rel).map_err(|e| {

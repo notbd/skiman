@@ -248,16 +248,20 @@ set-aside copy (step 3), and `target` the destination path.
 
 1. Read the source into an in-memory snapshot and run the safety rules on it.
    Its hash becomes the new synced hash; the live source is not re-read.
-2. Write the snapshot into the swap folder. For a file, also make and remove
-   a hard link to it there: on a filesystem without hard links this probe
-   fails, and the destination is left untouched.
+2. Write the snapshot into the swap folder. For a file, also place it under
+   a probe name and back, as step 4 places it: on a filesystem with neither
+   a rename that never replaces nor hard links (exFAT) this probe fails, and
+   the destination is left untouched.
 3. If the destination exists, rename it into the swap folder (same
    filesystem, so it keeps its inode and a late write through an open handle
    lands in it) and hash it. If it no longer matches what the plan saw, put
-   it back without replacing anything, and report a conflict.
-4. Put the new entry in place without replacing anything: a hard link for a
-   file (fails if something appeared), `rename` for a folder (fails over a
-   file or a non-empty folder).
+   it back without replacing anything, and report a conflict. A folder that
+   cannot be renamed there (on Linux, one from a lower overlayfs layer)
+   stops the replace before anything moved.
+4. Put the new entry in place without replacing anything: a rename that
+   never replaces (`RENAME_NOREPLACE`); where the filesystem has none, a hard
+   link for a file, and for a folder a `rename` once the name is found free
+   (`rename` never replaces a file or a non-empty folder).
 5. Move the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
    for mirror content, `backups/<ts>/projects/<id>/…` for project content):
    a rename, or on another filesystem a copy compared entry by entry, then

@@ -1,5 +1,6 @@
-//! Small filesystem helpers: writes that appear in one step, lexical paths,
-//! and the check that a write's parent folders are real folders.
+//! Small filesystem helpers: writes that appear in one step, a rename that
+//! never replaces, lexical paths, and the check that a write's parent
+//! folders are real folders.
 
 use std::io::{self, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -65,6 +66,72 @@ fn replace_atomic(
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Renames `from` to `to` without replacing anything at `to`: an entry there,
+/// even one that appeared a moment ago, fails with `AlreadyExists`. Where
+/// the filesystem has no such rename (exFAT, NFS), a symlink is made again
+/// at `to` and a file hard-linked there, neither of which replaces anything;
+/// anything else, or a file where there are no hard links either, fails
+/// with `Unsupported` before anything moved. `CrossesDevices` when `from`
+/// cannot be renamed to `to` ([`crossing`]).
+pub fn place_new(from: &Path, to: &Path) -> io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    use rustix::io::Errno;
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Err(e) if [Errno::NOTSUP, Errno::OPNOTSUPP, Errno::INVAL, Errno::NOSYS].contains(&e) => {
+            place_without_noreplace(from, to)
+        }
+        other => Ok(other?),
+    }
+}
+
+/// [`place_new`] where the rename has no no-replace flag.
+fn place_without_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    let placed = if meta.is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+    } else if meta.is_file() {
+        std::fs::hard_link(from, to)
+    } else {
+        Err(io::ErrorKind::Unsupported.into())
+    };
+    match placed {
+        Ok(()) => std::fs::remove_file(from),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+        Err(e) => Err(io::Error::new(io::ErrorKind::Unsupported, e)),
+    }
+}
+
+/// [`place_new`] for new content, or for an entry moving to a name nothing
+/// else uses: where the filesystem cannot place it without replacing, it
+/// is renamed once nothing is found at `to`, as skiman always did there, so
+/// what appears between the check and the rename is replaced: an empty
+/// folder, or for a file where hard links fail too, any file or link.
+pub fn place_new_or_rename(from: &Path, to: &Path) -> io::Result<()> {
+    match place_new(from, to) {
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => match std::fs::symlink_metadata(to) {
+            Ok(_) => Err(io::ErrorKind::AlreadyExists.into()),
+            Err(_) => std::fs::rename(from, to),
+        },
+        other => other,
+    }
+}
+
+/// Why `from` could not be renamed to `to` when the rename failed with
+/// `CrossesDevices`; nothing moved. On Linux a folder can also come from a
+/// lower layer of a container image (overlayfs), which cannot be renamed.
+pub fn crossing(from: &Path, to: &Path) -> String {
+    let folder = std::fs::symlink_metadata(from).is_ok_and(|m| m.is_dir());
+    let overlay = match cfg!(target_os = "linux") && folder {
+        true => ", or it is a folder from a lower layer of a container image (overlayfs)",
+        false => "",
+    };
+    format!(
+        "cannot rename {} to {}: they are on different filesystems{overlay}; nothing was moved",
+        from.display(),
+        to.display()
+    )
 }
 
 /// The text of the file at `path`; `None` when there is none.
@@ -202,6 +269,71 @@ pub fn broken_chain(inside: &Path, dest: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the filesystem has no no-replace rename (exFAT, NFS), what
+    /// appeared at the destination after any check is still never replaced:
+    /// the fallback is called as `place_new` calls it after `ENOTSUP`.
+    #[test]
+    fn without_a_no_replace_rename_a_link_or_file_never_replaces_and_a_folder_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        std::os::unix::fs::symlink("target", dir.join("link")).unwrap();
+        std::fs::write(dir.join("file"), "new").unwrap();
+        std::fs::create_dir(dir.join("folder")).unwrap();
+        for (from, appeared) in [("link", "appeared-file"), ("file", "appeared-link")] {
+            match appeared {
+                "appeared-file" => std::fs::write(dir.join(appeared), "kept").unwrap(),
+                _ => std::os::unix::fs::symlink("kept", dir.join(appeared)).unwrap(),
+            }
+            let e = place_without_noreplace(&dir.join(from), &dir.join(appeared)).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{from}");
+            assert!(
+                std::fs::symlink_metadata(dir.join(from)).is_ok(),
+                "{from} stays"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("appeared-file")).unwrap(),
+            "kept"
+        );
+        assert_eq!(
+            std::fs::read_link(dir.join("appeared-link")).unwrap(),
+            Path::new("kept")
+        );
+        let e = place_without_noreplace(&dir.join("folder"), &dir.join("free")).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::Unsupported);
+        assert!(dir.join("folder").is_dir() && !dir.join("free").exists());
+
+        place_without_noreplace(&dir.join("link"), &dir.join("link2")).unwrap();
+        place_without_noreplace(&dir.join("file"), &dir.join("file2")).unwrap();
+        assert_eq!(
+            std::fs::read_link(dir.join("link2")).unwrap(),
+            Path::new("target")
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("file2")).unwrap(), "new");
+        assert!(std::fs::symlink_metadata(dir.join("link")).is_err() && !dir.join("file").exists());
+    }
+
+    #[test]
+    fn place_new_never_replaces_an_entry_and_moves_into_a_free_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        std::fs::write(dir.join("new"), "new").unwrap();
+        std::fs::create_dir(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("taken"), "kept").unwrap();
+        std::fs::create_dir(dir.join("empty")).unwrap();
+        for (from, to) in [("new", "taken"), ("folder", "empty"), ("folder", "taken")] {
+            let e = place_new(&dir.join(from), &dir.join(to)).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{from} to {to}");
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("taken")).unwrap(), "kept");
+        assert!(dir.join("empty").is_dir());
+
+        place_new(&dir.join("new"), &dir.join("placed")).unwrap();
+        place_new(&dir.join("folder"), &dir.join("moved")).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("placed")).unwrap(), "new");
+        assert!(dir.join("moved").is_dir() && !dir.join("folder").exists());
+    }
 
     fn root() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();

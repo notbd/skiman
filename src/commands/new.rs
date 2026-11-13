@@ -5,11 +5,14 @@ use std::collections::BTreeSet;
 use crate::Exit;
 use crate::commands::{ask, has_terminal};
 use crate::failure::{Failure, finish};
+use crate::fsutil;
 use crate::names;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
+use crate::snapshot::SnapshotFile;
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::{Overlay, WorkingTree};
 
@@ -53,14 +56,21 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
     };
     rules::validate_write(&candidate, &scope)?;
 
-    let dir = repo.skill_dir(name);
-    let file = dir.join("SKILL.md");
-    let write = || -> std::io::Result<()> {
-        std::fs::create_dir_all(&dir)?;
-        std::fs::write(&file, &content)
+    // Staged whole, then renamed in: never half a skill, never over one.
+    let staging = Staging::begin(&paths, &repo, &lock)?;
+    let staged = staging.dir().join("skills").join(name);
+    let skill_md = SnapshotFile {
+        path: "SKILL.md".to_owned(),
+        executable: false,
+        content: content.into_bytes(),
     };
-    write().map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
-    out!("created {}", file.display());
+    fsutil::write_files(&staged, &[skill_md])?;
+    staging.place(&staged, &repo.skill_dir(name))?;
+    drop(staging);
+    out!(
+        "created {}",
+        repo.skill_dir(name).join("SKILL.md").display()
+    );
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::Exit;
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
-use crate::fsutil::{read_text, rewrite_atomic, write_atomic};
+use crate::fsutil::{self, read_text, rewrite_atomic, write_atomic};
 use crate::lockfile;
 use crate::manifest;
 use crate::names;
@@ -184,10 +184,13 @@ fn rename(from: &Path, to: &Path) -> Result<(), Failure> {
             to.display()
         ))
     };
-    if std::fs::symlink_metadata(to).is_ok() {
-        return Err(fail("it appeared while skiman was renaming".to_owned()));
-    }
-    std::fs::rename(from, to).map_err(|e| fail(e.to_string()))?;
+    fsutil::place_new_or_rename(from, to).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => {
+            fail("it appeared while skiman was renaming".to_owned())
+        }
+        std::io::ErrorKind::CrossesDevices => Failure::operational(fsutil::crossing(from, to)),
+        _ => fail(e.to_string()),
+    })?;
     out!("renamed {} to {}", from.display(), to.display());
     Ok(())
 }

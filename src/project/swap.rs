@@ -10,9 +10,11 @@
 //! backup on another filesystem copies it, verifies the copy and deletes it.
 //! Nothing replaced is lost; an error never deletes the only copy.
 //!
-//! A file is put in place with a hard link, the one way here that never
-//! replaces what is there. Where hard links do not work (exFAT), a probe in
-//! the swap folder fails first, and the destination is never touched.
+//! Everything is put in place with [`fsutil::place_new_or_rename`]. A file
+//! replaces an item that is there, so it is placed only where that never
+//! replaces anything ([`fsutil::place_new`]): where it cannot be (exFAT has
+//! neither a rename that never replaces nor hard links), a probe in the swap
+//! folder fails first, and the destination is never touched.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -127,13 +129,13 @@ impl Replace<'_> {
         }
         if self.kind == Kind::File {
             // Any error counts: exFAT answers ENOTSUP, which has no ErrorKind.
-            let probe = swap.join("link-probe");
-            let probed =
-                std::fs::hard_link(&staged, &probe).and_then(|()| std::fs::remove_file(&probe));
+            let probe = swap.join("probe");
+            let probed = fsutil::place_new(&staged, &probe)
+                .and_then(|()| fsutil::place_new(&probe, &staged));
             if let Err(e) = probed {
                 remove_swap(&swap);
                 return Ok(Outcome::Failed(format!(
-                    "cannot write {dest}: the hard-link probe failed ({e}); skiman puts a new file in place only with a hard link, which never replaces anything, so {dest} is unchanged",
+                    "cannot write {dest}: this volume cannot put a file in place without replacing what is there ({e}), so {dest} is unchanged",
                     dest = self.dest.display()
                 )));
             }
@@ -165,9 +167,14 @@ impl Replace<'_> {
                 )));
             }
             (true, expected) => {
-                if let Err(e) = std::fs::rename(self.dest, &old) {
+                if let Err(e) = fsutil::place_new_or_rename(self.dest, &old) {
                     remove_swap(&swap);
-                    return Err(e);
+                    return Err(match e.kind() {
+                        io::ErrorKind::CrossesDevices => {
+                            io::Error::new(e.kind(), fsutil::crossing(self.dest, &old))
+                        }
+                        _ => e,
+                    });
                 }
                 // The baseline for the late-write check is taken right after
                 // the set-aside, before anything else can happen to it.
@@ -191,7 +198,7 @@ impl Replace<'_> {
             Some(dir) => std::fs::create_dir_all(dir),
             None => Ok(()),
         }
-        .and_then(|()| place_without_replacing(&staged, self.dest, self.kind));
+        .and_then(|()| fsutil::place_new_or_rename(&staged, self.dest));
         if let Err(e) = placed {
             if set_aside.is_none() {
                 remove_swap(&swap);
@@ -244,7 +251,7 @@ impl Replace<'_> {
     /// and the answer says where, and whether something took its place.
     fn put_back(&self, old: &Path, swap: &Path, outcome: impl Fn(String) -> Outcome) -> Outcome {
         let dest = self.dest.display().to_string();
-        match place_without_replacing(old, self.dest, self.kind) {
+        match fsutil::place_new_or_rename(old, self.dest) {
             Ok(()) => {
                 remove_swap(swap);
                 outcome(dest)
@@ -274,19 +281,6 @@ fn fingerprint(path: &Path) -> io::Result<String> {
         Ok(Content::File(std::fs::read(path)?).hash())
     } else {
         Ok(String::new())
-    }
-}
-
-/// Puts `from` at `to` without replacing anything that is there: a hard
-/// link for a file (fails if `to` exists), `rename` for a folder (fails over
-/// a file or a non-empty folder).
-fn place_without_replacing(from: &Path, to: &Path, kind: Kind) -> io::Result<()> {
-    match kind {
-        Kind::File => {
-            std::fs::hard_link(from, to)?;
-            std::fs::remove_file(from)
-        }
-        Kind::Skill => std::fs::rename(from, to),
     }
 }
 

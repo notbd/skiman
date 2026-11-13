@@ -52,7 +52,7 @@ use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, 
 use crate::skill_md::SkillMd;
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
-use crate::staging::{self, Staging};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::{Overlay, WorkingTree, tree_hash_of_dir};
@@ -990,7 +990,8 @@ fn swap(
     };
     for (i, (from, to)) in steps.into_iter().enumerate() {
         test_hook::at(name, &format!("before-rename-{}", i + 1));
-        staging::rename_into_place(from, to).map_err(|e| failed(e, &completed))?;
+        let staging = context.staging.as_ref().expect("begun before staging");
+        staging.place(from, to).map_err(|e| failed(e, &completed))?;
         completed.push(format!("renamed {} to {}", from.display(), to.display()));
     }
     if let Some(text) = &plan.manifest {

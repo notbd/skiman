@@ -766,3 +766,40 @@ fn update_lists_the_submodules_it_does_not_fetch() {
         .stderr_eq("");
     assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
 }
+
+#[test]
+fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/skills");
+    up.write("skills/pdf/SKILL.md", PDF_SKILL_MD)
+        .write("README.md", "# Skills\n");
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/skills", "--yes"])
+        .assert()
+        .code(0);
+    // A hand-written `path` may end in `/`, as `check` allows.
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let text = read(&manifest);
+    assert!(text.contains("path = \"skills/pdf\"\n"));
+    write(&manifest, text.replace("\"skills/pdf\"", "\"skills/pdf/\""));
+    up.write("README.md", "# Skills, v2\n");
+    up.commit("v2");
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    up.remove("skills/pdf");
+    let commit = up.commit("v3");
+    let before = tree(sandbox.skill_repo());
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(format!(
+            "error: skill pdf: https://github.com/acme/skills.git has no folder `skills/pdf/` at {commit}\n"
+        ));
+    assert_eq!(tree(sandbox.skill_repo()), before);
+}

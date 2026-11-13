@@ -174,14 +174,9 @@ fn wait_for(path: &Path) {
     }
 }
 
-#[test]
-fn a_fetch_killed_after_the_commit_object_arrived_does_not_stop_the_next_add() {
-    let sandbox = Sandbox::new();
-    init(&sandbox);
-    let up = pdf(&sandbox);
-    // What a git fetch killed part-way leaves: its lock file, and the commit
-    // object without the tree it names.
-    let cache = cache(&sandbox, &up.url());
+/// A cache of `up` holding its head commit object without the tree it names.
+fn commit_without_tree(sandbox: &Sandbox, up: &Upstream) -> PathBuf {
+    let cache = cache(sandbox, &up.url());
     sandbox.git(
         sandbox.root(),
         ["init", "--quiet", "--bare", cache.to_str().unwrap()],
@@ -200,6 +195,17 @@ fn a_fetch_killed_after_the_commit_object_arrived_does_not_stop_the_next_add() {
         ],
     );
     assert_eq!(stored, commit);
+    cache
+}
+
+#[test]
+fn a_fetch_killed_after_the_commit_object_arrived_does_not_stop_the_next_add() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = pdf(&sandbox);
+    // What a git fetch killed part-way leaves: its lock file, and the commit
+    // object without the tree it names.
+    let cache = commit_without_tree(&sandbox, &up);
     std::fs::write(cache.join("shallow.lock"), "").unwrap();
 
     sandbox
@@ -209,4 +215,30 @@ fn a_fetch_killed_after_the_commit_object_arrived_does_not_stop_the_next_add() {
         .code(0);
     assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
     assert!(!cache.join("shallow.lock").exists());
+}
+
+/// A cache damaged after the fetch (the pinned commit's tree is gone) is an
+/// error with git's message, not an upstream that has no such folder.
+#[test]
+fn a_damaged_cache_is_reported_with_gits_message() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = pdf(&sandbox);
+    let cache = commit_without_tree(&sandbox, &up);
+    let commit = up.head();
+    sandbox.git(
+        &cache,
+        ["update-ref", &format!("refs/skiman/c/{commit}"), &commit],
+    );
+
+    let assert = sandbox
+        .skiman()
+        .args(["add", &up.tree_url(&commit, "skills"), "--yes"])
+        .assert()
+        .code(4);
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.starts_with(&format!("error: listing skills at {commit} of ")),
+        "{stderr}"
+    );
 }

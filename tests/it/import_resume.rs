@@ -487,6 +487,7 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     sandbox.skiman().arg("check").assert().code(0);
 
     // The import folder now names another ref: fetched again, at that ref.
+    // Its `path` ends in `/`, which names the same folder.
     let sandbox = Sandbox::new();
     let Setup {
         folder,
@@ -494,7 +495,9 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
         commit,
     } = setup(&sandbox);
     let manifest = folder.join("skiman.toml");
-    write(&manifest, read(&manifest).replace(&commit, "main"));
+    let text = read(&manifest).replace("\"skills/pdf\"", "\"skills/pdf/\"");
+    assert!(text.contains("path = \"skills/pdf/\"\n"), "{text}");
+    write(&manifest, text.replace(&commit, "main"));
     import_killed_at(&sandbox, &folder, "rename:skills/notes");
     upstream.write("skills/pdf/reference.md", "# Reference v2\n");
     let v2 = upstream.commit("v2");

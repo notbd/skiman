@@ -101,13 +101,9 @@ impl Snapshot {
         } else {
             format!("{} ({path})", cache.url())
         };
-        Snapshot::read_tree(
-            || cache.git(),
-            &treeish(commit, path),
-            &origin,
-            Content::Upstream,
-        )
-        .map(Snapshot::without_git_files)
+        let treeish = folder(cache, commit, path)?;
+        Snapshot::read_tree(|| cache.git(), &treeish, &origin, Content::Upstream)
+            .map(Snapshot::without_git_files)
     }
 
     /// Reads the local folder `dir` as a third-party upstream:
@@ -233,18 +229,7 @@ impl Tree for Listing<'_> {
 /// without reading any content: what skill discovery looks at. A `path` that
 /// is not a folder at `commit` is refused (exit 1).
 pub fn list(cache: &Cache, commit: &str, path: &str) -> Result<Vec<(String, String)>, Failure> {
-    let treeish = treeish(commit, path);
-    let mut kind = cache.git();
-    kind.args(["cat-file", "-t", &treeish]);
-    let is_tree = kind
-        .output()
-        .is_ok_and(|o| o.status.success() && o.stdout == b"tree\n");
-    if !is_tree {
-        return Err(Failure::refused(format!(
-            "{} has no folder `{path}` at {commit}",
-            cache.url()
-        )));
-    }
+    let treeish = folder(cache, commit, path)?;
     let mut ls = cache.git();
     ls.args(["ls-tree", "-r", "-z", "--full-tree", &treeish]);
     let listing = git::run(ls, &format!("listing {treeish} of {}", cache.url()))?;
@@ -391,6 +376,29 @@ impl Tree for LocalFolder {
     fn read(&self, path: &str) -> std::io::Result<Vec<u8>> {
         self.tree.read(path)
     }
+}
+
+/// The treeish of folder `path` of `commit`. Refused (exit 1) when git
+/// lists no folder at `path`, as when the upstream moved or deleted it; git
+/// failing (a damaged cache) is an error with git's own message (exit 4).
+fn folder(cache: &Cache, commit: &str, path: &str) -> Result<String, Failure> {
+    let treeish = treeish(commit, path);
+    // A `path` ending in `/` makes git list what is inside the folder, so
+    // ask without it, and take only a record of the folder itself.
+    let folder = path.trim_end_matches('/');
+    if folder.is_empty() {
+        return Ok(treeish);
+    }
+    let url = cache.url();
+    let mut ls = cache.git();
+    ls.args(["--literal-pathspecs", "ls-tree", "-z", commit, "--", folder]);
+    let entry = git::run(ls, &format!("listing {path} at {commit} of {url}"))?;
+    if entry.starts_with(b"040000 tree ") && entry.ends_with(format!("\t{folder}\0").as_bytes()) {
+        return Ok(treeish);
+    }
+    Err(Failure::refused(format!(
+        "{url} has no folder `{path}` at {commit}"
+    )))
 }
 
 fn treeish(commit: &str, path: &str) -> String {

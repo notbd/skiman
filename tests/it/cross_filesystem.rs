@@ -223,3 +223,47 @@ fn restore_over_a_file_on_a_volume_without_hard_links_fails_and_leaves_the_file_
         .collect();
     assert!(swaps.is_empty(), "{swaps:?}");
 }
+
+#[test]
+fn restore_moves_the_replaced_version_into_a_backup_on_another_filesystem() {
+    let sandbox = Sandbox::new();
+    let Some(state) = attached(second_filesystem(&sandbox)) else {
+        return;
+    };
+    init(&sandbox);
+    let skiman = |args: &[&str]| {
+        sandbox
+            .skiman()
+            .env("XDG_STATE_HOME", &state.dir)
+            .args(args)
+    };
+    let project = sandbox.home().join("work");
+    let agents = project.join("AGENTS.md");
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(&agents, "project original\n").unwrap();
+    skiman(&["project", "add"]).arg(&project).assert().code(0);
+    skiman(&["project", "adopt", "--yes"]).assert().code(0);
+    std::fs::write(
+        sandbox.skill_repo().join("projects/work/AGENTS.md"),
+        "mirror edit\n",
+    )
+    .unwrap();
+
+    skiman(&["project", "restore", "--yes"])
+        .arg(&agents)
+        .assert()
+        .code(0);
+
+    assert_eq!(std::fs::read_to_string(&agents).unwrap(), "mirror edit\n");
+    let saved = the_only_backup(&state.dir).join("projects/work/AGENTS.md");
+    assert_eq!(
+        std::fs::read_to_string(saved).unwrap(),
+        "project original\n"
+    );
+    let swaps: Vec<_> = std::fs::read_dir(&project)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().starts_with(".skiman-swap-"))
+        .collect();
+    assert!(swaps.is_empty(), "{swaps:?}");
+}

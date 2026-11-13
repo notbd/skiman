@@ -5,9 +5,10 @@
 //! `new/` holds the snapshot, `old/` the set-aside copy of what was there,
 //! and `target` the destination path.
 //!
-//! A set-aside copy is only ever renamed, never copied and deleted: it keeps
-//! its inode, so a late write through a handle opened before the swap lands
-//! in it. Nothing replaced is deleted; an error never deletes the only copy.
+//! A set-aside copy is renamed, so it keeps its inode and a late write
+//! through a handle opened before the swap lands in it; only its move to a
+//! backup on another filesystem copies it, verifies the copy and deletes it.
+//! Nothing replaced is lost; an error never deletes the only copy.
 //!
 //! A file is put in place with a hard link, the one way here that never
 //! replaces what is there. Where hard links do not work (exFAT), a probe in
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use super::content::{self, Content};
 use super::pattern::Kind;
-use crate::backup::{fresh_dir, fresh_named_dir};
+use crate::backup::{Backups, fresh_dir, fresh_named_dir};
 use crate::fsutil;
 
 /// Prefix of a project-side swap folder; discovery never enters one.
@@ -40,32 +41,6 @@ impl Place<'_> {
             Place::Mirror { swap_dir } => swap_dir,
             Place::Project { anchor } => anchor,
         }
-    }
-}
-
-/// One command's backup folder (`<state dir>/backups/<ts>`), created when
-/// first needed.
-pub struct Backups {
-    parent: PathBuf,
-    dir: Option<PathBuf>,
-}
-
-impl Backups {
-    /// Backups under `parent` (`<state dir>/backups`).
-    pub fn under(parent: PathBuf) -> Backups {
-        Backups { parent, dir: None }
-    }
-
-    fn dir(&mut self) -> io::Result<PathBuf> {
-        if self.dir.is_none() {
-            self.dir = Some(fresh_dir(&self.parent)?);
-        }
-        Ok(self.dir.clone().expect("just created"))
-    }
-
-    /// The backup folder, when this command created one.
-    pub fn created(&self) -> Option<&Path> {
-        self.dir.as_deref()
     }
 }
 
@@ -97,8 +72,8 @@ pub enum Previous {
     None,
     /// In the backup, at this path.
     At(PathBuf),
-    /// It could not be moved to the backup (another filesystem, an error)
-    /// and stays at `at`, in its swap folder. Exit 4; never deleted.
+    /// It could not be moved to the backup and stays at `at`, in its swap
+    /// folder. Exit 4; never deleted.
     LeftInSwap { at: PathBuf, error: String },
 }
 
@@ -239,13 +214,7 @@ impl Replace<'_> {
                 late_write: false,
             });
         };
-        let moved = backups.dir().and_then(|dir| {
-            let to = dir.join(self.backup_rel);
-            std::fs::create_dir_all(to.parent().expect("backup path has a parent"))?;
-            std::fs::rename(&old, &to)?;
-            Ok(to)
-        });
-        let outcome = match moved {
+        let outcome = match backups.move_in(&old, self.backup_rel) {
             Ok(to) => {
                 // Reported only when both fingerprints are known and differ:
                 // an unreadable set-aside copy (a blocked side) is no late write.
@@ -399,9 +368,8 @@ pub fn leftovers(place: Place) -> Vec<Leftover> {
 
 /// Moves what the swap folders of `place` hold in `old/` into the backup,
 /// each into a fresh folder of its own under `swap-leftovers/` (never one
-/// that exists), by rename only, then removes the folders. Returns one
-/// message per folder; a copy that cannot be renamed (another filesystem)
-/// stays, and its message says where.
+/// that exists), then removes the folders. Returns one message per folder;
+/// a copy that cannot be moved stays, and its message says where.
 pub fn recover(place: Place, backups: &mut Backups) -> Vec<String> {
     let mut messages = Vec::new();
     for leftover in leftovers(place) {
@@ -414,10 +382,12 @@ pub fn recover(place: Place, backups: &mut Backups) -> Vec<String> {
             continue;
         }
         let moved = (|| -> io::Result<PathBuf> {
-            let to = fresh_dir(&backups.dir()?.join("swap-leftovers"))?;
+            let dir = backups.dir()?;
+            let to = fresh_dir(&dir.join("swap-leftovers"))?;
+            let rel = to.strip_prefix(&dir).expect("inside the backup folder");
             for entry in std::fs::read_dir(leftover.dir.join("old"))? {
                 let entry = entry?;
-                std::fs::rename(entry.path(), to.join(entry.file_name()))?;
+                backups.move_in(&entry.path(), &rel.join(entry.file_name()))?;
             }
             Ok(to)
         })();

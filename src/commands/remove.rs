@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::Backups;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::write_atomic;
@@ -175,18 +175,20 @@ fn move_folders(paths: &Paths, found: &Found) -> Result<Option<PathBuf>, Failure
     if found.folders.is_empty() {
         return Ok(None);
     }
-    let backup = Backup::create(paths, "nothing was removed")?;
+    let mut backups = Backups::new(paths);
+    let nothing = |e| Failure::operational(format!("{e}; nothing was removed"));
+    let dir = backups.dir().map_err(nothing)?;
     for (path, rel) in &found.folders {
-        let dest = backup
+        let dest = backups
             .move_in(path, &Path::new("repo").join(rel))
             .map_err(|e| {
                 Failure::operational(format!(
                     "cannot move {} to the backup {}: {e}; the skill's records were not removed",
                     path.display(),
-                    backup.dir().display()
+                    dir.display()
                 ))
             })?;
         out!("moved {} to {}", path.display(), dest.display());
     }
-    Ok(Some(backup.dir().to_path_buf()))
+    Ok(backups.created().map(Path::to_path_buf))
 }

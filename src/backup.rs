@@ -1,8 +1,8 @@
 //! Backups under machine state (spec Data formats, Machine state):
 //! `backups/<timestamp>/` with `repo/<path relative to the skill repo>` and
-//! `<tool id>/<path relative to the tool directory>` inside. A backup
-//! destination is always fresh. A move across filesystems copies, verifies,
-//! then deletes the original.
+//! `<tool id>/<path relative to the tool directory>` inside, created when
+//! first needed. A backup destination is always fresh. A move across
+//! filesystems copies, verifies, then deletes the original.
 
 use std::io;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
@@ -11,7 +11,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
-use crate::failure::Failure;
 use crate::paths::Paths;
 use crate::tree::{self, IGNORED_NAMES};
 
@@ -71,42 +70,62 @@ pub fn fresh_named_dir(parent: &Path, prefix: &str, mode: u32) -> io::Result<Pat
     unreachable!("the suffixes never run out")
 }
 
-/// One fresh `backups/<timestamp>/` folder.
+/// One command's backup folder, `backups/<timestamp>/`, created when the
+/// first thing goes in, so a command that backs nothing up leaves no folder.
 #[derive(Debug)]
-pub struct Backup {
-    dir: PathBuf,
+pub struct Backups {
+    parent: PathBuf,
+    dir: Option<PathBuf>,
+    /// Whether anything went in.
+    used: bool,
 }
 
-impl Backup {
-    /// A fresh folder under `backups/`. The failure names where it could
-    /// not be created and ends with `then`: what the caller left as it was,
-    /// or what to do next.
-    pub fn create(paths: &Paths, then: &str) -> Result<Backup, Failure> {
-        let parent = paths.state_dir().join("backups");
-        let dir = fresh_dir(&parent).map_err(|e| {
-            Failure::operational(format!(
-                "cannot create a backup folder in {}: {e}; {then}",
-                parent.display()
-            ))
-        })?;
-        Ok(Backup { dir })
+impl Backups {
+    pub fn new(paths: &Paths) -> Backups {
+        Backups::under(paths.state_dir().join("backups"))
     }
 
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    /// Backups under `parent` instead of `<state dir>/backups`.
+    pub fn under(parent: PathBuf) -> Backups {
+        Backups {
+            parent,
+            dir: None,
+            used: false,
+        }
+    }
+
+    /// The folder, created on first use.
+    pub fn dir(&mut self) -> io::Result<PathBuf> {
+        if self.dir.is_none() {
+            let dir = fresh_dir(&self.parent).map_err(|e| {
+                let parent = self.parent.display();
+                io::Error::new(
+                    e.kind(),
+                    format!("cannot create a backup folder in {parent}: {e}"),
+                )
+            })?;
+            self.dir = Some(dir);
+        }
+        Ok(self.dir.clone().expect("just created"))
+    }
+
+    /// The backup folder, once something went in.
+    pub fn created(&self) -> Option<&Path> {
+        self.dir.as_deref().filter(|_| self.used)
     }
 
     /// Writes `content`, the content of a file about to be replaced in one
     /// step, to `<backup>/<rel>`.
-    pub fn save(&self, rel: &Path, content: &[u8]) -> io::Result<PathBuf> {
+    pub fn save(&mut self, rel: &Path, content: &[u8]) -> io::Result<PathBuf> {
         let dest = self.fresh(rel)?;
         std::fs::write(&dest, content)?;
+        self.used = true;
         Ok(dest)
     }
 
     /// `<backup>/<rel>` with its parent folders created; refuses a taken one.
-    fn fresh(&self, rel: &Path) -> io::Result<PathBuf> {
-        let dest = self.dir.join(rel);
+    fn fresh(&mut self, rel: &Path) -> io::Result<PathBuf> {
+        let dest = self.dir()?.join(rel);
         if std::fs::symlink_metadata(&dest).is_ok() {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
@@ -120,16 +139,17 @@ impl Backup {
     /// Moves `original` to `<backup>/<rel>` (a symlink as a symlink). Across
     /// filesystems: copy, verify, then delete the original; an original
     /// holding a special file is refused and left in place.
-    pub fn move_in(&self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
+    pub fn move_in(&mut self, original: &Path, rel: &Path) -> io::Result<PathBuf> {
         let dest = self.fresh(rel)?;
         match std::fs::rename(original, &dest) {
-            Ok(()) => Ok(dest),
+            Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
                 move_across_filesystems(original, &dest)?;
-                Ok(dest)
             }
-            Err(e) => Err(e),
+            Err(e) => return Err(e),
         }
+        self.used = true;
+        Ok(dest)
     }
 }
 
@@ -258,4 +278,24 @@ fn verify(from: &Path, to: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_backup_folder_is_created_when_the_first_thing_goes_in() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut backups = Backups::under(temp.path().join("backups"));
+        assert_eq!(backups.created(), None);
+        assert!(!temp.path().join("backups").exists());
+
+        let saved = backups
+            .save(Path::new("repo/skiman.toml"), b"old\n")
+            .unwrap();
+
+        assert_eq!(std::fs::read(&saved).unwrap(), b"old\n");
+        assert_eq!(backups.created(), saved.parent().unwrap().parent());
+    }
 }

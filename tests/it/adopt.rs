@@ -334,6 +334,35 @@ fn adopt_whose_original_cannot_be_moved_exits_4_and_prints_the_manual_finish() {
 }
 
 #[test]
+fn with_an_unwritable_backups_folder_adopt_stops_and_changes_nothing() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let original = foreign_notes(&sandbox);
+    let backups = sandbox.state_home().join("skiman/backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let before = world(&sandbox);
+
+    let output = sandbox
+        .skiman()
+        .args(["adopt", "notes", "--from", "claude-code", "--yes"])
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        stderr.contains("cannot create a backup folder in")
+            && stderr.contains("nothing was changed"),
+        "{stderr}"
+    );
+    assert!(!exists(sandbox.skill_repo().join("skills/notes")));
+    assert!(original.join("SKILL.md").is_file(), "the original stays");
+    assert_eq!(world(&sandbox), before);
+}
+
+#[test]
 fn without_a_terminal_adopt_needs_yes() {
     let sandbox = Sandbox::new();
     init(&sandbox);

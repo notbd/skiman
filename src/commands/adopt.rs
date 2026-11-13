@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::Backups;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil;
@@ -76,20 +76,19 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     validate(&repo, name, &files)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     let staged = stage(&staging, name, &files)?;
-    let backup = Backup::create(&paths, "nothing was changed")?;
+    let mut backups = Backups::new(&paths);
+    let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
+    let dir = backups.dir().map_err(nothing)?;
     let copy = repo.skill_dir(name);
-    if let Err(failure) = staging::rename_into_place(&staged, &copy) {
-        let _ = std::fs::remove_dir(backup.dir());
-        return Err(failure);
-    }
+    staging::rename_into_place(&staged, &copy)?;
     out!("created {}", copy.display());
     let rel = Path::new(tool.id).join(name);
-    let moved = backup.move_in(&entry, &rel).map_err(|e| {
+    let moved = backups.move_in(&entry, &rel).map_err(|e| {
         Failure::operational(format!(
             "cannot move {} to the backup: {e}; skills/{name} is in place, so finish by hand: move {} to {}, then run `skiman sync`",
             entry.display(),
             entry.display(),
-            backup.dir().join(&rel).display()
+            dir.join(&rel).display()
         ))
     })?;
     out!("moved {} to {}", entry.display(), moved.display());

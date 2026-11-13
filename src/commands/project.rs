@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::Backups;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
@@ -19,7 +19,7 @@ use crate::project::git::{ignored, operation_in_progress, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
 use crate::project::state::{Evaluated, State, check_rules, classify};
-use crate::project::swap::{self, Backups, Expect, Outcome, Place, Previous, Replace};
+use crate::project::swap::{self, Expect, Outcome, Place, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
 use crate::repo::SkillRepo;
@@ -151,7 +151,7 @@ impl Context {
     }
 
     fn backups(&self) -> Backups {
-        Backups::under(self.paths.state_dir().join("backups"))
+        Backups::new(&self.paths)
     }
 
     /// The root a path given on the command line is in, and the path
@@ -878,7 +878,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
     if !yes && !confirm("Eject? [y/N] ")? {
         return Err(Failure::refused("not ejected; nothing was changed"));
     }
-    let mut backup: Option<Backup> = None;
+    let mut backups = ctx.backups();
     let mut exit = Exit::Success;
     let mut unregister = Vec::new();
     let projects_dir = ctx.repo.root().join(MIRROR_DIR);
@@ -896,11 +896,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 all_out = false;
                 continue;
             }
-            let backup = match &mut backup {
-                Some(b) => b,
-                None => backup.insert(Backup::create(&ctx.paths, "nothing was changed")?),
-            };
-            match backup.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
+            match backups.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {
                     out!("moved {} to {}", item.mirror_rel(), to.display());
                     synced.remove_under(&ejection.root.id, &item.rel);
@@ -957,8 +953,8 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             out!("removed [projects.{id}] from skiman.toml");
         }
     }
-    if let Some(backup) = &backup {
-        out!("the mirrors are in {}", backup.dir().display());
+    if let Some(dir) = backups.created() {
+        out!("the mirrors are in {}", dir.display());
     }
     ctx.finish(&mut synced, &ctx.backups(), exit)
 }

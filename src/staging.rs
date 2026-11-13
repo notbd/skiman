@@ -11,7 +11,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::backup::{self, Backup};
+use crate::backup::{self, Backups};
 use crate::failure::Failure;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -100,21 +100,22 @@ fn move_tmp_leftovers(paths: &Paths, tmp: &Path) -> Result<(), Failure> {
             path.display()
         )
     };
-    let backup = Backup::create(paths, &by_hand(tmp))?;
+    let mut backups = Backups::new(paths);
+    let by_hand_tmp = by_hand(tmp);
+    let dir = backups
+        .dir()
+        .map_err(|e| Failure::operational(format!("{e}; {by_hand_tmp}")))?;
     let rel = Path::new("repo/.skiman/tmp");
     for leftover in &leftovers {
         let name = leftover.file_name().expect("entry has a name");
-        backup.move_in(leftover, &rel.join(name)).map_err(|e| {
+        backups.move_in(leftover, &rel.join(name)).map_err(|e| {
             Failure::operational(format!(
                 "cannot move tmp leftovers to a backup: {e}; {}",
                 by_hand(leftover)
             ))
         })?;
     }
-    out!(
-        "moved tmp leftovers to {}",
-        backup.dir().join(rel).display()
-    );
+    out!("moved tmp leftovers to {}", dir.join(rel).display());
     Ok(())
 }
 

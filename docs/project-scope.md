@@ -258,27 +258,31 @@ set-aside copy (step 3), and `target` the destination path.
 4. Put the new entry in place without replacing anything: a hard link for a
    file (fails if something appeared), `rename` for a folder (fails over a
    file or a non-empty folder).
-5. Rename the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
-   for mirror content, `backups/<ts>/projects/<id>/…` for project content),
-   then hash it again: a different hash means a late write landed there, and
-   is reported with the backup path. Nothing skiman replaces is deleted.
+5. Move the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
+   for mirror content, `backups/<ts>/projects/<id>/…` for project content):
+   a rename, or on another filesystem a copy compared entry by entry, then
+   the set-aside copy deleted. Then hash it again: a different hash means a
+   late write landed there, and is reported with the backup path. Nothing
+   skiman replaces is lost.
 6. Write the new synced hash; remove the swap folder.
 
-A set-aside copy is only ever renamed, never copied and deleted, for its
-whole life: copying and deleting it would lose a late write through an open
-handle. Failure handling, so an error never deletes the only copy:
+A set-aside copy is only renamed while it is in the swap folder: copying and
+deleting it would lose a late write through an open handle. Only its move
+into a backup on another filesystem copies and deletes it (step 5), and a
+write after the comparison is lost (ADR 0005). Failure handling, so an error
+never deletes the only copy:
 
 - "Put back" (step 3) and every undo use the same no-replace placement as
   step 4. If the original path is taken meanwhile, both versions stay where
   they are and the command reports both paths.
 - A failure in step 4 puts the set-aside copy back and exits 4.
-- A failure in step 5, including a backup folder on another filesystem,
-  leaves the copy in the swap folder, keeps the folder, and reports the path.
+- A failure in step 5 leaves the copy in the swap folder, keeps the folder,
+  and reports the path.
 - A swap folder that outlives its command (a failure above, a killed
   process) is never cleaned up automatically: `doctor` lists it with what it
   holds, and the next `restore` in that project (or the next mirror write,
-  for `.skiman/swap/`) renames what is in `old/` into a backup first, or
-  leaves it and reports it when that rename crosses filesystems. `new/` is
+  for `.skiman/swap/`) moves what is in `old/` into a backup first, as in
+  step 5, or leaves it and reports it when that fails. `new/` is
   deleted, never backed up: it is a copy of a source that still exists, or a
   second link to an entry already in place.
 

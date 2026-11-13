@@ -35,7 +35,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::Backups;
 use crate::commands::prompts;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -436,7 +436,7 @@ fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
         context.staging()?;
         let backup = advance_records(context, name, &current, &plan)?;
         report(skill, &plan, false);
-        out!("saved the records of {name} to {}", backup.dir().display());
+        out!("saved the records of {name} to {}", backup.display());
         return Ok(Exit::Success);
     };
     let staging = context.staging()?;
@@ -619,25 +619,25 @@ fn with_install_name(name: &str, mut merged: Snapshot) -> Snapshot {
 /// Saves the skill's `skiman.toml` table and lock entry as
 /// `repo/skiman.toml.<name>.fragment` and `repo/skiman.lock.<name>.fragment`
 /// into a fresh backup folder of its own.
-fn save_fragments(paths: &Paths, name: &str, current: &Current) -> Result<Backup, Failure> {
+fn save_fragments(paths: &Paths, name: &str, current: &Current) -> Result<Backups, Failure> {
     let failed = |e: String| {
         Failure::operational(format!(
             "cannot save the records of {name} to a backup: {e}; nothing of {name} changed"
         ))
     };
-    let backup = Backup::create(paths, &format!("nothing of {name} changed"))?;
-    let repo_dir = backup.dir().join("repo");
-    std::fs::create_dir_all(&repo_dir).map_err(|e| failed(e.to_string()))?;
+    let mut backups = Backups::new(paths);
+    let nothing = |e| Failure::operational(format!("{e}; nothing of {name} changed"));
+    let dir = backups.dir().map_err(nothing)?;
     for (file, text) in [
         (rules::MANIFEST, &current.manifest_text),
         (rules::LOCKFILE, &current.lock_text),
     ] {
         let fragment = manifest::skill_fragment(text, name).map_err(|e| failed(e.to_string()))?;
-        let path = repo_dir.join(format!("{file}.{name}.fragment"));
-        std::fs::write(&path, fragment)
-            .map_err(|e| failed(format!("cannot write {}: {e}", path.display())))?;
+        let rel = PathBuf::from(format!("repo/{file}.{name}.fragment"));
+        let cannot = |e| failed(format!("cannot write {}: {e}", dir.join(&rel).display()));
+        backups.save(&rel, fragment.as_bytes()).map_err(cannot)?;
     }
-    Ok(backup)
+    Ok(backups)
 }
 
 /// The skill's files stay as they are; only its records move to the new
@@ -647,8 +647,12 @@ fn advance_records(
     name: &str,
     current: &Current,
     plan: &Plan,
-) -> Result<Backup, Failure> {
+) -> Result<PathBuf, Failure> {
     let backup = save_fragments(context.paths, name, current)?;
+    let backup = backup
+        .created()
+        .expect("the fragments went in")
+        .to_path_buf();
     let mut completed = Vec::new();
     let failed = |e, completed: &[String]| stopped(e, completed, context.repo, name, &backup, &[]);
     if let Some(text) = &plan.manifest {
@@ -673,14 +677,13 @@ fn stopped(
     completed: &[String],
     repo: &SkillRepo,
     name: &str,
-    backup: &Backup,
+    dir: &Path,
     swapped_out: &[(String, &Path)],
 ) -> Failure {
     let mut message = failure.message;
     for step in completed {
         message.push_str(&format!("\n  done: {step}"));
     }
-    let dir = backup.dir();
     message.push_str(&format!(
         "\n  backup folder: {}\n  to undo the update of {name}, in this order:",
         dir.display()
@@ -946,15 +949,15 @@ fn swap(
     let repo = &context.repo;
     let skill_dir = repo.skill_dir(name);
     let upstream_dir = repo.upstream_dir(name);
-    let unchanged = |backup: Option<&Backup>| -> Result<(), Failure> {
+    let unchanged = |backup: Option<&Path>| -> Result<(), Failure> {
         let now = tree_hash_of_dir(&skill_dir).map_err(|e| {
             Failure::operational(format!("cannot read {}: {e}", skill_dir.display()))
         })?;
         if now == start_hash {
             return Ok(());
         }
-        let saved = backup.map_or_else(String::new, |b| {
-            format!(" (its records were saved to {})", b.dir().display())
+        let saved = backup.map_or_else(String::new, |dir| {
+            format!(" (its records were saved to {})", dir.display())
         });
         Err(Failure::operational(format!(
             "skills/{name} changed during the update, so the update of {name} stopped and nothing was swapped{saved}; your newer edits are kept"
@@ -962,7 +965,11 @@ fn swap(
     };
     test_hook::at(name, "before-rehash-1");
     unchanged(None)?;
-    let backup = save_fragments(context.paths, name, current)?;
+    let mut backups = save_fragments(context.paths, name, current)?;
+    let backup = backups
+        .created()
+        .expect("the fragments went in")
+        .to_path_buf();
     test_hook::at(name, "before-rehash-2");
     unchanged(Some(&backup))?;
 
@@ -1001,7 +1008,7 @@ fn swap(
         (&work.old_skill, format!("repo/skills/{name}")),
         (&work.old_upstream, format!("repo/upstream/{name}")),
     ] {
-        if let Err(e) = backup.move_in(old, Path::new(&rel)) {
+        if let Err(e) = backups.move_in(old, Path::new(&rel)) {
             err!(
                 "warning: skill {name}: cannot move {} to the backup ({e}); it stays in .skiman/tmp/ as a tmp leftover",
                 old.display()
@@ -1009,5 +1016,5 @@ fn swap(
             all_saved = false;
         }
     }
-    Ok((backup.dir().to_path_buf(), all_saved))
+    Ok((backup, all_saved))
 }

@@ -12,8 +12,9 @@ use super::git::operation_in_progress;
 use super::item::{Item, MIRROR_DIR, managed};
 use super::root::{self, Root};
 use super::state::{State, classify};
-use super::swap::{self, Backups, Expect, Outcome, Place, Previous, Replace};
+use super::swap::{self, Expect, Outcome, Place, Previous, Replace};
 use super::synced::Synced;
+use crate::backup::Backups;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -43,7 +44,7 @@ pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &
     synced.forget_unconfigured(&configured);
     let mut writer = Writer {
         repo,
-        backups: Backups::under(paths.state_dir().join("backups")),
+        backups: Backups::new(paths),
         recovered: false,
     };
     for resolved in root::resolve(paths.home(), repo, manifest) {

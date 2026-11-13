@@ -145,17 +145,20 @@ impl Report {
 
 /// Syncs `repo` while the caller holds its lock and prints the result for `output`.
 pub fn run(paths: &Paths, repo: &SkillRepo, lock: &RepoLock, output: Output) -> Exit {
-    run_with(paths, repo, lock, output, None).0
+    run_with(paths, repo, lock, output, None, &[]).0
 }
 
 /// [`run`], also returning the report. `previous_repo` is the realpath of the
 /// skill repo `init` just switched away from: its links count as owned.
+/// Nothing is said about `failed`, paths whose write the command just
+/// reported failing: the way out sync names for them is that same write.
 pub fn run_with(
     paths: &Paths,
     repo: &SkillRepo,
     _lock: &RepoLock,
     output: Output,
     previous_repo: Option<PathBuf>,
+    failed: &[PathBuf],
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
@@ -165,6 +168,7 @@ pub fn run_with(
         }
         Err(failure) => return (report_failure(failure, output), Report::default()),
     };
+    report.items.retain(|item| !failed.contains(&item.path));
     if output == Output::Normal {
         for (change, entry) in &report.changes {
             let verb = match change {

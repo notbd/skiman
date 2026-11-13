@@ -74,7 +74,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     }
     .save(&paths)?;
     install_git_hooks(&repo, &binary)?;
-    let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo);
+    let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo, &[]);
     hint_not_owned(&report, &repo);
     // Settings files are outside the skill repo: do not hold the repo lock
     // while the preview waits for an answer.

@@ -216,6 +216,8 @@ fn restore_over_a_file_on_a_volume_without_hard_links_fails_and_leaves_the_file_
         )),
         "{stderr}"
     );
+    // The closing sync does not send the user back to the restore that failed.
+    assert!(!stderr.contains("project restore"), "{stderr}");
     // exFAT adds `._*` files of its own, so only skiman's swap folders count.
     let swaps: Vec<_> = std::fs::read_dir(&project)
         .unwrap()

@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::{self, Backups};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil;
@@ -25,7 +25,7 @@ use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
-use crate::staging::{self, Staging};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
@@ -61,7 +61,7 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     }
 
     test_hook::at("adopt", "confirmed");
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     check_name(&repo, name, &entry)?;
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,
@@ -76,20 +76,19 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
     validate(&repo, name, &files)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
     let staged = stage(&staging, name, &files)?;
-    let backup = Backup::create(&paths, "nothing was changed")?;
+    let mut backups = Backups::new(&paths);
+    let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
+    let dir = backups.dir().map_err(nothing)?;
     let copy = repo.skill_dir(name);
-    if let Err(failure) = staging::rename_into_place(&staged, &copy) {
-        let _ = std::fs::remove_dir(backup.dir());
-        return Err(failure);
-    }
+    staging.place(&staged, &copy)?;
     out!("created {}", copy.display());
     let rel = Path::new(tool.id).join(name);
-    let moved = backup.move_in(&entry, &rel).map_err(|e| {
+    let moved = backups.move_in(&entry, &rel).map_err(|e| {
         Failure::operational(format!(
             "cannot move {} to the backup: {e}; skills/{name} is in place, so finish by hand: move {} to {}, then run `skiman sync`",
             entry.display(),
             entry.display(),
-            backup.dir().join(&rel).display()
+            dir.join(&rel).display()
         ))
     })?;
     out!("moved {} to {}", entry.display(), moved.display());
@@ -125,7 +124,7 @@ fn locate(
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
-    let ownership = Ownership::new(paths.home(), repo, manifest, None);
+    let ownership = Ownership::new(paths, repo, manifest, None);
     match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => Ok(entry),
         Entry::Owned(_) => Err(Failure::refused(format!(
@@ -136,6 +135,10 @@ fn locate(
             "{} is managed by another tool; skiman leaves it alone",
             entry.display()
         ))),
+        Entry::Moved(copy) => Err(Failure::refused(
+            backup::cut_short(&entry, &copy)
+                + "; to adopt the skill, delete it and move that copy here first",
+        )),
         Entry::NotASkill => Err(Failure::refused(format!(
             "{} is not a skill folder (a folder, or a link to one, holding SKILL.md)",
             entry.display()

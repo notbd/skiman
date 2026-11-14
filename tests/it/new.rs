@@ -278,3 +278,41 @@ error: [..]/home/.config/skiman/config.toml does not exist; run `skiman init <pa
 
 "#]]);
 }
+
+/// Staging never writes outside the skill repo: a `.skiman/tmp` or a
+/// `skills/` that is a link stops `new` before anything is written there.
+#[test]
+fn new_writes_nothing_through_a_linked_tmp_or_skills_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.skill_repo();
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    for (linked, name) in [(".skiman/tmp", "foo"), ("skills", "bar")] {
+        let path = repo.join(linked);
+        if path.exists() {
+            std::fs::remove_dir_all(&path).unwrap();
+        }
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+
+        let output = sandbox
+            .skiman()
+            .args(["new", name, "-d", "Use when testing."])
+            .output()
+            .unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(4), "{linked}: {stderr}");
+        assert!(
+            stderr.contains("is not a real folder"),
+            "{linked}: {stderr}"
+        );
+        assert!(
+            tree(&elsewhere).is_empty(),
+            "{linked}: {:?}",
+            tree(&elsewhere)
+        );
+    }
+}

@@ -26,7 +26,7 @@ use crate::rules::{self, LIMITS, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
-use crate::staging::{self, Staging};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::{Overlay, WorkingTree};
 use crate::upstream::{Upstream, print_not_installed, run_flags};
@@ -125,7 +125,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         return Err(Failure::refused("not installed; nothing was written"));
     }
 
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     check_install_names(&repo, &installs)?;
     let files = candidate_files(&installs);
     let records = Records::build(&repo, &installs, &upstream)?;
@@ -562,7 +562,7 @@ fn write(
         for root in ["upstream", "skills"] {
             let rel = format!("{root}/{}", install.name);
             let target = repo.root().join(&rel);
-            staging::rename_into_place(&staging.dir().join(&rel), &target)?;
+            staging.place(&staging.dir().join(&rel), &target)?;
             out!("created {}", target.display());
         }
     }

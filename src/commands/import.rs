@@ -30,7 +30,7 @@ use toml_edit::{ArrayOfTables, DocumentMut, Item, Table};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
-use crate::backup::{self, Backup};
+use crate::backup::{self, Backups};
 use crate::commands::{confirm, has_terminal, prompts};
 use crate::failure::{Failure, finish};
 use crate::fetch::Cache;
@@ -49,7 +49,7 @@ use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
-use crate::staging::{self, Staging};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::{self, Kind, Overlay, Tree, WorkingTree};
@@ -174,7 +174,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     }
 
     test_hook::at("import", "confirmed");
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     refuse_irregular_files(&repo)?;
     let changed = repo_files() != first_read
         || match &writes {
@@ -201,22 +201,16 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_special_files(&plan)?;
     refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     let staging = Staging::begin(&paths, &repo, &lock)?;
-    let backup = Backup::create(&paths, "nothing was changed")?;
+    let mut backups = Backups::new(&paths);
     let done = match &writes {
-        Some((candidate, todo)) => write_repo(&repo, candidate, todo, &staging, &backup),
+        Some((candidate, todo)) => write_repo(&repo, candidate, todo, &staging, &mut backups),
         None => Ok(()),
     }
-    .and_then(|()| take_over(&plan, &backup));
+    .and_then(|()| take_over(&plan, &mut backups));
     drop(staging);
-    // Only an empty backup folder goes: nothing this run moved is in it.
-    let unused = std::fs::remove_dir(backup.dir()).is_ok();
-    let originals = if unused {
-        "this run moved no original".to_owned()
-    } else {
-        format!(
-            "the originals this run moved are in {}",
-            backup.dir().display()
-        )
+    let originals = match backups.created() {
+        None => "this run moved no original".to_owned(),
+        Some(dir) => format!("the originals this run moved are in {}", dir.display()),
     };
     if let Err(failure) = done {
         return Err(Failure {
@@ -726,7 +720,7 @@ impl Plan {
             .map(|name| (name.clone(), repo.skill_dir(name)))
             .collect();
         wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
-        let ownership = Ownership::new(home, repo, manifest, None);
+        let ownership = Ownership::new(paths, repo, manifest, None);
         let io = |path: &Path, e: std::io::Error| {
             Failure::operational(format!("cannot read {}: {e}", path.display()))
         };
@@ -755,7 +749,8 @@ impl Plan {
                 match ownership.classify(&real, &name, &meta) {
                     Entry::Owned(_) => {}
                     Entry::ManagedElsewhere => plan.skipped.push(path),
-                    Entry::Foreign => {
+                    // Moving a moved one again finishes the move.
+                    Entry::Foreign | Entry::Moved(_) => {
                         let real = real.join(&name);
                         entries.push(Move {
                             resolution: resolution(&real),
@@ -1428,7 +1423,7 @@ fn write_repo(
     candidate: &Candidate,
     todo: &[(Piece, Step)],
     staging: &Staging,
-    backup: &Backup,
+    backups: &mut Backups,
 ) -> Result<(), Failure> {
     let stage = staging.dir();
     let pieces = candidate.pieces();
@@ -1438,11 +1433,12 @@ fn write_repo(
             .zip(todo)
             .filter(|(_, (_, step))| *step != Step::Keep)
     };
-    for ((piece, content), _) in writes() {
+    for ((piece, content), (_, step)) in writes() {
         let path = stage.join(piece.rel());
-        match content {
-            PieceContent::Folder(snapshot) => fsutil::write_files(&path, &snapshot.files)?,
-            PieceContent::File(bytes) => fsutil::write_file(&path, false, bytes)?,
+        match (step, content) {
+            (Step::Replace(_), PieceContent::File(_)) => {}
+            (_, PieceContent::Folder(snapshot)) => fsutil::write_files(&path, &snapshot.files)?,
+            (_, PieceContent::File(bytes)) => fsutil::write_file(&path, false, bytes)?,
         }
     }
     for ((piece, content), (_, step)) in writes() {
@@ -1460,25 +1456,23 @@ fn write_repo(
             // A file is replaced in one step, so the skill repo is never
             // without its `skiman.toml`: the old content is written to the
             // backup, then the new file is renamed over it.
-            (Step::Replace(old), PieceContent::File(_)) => {
-                let dest = backup.save(&saved, old).map_err(cannot_save)?;
+            (Step::Replace(old), PieceContent::File(bytes)) => {
+                let dest = backups.save(&saved, old).map_err(cannot_save)?;
+                // The backup is the only other copy once the file is replaced.
+                fsutil::barrier(&dest).map_err(cannot_save)?;
                 out!("saved the old {} as {}", target.display(), dest.display());
                 test_hook::at("import", &format!("rename:{rel}"));
-                std::fs::rename(&staged, &target).map_err(|e| {
-                    Failure::operational(format!(
-                        "cannot rename {} to {}: {e}",
-                        staged.display(),
-                        target.display()
-                    ))
+                fsutil::write_atomic(&target, bytes).map_err(|e| {
+                    Failure::operational(format!("cannot write {}: {e}", target.display()))
                 })?;
             }
             (step, _) => {
                 if *step != Step::Write {
-                    let dest = backup.move_in(&target, &saved).map_err(cannot_save)?;
+                    let dest = backups.move_in(&target, &saved).map_err(cannot_save)?;
                     out!("moved {} to {}", target.display(), dest.display());
                 }
                 test_hook::at("import", &format!("rename:{rel}"));
-                staging::rename_into_place(&staged, &target)?;
+                staging.place(&staged, &target)?;
             }
         }
         out!("created {}", target.display());
@@ -1488,12 +1482,12 @@ fn write_repo(
 
 /// Moves each original of `plan` to the backup. Sync creates the owned link
 /// in its place. An original that is gone needs nothing.
-fn take_over(plan: &Plan, backup: &Backup) -> Result<(), Failure> {
+fn take_over(plan: &Plan, backups: &mut Backups) -> Result<(), Failure> {
     for entry in &plan.moves {
         let point = entry.backup.display();
         test_hook::at("import", &format!("back-up:{point}"));
         if std::fs::symlink_metadata(&entry.path).is_ok() {
-            let dest = backup.move_in(&entry.path, &entry.backup).map_err(|e| {
+            let dest = backups.move_in(&entry.path, &entry.backup).map_err(|e| {
                 Failure::operational(format!(
                     "cannot move {} to the backup: {e}",
                     entry.path.display()

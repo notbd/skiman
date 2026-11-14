@@ -58,7 +58,15 @@ mod upstream;
 
 pub use exit::Exit;
 
-/// Parses the process arguments, runs the command and returns its exit status.
+/// Parses the process arguments, runs the command and returns its exit
+/// status, once what it flushed is on the disk (ADR 0005).
 pub fn run() -> Exit {
-    cli::run(std::env::args_os())
+    let exit = cli::run(std::env::args_os());
+    match fsutil::drain() {
+        Ok(()) => exit,
+        Err(e) => {
+            err!("error: {e}");
+            exit.combine(Exit::OperationalError)
+        }
+    }
 }

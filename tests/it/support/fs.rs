@@ -79,3 +79,24 @@ pub fn exists(path: impl AsRef<Path>) -> bool {
 pub fn is_executable(path: impl AsRef<Path>) -> bool {
     std::fs::metadata(path).unwrap().permissions().mode() & 0o100 != 0
 }
+
+/// Where skiman notes, in the state folder `state` (`$XDG_STATE_HOME`), the
+/// copy a move of `entry` to a backup on another filesystem made: named by
+/// the `(dev, ino)` of `entry`'s folder and its name in hex.
+pub fn moved_note(state: &Path, entry: &Path) -> std::path::PathBuf {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::MetadataExt;
+    let folder = std::fs::metadata(entry.parent().unwrap()).unwrap();
+    let name: String = entry
+        .file_name()
+        .unwrap()
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    state.join(format!(
+        "skiman/moves/{}-{}-{name}",
+        folder.dev(),
+        folder.ino()
+    ))
+}

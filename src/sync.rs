@@ -145,26 +145,30 @@ impl Report {
 
 /// Syncs `repo` while the caller holds its lock and prints the result for `output`.
 pub fn run(paths: &Paths, repo: &SkillRepo, lock: &RepoLock, output: Output) -> Exit {
-    run_with(paths, repo, lock, output, None).0
+    run_with(paths, repo, lock, output, None, &[]).0
 }
 
 /// [`run`], also returning the report. `previous_repo` is the realpath of the
 /// skill repo `init` just switched away from: its links count as owned.
+/// Nothing is said about `failed`, paths whose write the command just
+/// reported failing: the way out sync names for them is that same write.
 pub fn run_with(
     paths: &Paths,
     repo: &SkillRepo,
     _lock: &RepoLock,
     output: Output,
     previous_repo: Option<PathBuf>,
+    failed: &[PathBuf],
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let mut report = reconcile(paths.home(), repo, &manifest, previous_repo);
+            let mut report = reconcile(paths, repo, &manifest, previous_repo);
             crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
             report
         }
         Err(failure) => return (report_failure(failure, output), Report::default()),
     };
+    report.items.retain(|item| !failed.contains(&item.path));
     if output == Output::Normal {
         for (change, entry) in &report.changes {
             let verb = match change {
@@ -221,11 +225,12 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
 /// tools that are not enabled. Then does the same for instruction locations
 /// and the shared body.
 pub fn reconcile(
-    home: &Path,
+    paths: &Paths,
     repo: &SkillRepo,
     manifest: &Manifest,
     previous_repo: Option<PathBuf>,
 ) -> Report {
+    let home = paths.home();
     let mut report = Report::default();
     if let Err(e) = managing_skills::materialise(repo) {
         report.errors.push(format!(
@@ -242,7 +247,7 @@ pub fn reconcile(
             return report;
         }
     };
-    let ownership = Ownership::new(home, repo, manifest, previous_repo);
+    let ownership = Ownership::new(paths, repo, manifest, previous_repo);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
     for tool in installed_tools(home, manifest) {
@@ -520,7 +525,7 @@ fn reconcile_tool_dir(
                 handled.insert(*name);
                 report.items.push(occupied(name, path));
             }
-            (Entry::ManagedElsewhere | Entry::NotASkill, None) => {}
+            (Entry::ManagedElsewhere | Entry::NotASkill | Entry::Moved(_), None) => {}
         }
     }
     for Wanted { name, target } in wanted {

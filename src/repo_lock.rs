@@ -1,66 +1,90 @@
-//! The repo lock: an exclusive lock on `<repo>/.skiman/lock`, held by
-//! mutating commands and sync for their whole run (spec Distribution and refresh).
+//! The locks a write holds for its whole run (spec Distribution and
+//! refresh), taken in this order: `<state dir>/lock`, one per machine,
+//! because the user config, the tool directories and the backups belong to
+//! the machine; then `<repo>/.skiman/lock`, because two state folders (two
+//! `XDG_STATE_HOME`s) can share one skill repo.
 
 use std::fs::{File, TryLockError};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::failure::Failure;
+use crate::paths::Paths;
 use crate::repo::SkillRepo;
 
-/// How long a command waits for a busy lock before failing with exit 4.
+/// How long a command waits for busy locks before failing with exit 4.
 pub const WAIT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(50);
 
 /// Held until dropped; the operating system releases it when the process ends.
 #[derive(Debug)]
 pub struct RepoLock {
-    _file: File,
+    _machine: File,
+    _repo: File,
 }
 
 pub enum Acquire {
     /// Wait up to [`WAIT`], then fail with exit 4.
     Wait,
-    /// Try once; `Ok(None)` when the lock is busy (`sync --hook`).
+    /// Try once; `Ok(None)` when a lock is busy (`sync --hook`).
     TryOnce,
 }
 
 impl RepoLock {
-    /// Takes the lock, creating `.skiman/` and the lock file when missing.
-    pub fn acquire(repo: &SkillRepo, how: Acquire) -> Result<Option<RepoLock>, Failure> {
-        let path = repo.repo_lock_file();
-        let io_failure = |e: std::io::Error| {
-            Failure::operational(format!("cannot lock {}: {e}", path.display()))
-        };
-        std::fs::create_dir_all(repo.local_dir()).map_err(io_failure)?;
-        let file = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&path)
-            .map_err(io_failure)?;
+    /// Takes both locks, creating their folders and files when missing.
+    /// Refuses (exit 4) when, by the time the machine lock is taken, the user
+    /// config names another skill repo: a command switched it meanwhile.
+    pub fn acquire(
+        paths: &Paths,
+        repo: &SkillRepo,
+        how: Acquire,
+    ) -> Result<Option<RepoLock>, Failure> {
         let deadline = Instant::now() + WAIT;
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Some(RepoLock { _file: file })),
-                Err(TryLockError::Error(e)) => return Err(io_failure(e)),
-                Err(TryLockError::WouldBlock) => match how {
-                    Acquire::TryOnce => return Ok(None),
-                    Acquire::Wait if Instant::now() >= deadline => {
-                        return Err(Failure::operational(format!(
-                            "another skiman command holds {} (waited {} seconds)",
-                            path.display(),
-                            WAIT.as_secs()
-                        )));
-                    }
-                    Acquire::Wait => std::thread::sleep(POLL),
-                },
-            }
+        let Some(machine) = take(&paths.state_dir().join("lock"), &how, deadline)? else {
+            return Ok(None);
+        };
+        let configured = SkillRepo::from_config(paths)?;
+        if configured.root() != repo.root() {
+            return Err(Failure::operational(format!(
+                "the skill repo changed to {} while this command waited; nothing was changed, run it again",
+                configured.root().display()
+            )));
         }
+        let Some(file) = take(&repo.repo_lock_file(), &how, deadline)? else {
+            return Ok(None);
+        };
+        Ok(Some(RepoLock {
+            _machine: machine,
+            _repo: file,
+        }))
     }
 
-    /// Whether another process holds the lock. Read-only: a missing lock
-    /// file means nobody holds it, and it is never created; when the lock
-    /// is free, it is taken and released at once.
+    /// Takes both locks, waiting up to [`WAIT`].
+    pub fn wait(paths: &Paths, repo: &SkillRepo) -> Result<RepoLock, Failure> {
+        Ok(RepoLock::acquire(paths, repo, Acquire::Wait)?.expect("waiting never returns busy"))
+    }
+
+    /// The machine lock alone, for `init`: it decides what to do with a folder
+    /// and which skill repo the user config names, so two inits wait for
+    /// each other; [`RepoLock::of_init`] adds the repo lock.
+    pub fn machine(paths: &Paths) -> Result<File, Failure> {
+        let deadline = Instant::now() + WAIT;
+        Ok(take(&paths.state_dir().join("lock"), &Acquire::Wait, deadline)?.expect("waits"))
+    }
+
+    /// `init`'s locks: `machine` from [`RepoLock::machine`], then the repo lock.
+    pub fn of_init(machine: File, repo: &SkillRepo) -> Result<RepoLock, Failure> {
+        let deadline = Instant::now() + WAIT;
+        let file = take(&repo.repo_lock_file(), &Acquire::Wait, deadline)?.expect("waits");
+        Ok(RepoLock {
+            _machine: machine,
+            _repo: file,
+        })
+    }
+
+    /// Whether another process holds the repo lock. Read-only: a missing
+    /// lock file means nobody holds it, and it is never created; when the
+    /// lock is free, it is taken and released at once.
     pub fn is_held(repo: &SkillRepo) -> std::io::Result<bool> {
         let file = match File::open(repo.repo_lock_file()) {
             Ok(file) => file,
@@ -73,9 +97,36 @@ impl RepoLock {
             Err(TryLockError::Error(e)) => Err(e),
         }
     }
+}
 
-    /// Takes the lock, waiting up to [`WAIT`].
-    pub fn wait(repo: &SkillRepo) -> Result<RepoLock, Failure> {
-        Ok(RepoLock::acquire(repo, Acquire::Wait)?.expect("waiting never returns busy"))
+/// The lock on `path`, created with its folder when missing; `None` when it
+/// is busy and `how` tries once.
+fn take(path: &Path, how: &Acquire, deadline: Instant) -> Result<Option<File>, Failure> {
+    let io_failure =
+        |e: std::io::Error| Failure::operational(format!("cannot lock {}: {e}", path.display()));
+    std::fs::create_dir_all(path.parent().expect("a lock file has a parent"))
+        .map_err(io_failure)?;
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+        .map_err(io_failure)?;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(Some(file)),
+            Err(TryLockError::Error(e)) => return Err(io_failure(e)),
+            Err(TryLockError::WouldBlock) => match how {
+                Acquire::TryOnce => return Ok(None),
+                Acquire::Wait if Instant::now() >= deadline => {
+                    return Err(Failure::operational(format!(
+                        "another skiman command holds {} (waited {} seconds)",
+                        path.display(),
+                        WAIT.as_secs()
+                    )));
+                }
+                Acquire::Wait => std::thread::sleep(POLL),
+            },
+        }
     }
 }

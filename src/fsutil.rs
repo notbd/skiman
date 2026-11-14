@@ -1,9 +1,15 @@
-//! Small filesystem helpers: writes that appear in one step, lexical paths,
-//! and the check that a write's parent folders are real folders.
+//! Small filesystem helpers: writes that appear in one step, a rename that
+//! never replaces, lexical paths, and the check that a write's parent
+//! folders are real folders.
 
+use std::fs::File;
 use std::io::{self, Write};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
+
+use rustix::io::Errno;
 
 use crate::failure::Failure;
 use crate::snapshot::SnapshotFile;
@@ -41,14 +47,16 @@ fn create_temporary_sibling<T>(
 }
 
 /// Writes `contents` to a new temporary file created with `mode` (the umask
-/// applies), sets `permissions` on it when given, then renames it to `path`.
-/// The file is created exclusively, so a symlink planted under its name is
-/// never followed. On failure only that file is removed.
+/// applies), sets `permissions` on it when given, then renames it to `path`;
+/// `durable` flushes the file before the rename and the folder after. The
+/// file is created exclusively, so a symlink planted under its name is never
+/// followed. On failure only that file is removed.
 fn replace_atomic(
     path: &Path,
     contents: &[u8],
     mode: u32,
     permissions: Option<std::fs::Permissions>,
+    durable: bool,
 ) -> io::Result<()> {
     let (tmp, mut file) = create_temporary_sibling(path, |tmp| {
         std::fs::OpenOptions::new()
@@ -60,11 +68,180 @@ fn replace_atomic(
     let result = file
         .write_all(contents)
         .and_then(|()| permissions.map_or(Ok(()), |p| file.set_permissions(p)))
-        .and_then(|()| std::fs::rename(&tmp, path));
+        .and_then(|()| match durable {
+            true => Ok(rustix::fs::fsync(&file)?),
+            false => Ok(()),
+        })
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .and_then(|()| match durable {
+            true => flush_path(path.parent().expect("a file has a parent")),
+            false => Ok(()),
+        });
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     result
+}
+
+/// Renames `from` to `to` without replacing anything at `to`: an entry there,
+/// even one that appeared a moment ago, fails with `AlreadyExists`. Where
+/// the filesystem has no such rename (exFAT, NFS), a symlink is made again
+/// at `to` and a file hard-linked there, neither of which replaces anything;
+/// anything else, or a file where there are no hard links either, fails
+/// with `Unsupported` before anything moved. `CrossesDevices` when `from`
+/// cannot be renamed to `to` ([`crossing`]).
+pub fn place_new(from: &Path, to: &Path) -> io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
+        Err(e) if [Errno::NOTSUP, Errno::OPNOTSUPP, Errno::INVAL, Errno::NOSYS].contains(&e) => {
+            place_without_noreplace(from, to)
+        }
+        other => Ok(other?),
+    }
+}
+
+/// [`place_new`] where the rename has no no-replace flag.
+fn place_without_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    let meta = std::fs::symlink_metadata(from)?;
+    let placed = if meta.is_symlink() {
+        std::os::unix::fs::symlink(std::fs::read_link(from)?, to)
+    } else if meta.is_file() {
+        std::fs::hard_link(from, to)
+    } else {
+        Err(io::ErrorKind::Unsupported.into())
+    };
+    match placed {
+        Ok(()) => std::fs::remove_file(from),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(e),
+        Err(e) => Err(io::Error::new(io::ErrorKind::Unsupported, e)),
+    }
+}
+
+/// [`place_new`] for new content, or for an entry moving to a name nothing
+/// else uses: where the filesystem cannot place it without replacing, it
+/// is renamed once nothing is found at `to`, as skiman always did there, so
+/// what appears between the check and the rename is replaced: an empty
+/// folder, or for a file where hard links fail too, any file or link.
+pub fn place_new_or_rename(from: &Path, to: &Path) -> io::Result<()> {
+    match place_new(from, to) {
+        Err(e) if e.kind() == io::ErrorKind::Unsupported => match std::fs::symlink_metadata(to) {
+            Ok(_) => Err(io::ErrorKind::AlreadyExists.into()),
+            Err(_) => std::fs::rename(from, to),
+        },
+        other => other,
+    }
+}
+
+/// Why `from` could not be renamed to `to` when the rename failed with
+/// `CrossesDevices`; nothing moved. On Linux a folder can also come from a
+/// lower layer of a container image (overlayfs), which cannot be renamed.
+pub fn crossing(from: &Path, to: &Path) -> String {
+    let folder = std::fs::symlink_metadata(from).is_ok_and(|m| m.is_dir());
+    let overlay = match cfg!(target_os = "linux") && folder {
+        true => ", or it is a folder from a lower layer of a container image (overlayfs)",
+        false => "",
+    };
+    format!(
+        "cannot rename {} to {}: they are on different filesystems{overlay}; nothing was moved",
+        from.display(),
+        to.display()
+    )
+}
+
+/// [`place_new_or_rename`] for content that has to last (ADR 0005), then
+/// `to`'s folder flushed. Whoever wrote `from` flushed it; an original is
+/// not skiman's to flush, and `from`'s old folder is not flushed either.
+pub fn publish(from: &Path, to: &Path) -> io::Result<()> {
+    place_new_or_rename(from, to)?;
+    flush_path(to.parent().expect("a destination has a parent"))
+}
+
+/// Writes `contents` to a new file at `path`, which must not exist: under a
+/// temporary name first, flushed, then renamed in without replacing, and
+/// the folder flushed. A reader sees all of it or nothing.
+pub fn write_new(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let (tmp, mut file) = create_temporary_sibling(path, |tmp| File::create_new(tmp))?;
+    let written = file
+        .write_all(contents)
+        .and_then(|()| Ok(rustix::fs::fsync(&file)?));
+    written.and_then(|()| publish(&tmp, path)).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
+/// The devices this run flushed to, each with the last path flushed there.
+static FLUSHED: Mutex<Vec<(u64, PathBuf)>> = Mutex::new(Vec::new());
+
+/// Asks the system to write what the file or folder at `path` holds to the
+/// disk (`fsync`), and remembers its device: on Apple platforms `fsync`
+/// reaches only the drive's own cache, and [`drain`] takes it the rest of
+/// the way. A folder some filesystems refuse to fsync (`EBADF`, `EINVAL`)
+/// counts as flushed, as in PostgreSQL's `fsync_fname_ext`.
+pub fn flush_path(path: &Path) -> io::Result<()> {
+    let file = File::open(path)?;
+    let meta = file.metadata()?;
+    match rustix::fs::fsync(&file) {
+        Err(e) if meta.is_dir() && [Errno::BADF, Errno::INVAL].contains(&e) => {}
+        done => done?,
+    }
+    let device = meta.dev();
+    let mut flushed = FLUSHED.lock().unwrap_or_else(PoisonError::into_inner);
+    flushed.retain(|(d, _)| *d != device);
+    flushed.push((device, path.to_owned()));
+    Ok(())
+}
+
+/// Puts everything flushed on the device that holds `path` on the disk,
+/// the drive's cache included: `F_FULLFSYNC` on Apple platforms, falling
+/// back to `fsync` where a filesystem refuses it, as SQLite does; elsewhere
+/// `fsync` already waits for the device.
+pub fn barrier(path: &Path) -> io::Result<()> {
+    let file = File::open(path)?;
+    #[cfg(target_vendor = "apple")]
+    if rustix::fs::fcntl_fullfsync(&file).is_ok() {
+        return Ok(());
+    }
+    Ok(rustix::fs::fsync(&file)?)
+}
+
+/// [`barrier`] once on every device this run flushed to (on a path that
+/// still exists there); skiman calls it before it exits.
+pub fn drain() -> io::Result<()> {
+    let flushed = std::mem::take(&mut *FLUSHED.lock().unwrap_or_else(PoisonError::into_inner));
+    for (_, path) in flushed {
+        let existing = path.ancestors().find(|p| p.exists()).unwrap_or(&path);
+        let failed = |e: io::Error| format!("cannot flush {}: {e}", existing.display());
+        barrier(existing).map_err(|e| io::Error::new(e.kind(), failed(e)))?;
+    }
+    Ok(())
+}
+
+/// Flushes every file and folder at or below `root`, links not followed.
+pub fn flush_tree(root: &Path) -> io::Result<()> {
+    for (path, meta) in entries(root)? {
+        if !meta.is_symlink() {
+            flush_path(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every entry at or below `path`, parents before what they hold, never
+/// following symlinks.
+pub fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {
+    let mut out = vec![(path.to_path_buf(), std::fs::symlink_metadata(path)?)];
+    let mut i = 0;
+    while i < out.len() {
+        if out[i].1.is_dir() {
+            for entry in std::fs::read_dir(&out[i].0)? {
+                let entry = entry?;
+                let meta = std::fs::symlink_metadata(entry.path())?;
+                out.push((entry.path(), meta));
+            }
+        }
+        i += 1;
+    }
+    Ok(out)
 }
 
 /// The text of the file at `path`; `None` when there is none.
@@ -79,30 +256,46 @@ pub fn read_text(path: &Path) -> Result<Option<String>, Failure> {
     }
 }
 
-/// Writes `contents` to a temporary file in the same directory, then renames
-/// it to `path`. The new file gets the mode `std::fs::write` would give it.
+/// Writes `contents` to a temporary file in the same directory, flushed,
+/// then renames it to `path` and flushes the folder. The new file gets the
+/// mode `std::fs::write` would give it.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
-    replace_atomic(path, contents, 0o666, None)
+    replace_atomic(path, contents, 0o666, None, true)
+}
+
+/// [`write_atomic`] without the flushes, for content skiman derives again
+/// when it is lost (sync's own files).
+pub fn write_derived(path: &Path, contents: &[u8]) -> io::Result<()> {
+    replace_atomic(path, contents, 0o666, None, false)
 }
 
 /// Writes `files` below `dir` (created even when `files` is empty), each
-/// with mode `0o755` when executable, else `0o644`.
+/// with mode `0o755` when executable, else `0o644`, each flushed, then
+/// the folders they are in, for [`publish`].
 pub fn write_files(dir: &Path, files: &[SnapshotFile]) -> Result<(), Failure> {
     std::fs::create_dir_all(dir)
         .map_err(|e| Failure::operational(format!("cannot create {}: {e}", dir.display())))?;
     for file in files {
         write_file(&dir.join(&file.path), file.executable, &file.content)?;
     }
-    Ok(())
+    let folders = entries(dir).and_then(|all| {
+        let mut folders = all.into_iter().filter(|(_, meta)| meta.is_dir());
+        folders.try_for_each(|(folder, _)| flush_path(&folder))
+    });
+    folders.map_err(|e| Failure::operational(format!("cannot flush {}: {e}", dir.display())))
 }
 
-/// Writes one file of [`write_files`], creating its parent folders.
+/// Writes one file of [`write_files`], creating its parent folders, and
+/// flushes it, mode included.
 pub fn write_file(path: &Path, executable: bool, content: &[u8]) -> Result<(), Failure> {
     let io = |e: io::Error| Failure::operational(format!("cannot write {}: {e}", path.display()));
     std::fs::create_dir_all(path.parent().expect("file has a parent")).map_err(io)?;
-    std::fs::write(path, content).map_err(io)?;
     let mode = if executable { 0o755 } else { 0o644 };
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(io)
+    let mut file = File::create(path).map_err(io)?;
+    file.write_all(content)
+        .and_then(|()| file.set_permissions(std::fs::Permissions::from_mode(mode)))
+        .and_then(|()| Ok(rustix::fs::fsync(&file)?))
+        .map_err(io)
 }
 
 /// Like [`write_atomic`], with mode `0o755`, so `path` is never seen without its execute bits.
@@ -117,7 +310,7 @@ pub fn rewrite_atomic(
     contents: &[u8],
     permissions: std::fs::Permissions,
 ) -> io::Result<()> {
-    replace_atomic(path, contents, 0o600, Some(permissions))
+    replace_atomic(path, contents, 0o600, Some(permissions), true)
 }
 
 /// Points skiman's own link `link` at `target`: creates the new link under a
@@ -202,6 +395,83 @@ pub fn broken_chain(inside: &Path, dest: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the filesystem has no no-replace rename (exFAT, NFS), what
+    /// appeared at the destination after any check is still never replaced:
+    /// the fallback is called as `place_new` calls it after `ENOTSUP`.
+    #[test]
+    fn without_a_no_replace_rename_a_link_or_file_never_replaces_and_a_folder_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        std::os::unix::fs::symlink("target", dir.join("link")).unwrap();
+        std::fs::write(dir.join("file"), "new").unwrap();
+        std::fs::create_dir(dir.join("folder")).unwrap();
+        for (from, appeared) in [("link", "appeared-file"), ("file", "appeared-link")] {
+            match appeared {
+                "appeared-file" => std::fs::write(dir.join(appeared), "kept").unwrap(),
+                _ => std::os::unix::fs::symlink("kept", dir.join(appeared)).unwrap(),
+            }
+            let e = place_without_noreplace(&dir.join(from), &dir.join(appeared)).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{from}");
+            assert!(
+                std::fs::symlink_metadata(dir.join(from)).is_ok(),
+                "{from} stays"
+            );
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("appeared-file")).unwrap(),
+            "kept"
+        );
+        assert_eq!(
+            std::fs::read_link(dir.join("appeared-link")).unwrap(),
+            Path::new("kept")
+        );
+        let e = place_without_noreplace(&dir.join("folder"), &dir.join("free")).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::Unsupported);
+        assert!(dir.join("folder").is_dir() && !dir.join("free").exists());
+
+        place_without_noreplace(&dir.join("link"), &dir.join("link2")).unwrap();
+        place_without_noreplace(&dir.join("file"), &dir.join("file2")).unwrap();
+        assert_eq!(
+            std::fs::read_link(dir.join("link2")).unwrap(),
+            Path::new("target")
+        );
+        assert_eq!(std::fs::read_to_string(dir.join("file2")).unwrap(), "new");
+        assert!(std::fs::symlink_metadata(dir.join("link")).is_err() && !dir.join("file").exists());
+    }
+
+    #[test]
+    fn drain_reaches_a_flushed_folder_that_is_gone_through_its_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let gone = temp.path().join("staged");
+        std::fs::create_dir(&gone).unwrap();
+        flush_path(&gone).unwrap();
+        std::fs::remove_dir(&gone).unwrap();
+
+        // Other tests flush on their own threads: only the result is checked.
+        drain().unwrap();
+    }
+
+    #[test]
+    fn place_new_never_replaces_an_entry_and_moves_into_a_free_name() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        std::fs::write(dir.join("new"), "new").unwrap();
+        std::fs::create_dir(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("taken"), "kept").unwrap();
+        std::fs::create_dir(dir.join("empty")).unwrap();
+        for (from, to) in [("new", "taken"), ("folder", "empty"), ("folder", "taken")] {
+            let e = place_new(&dir.join(from), &dir.join(to)).unwrap_err();
+            assert_eq!(e.kind(), io::ErrorKind::AlreadyExists, "{from} to {to}");
+        }
+        assert_eq!(std::fs::read_to_string(dir.join("taken")).unwrap(), "kept");
+        assert!(dir.join("empty").is_dir());
+
+        place_new(&dir.join("new"), &dir.join("placed")).unwrap();
+        place_new(&dir.join("folder"), &dir.join("moved")).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("placed")).unwrap(), "new");
+        assert!(dir.join("moved").is_dir() && !dir.join("folder").exists());
+    }
 
     fn root() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();

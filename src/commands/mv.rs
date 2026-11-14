@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use crate::Exit;
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
-use crate::fsutil::{read_text, rewrite_atomic, write_atomic};
+use crate::fsutil::{self, read_text, rewrite_atomic, write_atomic};
 use crate::lockfile;
 use crate::manifest;
 use crate::names;
@@ -33,7 +33,7 @@ fn mv(old: &str, new: &str) -> Result<Exit, Failure> {
     check_single_name(old)?;
     names::check_new_name(new)?;
 
-    let lock = RepoLock::wait(&repo)?;
+    let lock = RepoLock::wait(&paths, &repo)?;
     if !std::fs::symlink_metadata(repo.skill_dir(old)).is_ok_and(|m| m.is_dir()) {
         return Err(Failure::refused(format!(
             "skills/{old} is not a skill folder"
@@ -184,10 +184,13 @@ fn rename(from: &Path, to: &Path) -> Result<(), Failure> {
             to.display()
         ))
     };
-    if std::fs::symlink_metadata(to).is_ok() {
-        return Err(fail("it appeared while skiman was renaming".to_owned()));
-    }
-    std::fs::rename(from, to).map_err(|e| fail(e.to_string()))?;
+    fsutil::publish(from, to).map_err(|e| match e.kind() {
+        std::io::ErrorKind::AlreadyExists => {
+            fail("it appeared while skiman was renaming".to_owned())
+        }
+        std::io::ErrorKind::CrossesDevices => Failure::operational(fsutil::crossing(from, to)),
+        _ => fail(e.to_string()),
+    })?;
     out!("renamed {} to {}", from.display(), to.display());
     Ok(())
 }

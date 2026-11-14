@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, ToolSetup, assert_symlink, init, tree};
+use crate::support::{
+    Sandbox, Tool, ToolSetup, assert_symlink, exists, init, moved_note, tree, write,
+};
 
 fn write_skill(dir: &std::path::Path, name: &str) {
     std::fs::create_dir_all(dir.join(name)).unwrap();
@@ -363,4 +365,145 @@ fn init_on_a_clone_on_a_second_machine_distributes_every_committed_skill() {
         &managing,
         &managing,
     );
+}
+
+/// skiman notes a move to a backup in its state folder, never in an entry:
+/// a skill holding a file named like the old note installs like any other,
+/// and a note for a foreign skill that names no copy in the backups is
+/// ignored.
+#[test]
+fn a_file_named_like_skimans_move_note_is_only_content() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let source = sandbox.root().join("src/bar");
+    write_skill(source.parent().unwrap(), "bar");
+    std::fs::write(source.join(".skiman-moved-to"), "/nonexistent/copy").unwrap();
+    sandbox
+        .skiman()
+        .arg("add")
+        .arg(&source)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert!(
+        sandbox
+            .skill_repo()
+            .join("skills/bar/.skiman-moved-to")
+            .is_file()
+    );
+    assert!(sandbox.skill_repo().join("upstream/bar/SKILL.md").is_file());
+
+    let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
+    write_skill(&tool_dir, "baz");
+    let entry = tool_dir.join("baz");
+    let meta = std::fs::symlink_metadata(&entry).unwrap();
+    let note = moved_note(&sandbox.state_home(), &entry);
+    write(note, format!("{} {}\n/elsewhere", meta.dev(), meta.ino()));
+    let sync = sandbox.skiman().arg("sync").output().unwrap();
+    let stderr = String::from_utf8_lossy(&sync.stderr);
+    assert!(stderr.contains("foreign skill"), "{stderr}");
+    let doctor = sandbox.skiman().arg("doctor").output().unwrap();
+    let stdout = String::from_utf8_lossy(&doctor.stdout);
+    assert!(!stdout.contains("cut short"), "{stdout}");
+}
+
+/// A FIFO in what a move to another filesystem left is never read: the
+/// session-start sync does not block on it (it would hold skiman's lock),
+/// doctor does not say to delete what is left, and nothing is deleted.
+#[test]
+fn a_fifo_in_what_a_move_cut_short_left_does_not_block_sync_hook() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
+    write_skill(&tool_dir, "notes");
+    let copy = sandbox
+        .state_home()
+        .join("skiman/backups/20200101T000000Z/claude-code/notes");
+    write_skill(copy.parent().unwrap(), "notes");
+    let entry = tool_dir.join("notes");
+    let meta = std::fs::symlink_metadata(&entry).unwrap();
+    let note = moved_note(&sandbox.state_home(), &entry);
+    write(
+        &note,
+        format!("{} {}\n{}", meta.dev(), meta.ino(), copy.display()),
+    );
+    let made = sandbox
+        .std_command("mkfifo")
+        .arg(entry.join("pipe"))
+        .status()
+        .unwrap();
+    assert!(made.success());
+
+    let mut hook = sandbox
+        .std_command(env!("CARGO_BIN_EXE_skiman"))
+        .args(["sync", "--hook"])
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = hook.try_wait().unwrap() {
+            break Some(status);
+        }
+        if started.elapsed() > Duration::from_secs(10) {
+            hook.kill().unwrap();
+            hook.wait().unwrap();
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    assert_eq!(
+        status.and_then(|s| s.code()),
+        Some(0),
+        "sync --hook blocked"
+    );
+    assert!(exists(entry.join("pipe")) && entry.join("SKILL.md").is_file());
+    assert!(note.is_file());
+    // The copy holds no FIFO, so doctor does not say to delete the rest.
+    let doctor = sandbox.skiman().arg("doctor").output().unwrap();
+    let said = String::from_utf8_lossy(&doctor.stdout);
+    assert!(
+        said.contains("changed since") && !said.contains("; delete it"),
+        "{said}"
+    );
+}
+
+/// One write at a time on a machine: a command that waited for the
+/// machine lock while another switched the skill repo writes nothing.
+#[test]
+fn a_command_that_waited_while_the_skill_repo_was_switched_writes_nothing() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let other = sandbox.root().join("other-repo");
+    std::fs::create_dir(&other).unwrap();
+    let config = sandbox.config_home().join("skiman/config.toml");
+    let text = std::fs::read_to_string(&config).unwrap();
+    let repo = sandbox.skill_repo().display().to_string();
+    let switched = text.replace(&repo, &other.display().to_string());
+    assert_ne!(switched, text);
+    let lock = std::fs::File::options()
+        .write(true)
+        .open(sandbox.state_home().join("skiman/lock"))
+        .unwrap();
+    lock.lock().unwrap();
+
+    let output = std::thread::scope(|scope| {
+        let new = scope.spawn(|| sandbox.skiman().args(["new", "pdf", "-d", "d"]).output());
+        std::thread::sleep(Duration::from_millis(500));
+        std::fs::write(&config, &switched).unwrap();
+        drop(lock);
+        new.join().unwrap().unwrap()
+    });
+
+    assert_eq!(output.status.code(), Some(4));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "the skill repo changed to {}",
+            other.canonicalize().unwrap().display()
+        )),
+        "{stderr}"
+    );
+    assert!(!sandbox.skill_repo().join("skills/pdf").exists());
 }

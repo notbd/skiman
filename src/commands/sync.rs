@@ -21,7 +21,7 @@ pub fn run(hook: bool) -> Exit {
         Ok(repo) => repo,
         Err(failure) => return sync::report_failure(failure, output),
     };
-    match RepoLock::acquire(&repo, how) {
+    match RepoLock::acquire(&paths, &repo, how) {
         Ok(Some(lock)) => sync::run(&paths, &repo, &lock, output),
         // Busy: another command is syncing; `--hook` exits 0 silently.
         Ok(None) => Exit::Success,

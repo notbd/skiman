@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backup;
+use crate::backup::Backups;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
@@ -19,7 +19,7 @@ use crate::project::git::{ignored, operation_in_progress, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
 use crate::project::state::{Evaluated, State, check_rules, classify};
-use crate::project::swap::{self, Backups, Expect, Outcome, Place, Previous, Replace};
+use crate::project::swap::{self, Expect, Outcome, Place, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
 use crate::repo::SkillRepo;
@@ -51,7 +51,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             dir.display()
         )));
     }
-    let _lock = RepoLock::wait(&repo)?;
+    let _lock = RepoLock::wait(&paths, &repo)?;
     let manifest = Manifest::load(&repo)?;
     if manifest.projects().iter().any(|entry| entry.id == id) {
         return Err(Failure::refused(format!(
@@ -121,7 +121,7 @@ impl Context {
     fn open() -> Result<Context, Failure> {
         let paths = Paths::from_env()?;
         let repo = SkillRepo::from_config(&paths)?;
-        let lock = RepoLock::wait(&repo)?;
+        let lock = RepoLock::wait(&paths, &repo)?;
         if let Some(operation) = operation_in_progress(repo.root()) {
             return Err(Failure::operational(format!(
                 "the skill repo {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
@@ -151,7 +151,7 @@ impl Context {
     }
 
     fn backups(&self) -> Backups {
-        Backups::under(self.paths.state_dir().join("backups"))
+        Backups::new(&self.paths)
     }
 
     /// The root a path given on the command line is in, and the path
@@ -196,8 +196,15 @@ impl Context {
     }
 
     /// Saves the synced hashes, reports the backup, and syncs. `own` is the
-    /// exit status of the command's own work.
-    fn finish(&self, synced: &mut Synced, backups: &Backups, own: Exit) -> Result<Exit, Failure> {
+    /// exit status of the command's own work; `failed` the items whose write
+    /// failed, which sync says nothing about.
+    fn finish(
+        &self,
+        synced: &mut Synced,
+        backups: &Backups,
+        own: Exit,
+        failed: &[PathBuf],
+    ) -> Result<Exit, Failure> {
         synced.save(&self.paths).map_err(|e| {
             Failure::operational(format!(
                 "cannot write {}: {e}",
@@ -207,7 +214,15 @@ impl Context {
         if let Some(dir) = backups.created() {
             out!("replaced versions are in {}", dir.display());
         }
-        Ok(own.combine(self.sync()))
+        let sync = sync::run_with(
+            &self.paths,
+            &self.repo,
+            &self.lock,
+            Output::Normal,
+            None,
+            failed,
+        );
+        Ok(own.combine(sync.0))
     }
 
     fn sync(&self) -> Exit {
@@ -607,6 +622,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     }
     let mut exit = own;
     let mut written = Vec::new();
+    let mut failed = Vec::new();
     for p in &plan.writes {
         let content = p
             .new
@@ -627,6 +643,9 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         .run(&mut backups);
         let (placed, more) = report_outcome(outcome, Verb::Adopt, &p.item.disk(p.root));
         exit = exit.combine(more);
+        if more == Exit::OperationalError {
+            failed.push(p.item.disk(p.root));
+        }
         if placed {
             synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
             written.push(p.item.mirror_rel());
@@ -637,7 +656,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             "warning: git ignores {path} in the skill repo ({rule}), so it never gets history; change that rule"
         );
     }
-    ctx.finish(&mut synced, &backups, exit)
+    ctx.finish(&mut synced, &backups, exit, &failed)
 }
 
 // ---------------------------------------------------------------- restore
@@ -733,6 +752,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     let mut backups = ctx.backups();
     let mut exit = own;
     let mut recovered = BTreeSet::new();
+    let mut failed = Vec::new();
     for p in &plan.writes {
         let disk = p.item.disk(p.root);
         let anchor = p.item.anchor_dir(p.root);
@@ -761,11 +781,14 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
         .run(&mut backups);
         let (placed, more) = report_outcome(outcome, Verb::Restore, &disk);
         exit = exit.combine(more);
+        if more == Exit::OperationalError {
+            failed.push(disk.clone());
+        }
         if placed {
             synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
         }
     }
-    ctx.finish(&mut synced, &backups, exit)
+    ctx.finish(&mut synced, &backups, exit, &failed)
 }
 
 // ---------------------------------------------------------------- eject
@@ -878,7 +901,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
     if !yes && !confirm("Eject? [y/N] ")? {
         return Err(Failure::refused("not ejected; nothing was changed"));
     }
-    let mut backup: Option<Backup> = None;
+    let mut backups = ctx.backups();
     let mut exit = Exit::Success;
     let mut unregister = Vec::new();
     let projects_dir = ctx.repo.root().join(MIRROR_DIR);
@@ -896,11 +919,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 all_out = false;
                 continue;
             }
-            let backup = match &mut backup {
-                Some(b) => b,
-                None => backup.insert(Backup::create(&ctx.paths, "nothing was changed")?),
-            };
-            match backup.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
+            match backups.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {
                     out!("moved {} to {}", item.mirror_rel(), to.display());
                     synced.remove_under(&ejection.root.id, &item.rel);
@@ -957,10 +976,10 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             out!("removed [projects.{id}] from skiman.toml");
         }
     }
-    if let Some(backup) = &backup {
-        out!("the mirrors are in {}", backup.dir().display());
+    if let Some(dir) = backups.created() {
+        out!("the mirrors are in {}", dir.display());
     }
-    ctx.finish(&mut synced, &ctx.backups(), exit)
+    ctx.finish(&mut synced, &ctx.backups(), exit, &[])
 }
 
 /// Removes `dir` when it holds nothing but empty folders and files with an

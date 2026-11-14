@@ -248,37 +248,46 @@ set-aside copy (step 3), and `target` the destination path.
 
 1. Read the source into an in-memory snapshot and run the safety rules on it.
    Its hash becomes the new synced hash; the live source is not re-read.
-2. Write the snapshot into the swap folder. For a file, also make and remove
-   a hard link to it there: on a filesystem without hard links this probe
-   fails, and the destination is left untouched.
+2. Write the snapshot into the swap folder. For a file, also place it under
+   a probe name and back, as step 4 places it: on a filesystem with neither
+   a rename that never replaces nor hard links (exFAT) this probe fails, and
+   the destination is left untouched.
 3. If the destination exists, rename it into the swap folder (same
    filesystem, so it keeps its inode and a late write through an open handle
    lands in it) and hash it. If it no longer matches what the plan saw, put
-   it back without replacing anything, and report a conflict.
-4. Put the new entry in place without replacing anything: a hard link for a
-   file (fails if something appeared), `rename` for a folder (fails over a
-   file or a non-empty folder).
-5. Rename the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
-   for mirror content, `backups/<ts>/projects/<id>/…` for project content),
-   then hash it again: a different hash means a late write landed there, and
-   is reported with the backup path. Nothing skiman replaces is deleted.
+   it back without replacing anything, and report a conflict. A folder that
+   cannot be renamed there (on Linux, one from a lower overlayfs layer)
+   stops the replace before anything moved.
+4. Put the new entry in place without replacing anything: a rename that
+   never replaces (`RENAME_NOREPLACE`); where the filesystem has none, a hard
+   link for a file, and for a folder a `rename` once the name is found free
+   (`rename` never replaces a file or a non-empty folder).
+5. Move the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
+   for mirror content, `backups/<ts>/projects/<id>/…` for project content):
+   a rename, or on another filesystem a copy compared entry by entry, then
+   the set-aside copy deleted. Then hash it again: a different hash means a
+   late write landed there, and is reported with the backup path. Nothing
+   skiman replaces is lost.
 6. Write the new synced hash; remove the swap folder.
 
-A set-aside copy is only ever renamed, never copied and deleted, for its
-whole life: copying and deleting it would lose a late write through an open
-handle. Failure handling, so an error never deletes the only copy:
+A set-aside copy is only renamed while it is in the swap folder: copying and
+deleting it would lose a late write through an open handle. Only its move
+into a backup on another filesystem copies and deletes it (step 5), and a
+write after the comparison is lost (ADR 0005). Failure handling, so an error
+never deletes the only copy:
 
 - "Put back" (step 3) and every undo use the same no-replace placement as
   step 4. If the original path is taken meanwhile, both versions stay where
   they are and the command reports both paths.
 - A failure in step 4 puts the set-aside copy back and exits 4.
-- A failure in step 5, including a backup folder on another filesystem,
-  leaves the copy in the swap folder, keeps the folder, and reports the path.
+- A failure in step 5 keeps the swap folder, exits 4 and reports where the
+  set-aside copy is whole: in the swap folder, or, when a move to another
+  filesystem fails after its copy is complete, in the backup.
 - A swap folder that outlives its command (a failure above, a killed
   process) is never cleaned up automatically: `doctor` lists it with what it
   holds, and the next `restore` in that project (or the next mirror write,
-  for `.skiman/swap/`) renames what is in `old/` into a backup first, or
-  leaves it and reports it when that rename crosses filesystems. `new/` is
+  for `.skiman/swap/`) moves what is in `old/` into a backup first, as in
+  step 5, or leaves it and reports it when that fails. `new/` is
   deleted, never backed up: it is a copy of a source that still exists, or a
   second link to an entry already in place.
 
@@ -296,7 +305,7 @@ content or undoes a local deletion on either side; that needs the item's
 exact path.** So an
 `adopt` an agent runs with `--yes` cannot settle conflicts in bulk.
 Conventions as today: `--yes` without a terminal, exit codes 0/1/2/3/4, the
-repo lock, staging, backups under machine state.
+locks, staging, backups under machine state.
 
 ### Local edits skiman did not see
 

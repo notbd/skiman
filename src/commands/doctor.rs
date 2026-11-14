@@ -15,6 +15,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
+use crate::backup;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::git;
@@ -57,8 +58,8 @@ fn doctor() -> Result<Exit, Failure> {
     let installed: Vec<&AgentTool> = sync::installed_tools(home, &manifest).collect();
     report_session_hooks(home, &installed, &root, &config.binary);
     report_tools(home, &manifest, &installed);
-    report_entries(home, &repo, &manifest, &installed).map_err(io)?;
-    report_instruction_locations(home, &repo, &manifest, &installed);
+    report_entries(&paths, &repo, &manifest, &installed).map_err(io)?;
+    report_instruction_locations(&paths, &repo, &manifest, &installed);
     report_skill_repo(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
     report_projects(&paths, &repo, &manifest);
@@ -192,7 +193,7 @@ fn alias_note<'a>(
 /// Every tool-directory entry skiman does not own, classified like sync
 /// does, plus the managed-elsewhere paths that exist.
 fn report_entries(
-    home: &Path,
+    paths: &Paths,
     repo: &SkillRepo,
     manifest: &Manifest,
     installed: &[&AgentTool],
@@ -202,7 +203,8 @@ fn report_entries(
         .into_iter()
         .map(|w| w.name)
         .collect();
-    let ownership = Ownership::new(home, repo, manifest, None);
+    let home = paths.home();
+    let ownership = Ownership::new(paths, repo, manifest, None);
     let mut managed = BTreeSet::new();
     let mut reconciled = Vec::new();
     for tool in installed {
@@ -228,6 +230,7 @@ fn report_entries(
             }
             match (ownership.classify(&real, &name, &meta), want) {
                 (Entry::Owned(_), _) => {}
+                (Entry::Moved(copy), _) => out!("{}", backup::cut_short(&path, &copy)),
                 (_, Some(n)) => {
                     let kind = ItemKind::Occupied { name: n.to_owned() };
                     out!("{}", item(path, kind).message());
@@ -292,12 +295,13 @@ fn entries(dir: &Path) -> std::io::Result<Vec<(OsString, std::fs::Metadata)>> {
 
 /// Instruction locations skiman does not own, and files a tool loads instead of them.
 fn report_instruction_locations(
-    home: &Path,
+    paths: &Paths,
     repo: &SkillRepo,
     manifest: &Manifest,
     installed: &[&AgentTool],
 ) {
-    let ownership = Ownership::new(home, repo, manifest, None);
+    let home = paths.home();
+    let ownership = Ownership::new(paths, repo, manifest, None);
     let mut seen = Vec::new();
     for tool in installed {
         let path = home.join(tool.instruction_file);

@@ -1,5 +1,5 @@
 //! Failure injection for black-box tests: lets a test act at a precise step
-//! of a write command (for example edit a skill between two re-hashes).
+//! of a write command (for example edit a skill right before it is written).
 //! Compiled only into debug builds; release builds never read the variables.
 //!
 //! `SKIMAN_TEST_HOOK=<scope>:<point>` selects the step (the scope is a skill

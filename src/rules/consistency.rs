@@ -85,7 +85,7 @@ pub fn check(
                     if let Some(locked) = records.locked_snapshot(name) {
                         let actual = tree_hash(tree, &upstream)?;
                         if actual != locked {
-                            out.insert(Violation::new(&upstream, None, rule::SNAPSHOT_HASH, format!("tree hash {actual} does not match the snapshot {locked} in skiman.lock; upstream snapshots are never edited by hand, so restore it")));
+                            out.insert(Violation::new(&upstream, None, rule::SNAPSHOT_HASH, format!("tree hash {actual} does not match the snapshot {locked} in skiman.lock; upstream snapshots are never edited by hand, so restore it (if an update stopped part-way, run `skiman update {name}` again)")));
                         }
                     }
                 }

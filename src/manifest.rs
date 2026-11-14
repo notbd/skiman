@@ -158,19 +158,6 @@ pub fn without_project(text: &str, id: &str) -> Result<String, String> {
     Ok(doc.to_string())
 }
 
-/// The TOML text of the `[skills.<name>]` table of `text` (a `skiman.toml`
-/// or `skiman.lock`) with its subtables, as a backup fragment: what the user
-/// pastes back in place of that skill's entry. Empty when there is none.
-pub fn skill_fragment(text: &str, name: &str) -> Result<String, String> {
-    let doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    let mut fragment = DocumentMut::new();
-    if let Some(item) = doc.get("skills").and_then(|skills| skills.get(name)) {
-        let skills = subtable(fragment.as_table_mut(), "skills").expect("new table");
-        skills.insert(name, item.clone());
-    }
-    Ok(fragment.to_string().trim_start().to_owned())
-}
-
 /// `text` (a `skiman.toml` or `skiman.lock`) without the `[skills.<name>]`
 /// table and its subtables, and without the `[[secrets.allow]]` entries for
 /// a path below `skills/<name>/` or `upstream/<name>/`. Everything else

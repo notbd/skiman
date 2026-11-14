@@ -83,6 +83,11 @@ impl Change {
             .replacing(replaced)
     }
 
+    /// Whether the skill repo at `root` holds every piece as wanted already.
+    pub fn in_place(&self, root: &Path) -> Result<bool, Failure> {
+        Ok(self.held(root)?.iter().all(|h| *h == Held::Same))
+    }
+
     /// What the skill repo at `root` holds where each piece goes.
     pub fn held(&self, root: &Path) -> Result<Vec<Held>, Failure> {
         self.pieces
@@ -112,14 +117,24 @@ impl Change {
         backups: &mut Backups,
     ) -> (Vec<String>, Result<(), Failure>) {
         let mut done = Vec::new();
-        let mut result = Ok(());
+        // The backup folder first, so one that cannot be made stops the write before it starts.
+        let backs_up = self.pieces.iter().zip(held).any(|((_, want), seen)| {
+            matches!(seen, Held::Other(_)) && (self.save_files || !matches!(want, Want::File(_)))
+        });
+        let mut result = match backs_up {
+            true => backups
+                .dir()
+                .map(drop)
+                .map_err(|e| Failure::operational(format!("{e}; nothing was changed"))),
+            false => Ok(()),
+        };
         for ((rel, want), seen) in self.pieces.iter().zip(held) {
+            if result.is_err() {
+                break;
+            }
             if *seen != Held::Same {
                 test_hook::at(self.command, &format!("write:{rel}"));
                 result = self.write(root, rel, want, seen, staging, backups, &mut done);
-                if result.is_err() {
-                    break;
-                }
             }
         }
         (done, result)

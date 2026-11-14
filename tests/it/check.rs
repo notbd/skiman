@@ -428,7 +428,7 @@ fn the_tree_hash_follows_the_spec_ignoring_finder_files_and_empty_folders() {
     let flipped = tree_hash(&upstream);
     assert_ne!(flipped, by_hand);
     check(&sandbox).code(1).stdout_eq(format!(
-        "upstream/pdf: snapshot-hash: tree hash {flipped} does not match the snapshot {by_hand} in skiman.lock; upstream snapshots are never edited by hand, so restore it\n"
+        "upstream/pdf: snapshot-hash: tree hash {flipped} does not match the snapshot {by_hand} in skiman.lock; upstream snapshots are never edited by hand, so restore it (if an update stopped part-way, run `skiman update pdf` again)\n"
     ));
 }
 
@@ -442,7 +442,7 @@ fn a_hand_edited_upstream_snapshot_is_a_hash_mismatch() {
     write(&sandbox, "upstream/pdf/SKILL.md", "no frontmatter\n");
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
-upstream/pdf: snapshot-hash: tree hash sha256:[..] does not match the snapshot sha256:[..] in skiman.lock; upstream snapshots are never edited by hand, so restore it
+upstream/pdf: snapshot-hash: tree hash sha256:[..] does not match the snapshot sha256:[..] in skiman.lock; upstream snapshots are never edited by hand, so restore it (if an update stopped part-way, run `skiman update pdf` again)
 
 "#]]);
 }

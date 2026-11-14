@@ -65,7 +65,7 @@ fn a_clean_merge_keeps_committed_and_uncommitted_local_edits_and_applies_the_ups
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  modified reference.md\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
 
@@ -131,7 +131,7 @@ fn structural_changes_on_both_sides_merge_cleanly() {
              \x20 added theirs.md\n\
              \x20 deleted up-delete.md\n\
              \x20 deleted up-rename.md\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
 
@@ -168,7 +168,6 @@ fn after_an_update_the_snapshot_and_lock_match_upstream_and_the_old_state_sits_i
     let old_skill = tree(&skill);
     let old_upstream = tree(repo.join("upstream/pdf"));
     let old_manifest = read(repo.join("skiman.toml"));
-    let old_lock = read(repo.join("skiman.lock"));
     up.write("reference.md", lines(&[(20, "upstream fix")]))
         .write_executable("run.sh", "#!/bin/sh\n");
     let commit = up.commit("v2");
@@ -191,17 +190,9 @@ fn after_an_update_the_snapshot_and_lock_match_upstream_and_the_old_state_sits_i
     assert_eq!(tree(saved.join("skills/pdf")), old_skill);
     assert_eq!(tree(saved.join("upstream/pdf")), old_upstream);
     assert_eq!(
-        read(saved.join("skiman.toml.pdf.fragment")),
-        "[skills.pdf.source]\nurl = \"https://github.com/acme/pdf.git\"\npath = \"\"\n"
-    );
-    assert_eq!(
-        read(saved.join("skiman.lock.pdf.fragment")),
-        old_lock.strip_prefix("version = 1\n\n").unwrap()
-    );
-    assert_eq!(
         std::fs::read_dir(&saved).unwrap().count(),
-        4,
-        "only the two folders and two fragments"
+        2,
+        "only the two folders"
     );
     assert!(
         !repo.join(".skiman/tmp").exists()
@@ -274,8 +265,7 @@ fn an_upstream_commit_that_does_not_touch_the_skill_advances_only_the_lock_commi
         .assert()
         .code(0)
         .stdout_eq(format!(
-            "skill pdf: now at {commit}; no file of the skill changed\n\
-             saved the records of pdf to [..]\n"
+            "skill pdf: now at {commit}; no file of the skill changed\n"
         ))
         .stderr_eq("");
 
@@ -286,13 +276,7 @@ fn an_upstream_commit_that_does_not_touch_the_skill_advances_only_the_lock_commi
         read(repo.join("skiman.lock")),
         lock_before.replace(&old_commit, &commit)
     );
-    let dirs = backup_dirs(&sandbox);
-    assert_eq!(dirs.len(), 1, "{dirs:?}");
-    assert_eq!(
-        read(dirs[0].join("repo/skiman.lock.pdf.fragment")),
-        lock_before.strip_prefix("version = 1\n\n").unwrap()
-    );
-    assert!(dirs[0].join("repo/skiman.toml.pdf.fragment").is_file());
+    assert_eq!(backup_dirs(&sandbox), Vec::<std::path::PathBuf>::new());
 }
 
 #[test]
@@ -326,9 +310,9 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
         .code(4)
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  modified reference.md\n\
-             saved the old folders and records of pdf to [..]\n\
+             saved the old folders of pdf to [..]\n\
              skill xlsx: updated to {xlsx_commit}; changed files:\n  added reference.md\n\
-             saved the old folders and records of xlsx to [..]\n"
+             saved the old folders of xlsx to [..]\n"
         ))
         .stderr_eq(
             "error: skill docx: reading the default branch of https://github.com/acme/docx.git failed: [..]\n...",
@@ -632,7 +616,7 @@ fn an_upstream_rename_of_the_frontmatter_name_keeps_the_install_name() {
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  modified forms.md\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
 
@@ -657,8 +641,7 @@ fn tmp_leftovers_move_before_a_records_only_advance() {
         .code(0)
         .stdout_eq(format!(
             "moved tmp leftovers to [..]/repo/.skiman/tmp\n\
-             skill pdf: now at {commit}; no file of the skill changed\n\
-             saved the records of pdf to [..]\n"
+             skill pdf: now at {commit}; no file of the skill changed\n"
         ))
         .stderr_eq("");
     assert!(!tmp.join("20260101T000000Z").exists());
@@ -711,7 +694,7 @@ fn an_unchanged_upstream_gitignore_from_an_earlier_install_is_removed_by_the_nex
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  deleted .gitignore\n\
              \x20 .gitignore  [not installed]\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
 
@@ -761,7 +744,7 @@ fn update_lists_the_submodules_it_does_not_fetch() {
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n  modified forms.md\n\
              \x20 vendor/lib  [submodule, not fetched]\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
     assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
@@ -836,6 +819,6 @@ fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
         .assert()
         .code(0)
         .stdout_eq(format!(
-            "skill pdf: updated to {commit}; changed files:\n{files}saved the old folders and records of pdf to [..]\n"
+            "skill pdf: updated to {commit}; changed files:\n{files}saved the old folders of pdf to [..]\n"
         ));
 }

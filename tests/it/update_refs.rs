@@ -93,7 +93,7 @@ fn a_branch_following_skill_picks_up_the_new_head() {
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {two}; changed files:\n  modified VERSION\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
 
@@ -190,7 +190,7 @@ fn update_ref_writes_source_ref_ref_kind_and_the_lock_ref_together() {
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {two}; changed files:\n  modified VERSION\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
 
@@ -241,7 +241,7 @@ fn a_hand_edited_source_ref_makes_the_next_update_behave_as_update_ref() {
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {two}; changed files:\n  modified VERSION\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ));
 
     assert_eq!(version(&sandbox), "2\n");
@@ -266,7 +266,7 @@ fn removing_source_ref_by_hand_follows_the_default_branch_and_removes_the_lock_r
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {two}; changed files:\n  modified VERSION\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ));
 
     assert_eq!(version(&sandbox), "2\n");
@@ -282,7 +282,6 @@ fn update_ref_to_a_tag_at_the_locked_commit_rewrites_only_the_metadata() {
     let skill = inodes(repo(&sandbox).join("skills/pdf"));
     let snapshot = inodes(repo(&sandbox).join("upstream/pdf"));
     let skill_tree = tree(repo(&sandbox).join("skills/pdf"));
-    let old_manifest = read(repo(&sandbox).join("skiman.toml"));
 
     sandbox
         .skiman()
@@ -290,8 +289,7 @@ fn update_ref_to_a_tag_at_the_locked_commit_rewrites_only_the_metadata() {
         .assert()
         .code(0)
         .stdout_eq(format!(
-            "skill pdf: now at {one}; no file of the skill changed\n\
-             saved the records of pdf to [..]\n"
+            "skill pdf: now at {one}; no file of the skill changed\n"
         ))
         .stderr_eq("");
 
@@ -299,15 +297,7 @@ fn update_ref_to_a_tag_at_the_locked_commit_rewrites_only_the_metadata() {
     assert_eq!(inodes(repo(&sandbox).join("upstream/pdf")), snapshot);
     assert_eq!(tree(repo(&sandbox).join("skills/pdf")), skill_tree);
     assert_records(&sandbox, &one, Some(("v1", "tag")));
-    let backups: Vec<_> = std::fs::read_dir(sandbox.state_home().join("skiman/backups"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(backups.len(), 1);
-    assert_eq!(
-        read(backups[0].join("repo/skiman.toml.pdf.fragment")),
-        old_manifest[old_manifest.find("[skills.pdf.source]").unwrap()..]
-    );
+    assert!(!sandbox.state_home().join("skiman/backups").exists());
 }
 
 #[test]
@@ -324,8 +314,7 @@ fn a_wrong_hand_written_ref_kind_is_corrected() {
         .assert()
         .code(0)
         .stdout_eq(format!(
-            "skill pdf: now at {one}; no file of the skill changed\n\
-             saved the records of pdf to [..]\n"
+            "skill pdf: now at {one}; no file of the skill changed\n"
         ));
 
     assert_records(&sandbox, &one, Some(("v1", "tag")));
@@ -365,7 +354,7 @@ fn a_local_folder_source_picks_up_changed_files() {
         .code(0)
         .stdout_eq(
             "skill pdf: updated to sha256:[..]; changed files:\n  modified VERSION\n\
-             saved the old folders and records of pdf to [..]\n",
+             saved the old folders of pdf to [..]\n",
         )
         .stderr_eq("");
 
@@ -425,7 +414,7 @@ fn update_ref_to_a_name_that_is_both_a_branch_and_a_tag_follows_the_branch_and_r
         .code(0)
         .stdout_eq(format!(
             "skill pdf: updated to {two}; changed files:\n  modified VERSION\n\
-             saved the old folders and records of pdf to [..]\n\
+             saved the old folders of pdf to [..]\n\
              \x20 note: `release` is also a tag; the branch is followed\n"
         ));
 

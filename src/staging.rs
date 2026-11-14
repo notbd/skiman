@@ -157,7 +157,8 @@ fn move_tmp_leftovers(backups: &mut Backups, tmp: &Path) -> Result<(), Failure> 
     Ok(())
 }
 
-fn list(dir: &Path) -> io::Result<Vec<PathBuf>> {
+/// The entries of `dir`, sorted by path.
+pub fn list(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir)? {
         out.push(entry?.path());

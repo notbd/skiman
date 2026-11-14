@@ -437,18 +437,22 @@ fn readable(kind: Kind) -> bool {
 /// stderr as a warning and never blocks. `tree` shows the content as it
 /// will be after the write (for example an [`crate::tree::Overlay`]).
 pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
-    validate_write_except(tree, scope, &|_| false)
+    refuse_write(tree, scope, &|_| false)?;
+    warn(tree, &|_| false)
 }
 
-/// [`validate_write`] without the violations `excused` accepts: neither
-/// blocking nor printed (update's conflict markers and records).
-pub fn validate_write_except(
+fn unreadable(e: io::Error) -> Failure {
+    Failure::operational(format!("cannot read the skill repo: {e}"))
+}
+
+/// The refusing half of [`validate_write`], without the violations
+/// `excused` accepts (update's conflict markers and records).
+pub fn refuse_write(
     tree: &dyn Tree,
     scope: &Scope,
     excused: &dyn Fn(&Violation) -> bool,
 ) -> Result<(), Failure> {
-    let io = |e: io::Error| Failure::operational(format!("cannot read the skill repo: {e}"));
-    let mut blocking = check(tree, scope).map_err(io)?;
+    let mut blocking = check(tree, scope).map_err(unreadable)?;
     blocking.retain(|v| !excused(v));
     if !blocking.is_empty() {
         let lines: Vec<String> = blocking.iter().map(|v| format!("  {v}")).collect();
@@ -462,12 +466,18 @@ pub fn validate_write_except(
         }
         return Err(Failure::refused(message));
     }
-    for violation in check_all(tree).map_err(io)? {
+    Ok(())
+}
+
+/// The warning half of [`validate_write`]: every violation in `tree` but
+/// those `excused` accepts, printed to stderr.
+pub fn warn(tree: &dyn Tree, excused: &dyn Fn(&Violation) -> bool) -> Result<(), Failure> {
+    for violation in check_all(tree).map_err(unreadable)? {
         if !excused(&violation) {
             err!("warning: {violation}");
         }
     }
-    for warning in warnings_all(tree).map_err(io)? {
+    for warning in warnings_all(tree).map_err(unreadable)? {
         err!("warning: {warning}");
     }
     Ok(())

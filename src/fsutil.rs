@@ -219,15 +219,17 @@ pub fn barrier(path: &Path) -> io::Result<()> {
 }
 
 /// [`barrier`] once on every device this run flushed to (on a path that
-/// still exists there); skiman calls it before it exits.
+/// still exists there), each one even after another failed; skiman calls
+/// it before it exits. The error is the first failure.
 pub fn drain() -> io::Result<()> {
     let flushed = std::mem::take(&mut *FLUSHED.lock().unwrap_or_else(PoisonError::into_inner));
+    let mut first = Ok(());
     for (_, path) in flushed {
         let existing = path.ancestors().find(|p| p.exists()).unwrap_or(&path);
         let failed = |e: io::Error| format!("cannot flush {}: {e}", existing.display());
-        barrier(existing).map_err(|e| io::Error::new(e.kind(), failed(e)))?;
+        first = first.and(barrier(existing).map_err(|e| io::Error::new(e.kind(), failed(e))));
     }
-    Ok(())
+    first
 }
 
 /// Flushes every file and folder at or below `root`, links not followed.

@@ -822,3 +822,35 @@ fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
             "skill pdf: updated to {commit}; changed files:\n{files}saved the old folders of pdf to [..]\n"
         ));
 }
+
+/// The warnings of an update are printed once, however many skills it
+/// writes, and they come from the skill repo as it leaves it.
+#[test]
+fn an_update_of_several_skills_warns_once() {
+    let sandbox = Sandbox::new();
+    let pdf = installed(&sandbox);
+    let docx = sandbox.upstream("acme/docx");
+    docx.write(
+        "SKILL.md",
+        "---\nname: docx\ndescription: Edit docx files\n---\n",
+    );
+    docx.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/docx", "--yes"])
+        .assert()
+        .code(0);
+    write(
+        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        "no frontmatter\n",
+    );
+    pdf.write("reference.md", lines(&[(5, "upstream fix")]));
+    pdf.commit("v2");
+    docx.write("reference.md", "# docx\n");
+    docx.commit("v2");
+
+    let update = sandbox.skiman().arg("update").assert().code(0);
+    let stderr = String::from_utf8_lossy(&update.get_output().stderr).into_owned();
+    let warning = "warning: skills/notes/SKILL.md:1: frontmatter: ";
+    assert_eq!(stderr.matches(warning).count(), 1, "{stderr}");
+}

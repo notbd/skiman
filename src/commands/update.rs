@@ -146,6 +146,18 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
             }
         }
     }
+    // The warnings once for the command, on the skill repo as it leaves it,
+    // excusing the conflicts each merge wrote.
+    let excuses: Vec<_> = prepared
+        .iter()
+        .filter_map(|s| s.merge.as_ref().map(|m| excused(&s.name, m)))
+        .collect();
+    if !excuses.is_empty() {
+        let tree = WorkingTree::new(repo.root());
+        if let Err(failure) = rules::warn(&tree, &|v| excuses.iter().any(|e| e(v))) {
+            exit = exit.combine(failure.report());
+        }
+    }
     match context {
         Some(context) if any_done => {
             exit = exit.combine(sync::run(&paths, &repo, &context.lock, Output::Normal));
@@ -390,7 +402,7 @@ fn plan(repo: &SkillRepo, skill: &Prepared, current: &Current) -> Result<Plan, F
         },
     };
     if let Some(m) = merge {
-        validate(repo, name, &m.merged, &plan, &m.conflicts)?;
+        validate(repo, name, m, &plan)?;
     }
     Ok(plan)
 }
@@ -670,17 +682,9 @@ fn changes(ours: &Snapshot, merged: &Snapshot) -> Vec<(FileChange, String)> {
 /// the merged skill and of the new snapshot gets the secret, symlink and
 /// size rules; the lock entry and Consistency for the skill. Violations
 /// elsewhere, including the other rules on files the merge did not change,
-/// are warnings. The conflict representation is excused: unresolved-conflict
-/// violations in the skill, the frontmatter rules on a `SKILL.md` whose
-/// markers start inside its frontmatter, and a missing `SKILL.md` when the
-/// local side deleted it and upstream's version is in the conflict record.
-fn validate(
-    repo: &SkillRepo,
-    name: &str,
-    merged: &Snapshot,
-    plan: &Plan,
-    conflicts: &[Conflict],
-) -> Result<(), Failure> {
+/// are warnings, printed once when every skill is done. The conflict
+/// representation is excused ([`excused`]).
+fn validate(repo: &SkillRepo, name: &str, merge: &Merge, plan: &Plan) -> Result<(), Failure> {
     let skill = format!("skills/{name}");
     let working_tree = WorkingTree::new(repo.root());
     let candidate = plan.change.overlay(&working_tree);
@@ -699,27 +703,34 @@ fn validate(
         consistency: names,
         ..Scope::default()
     };
-    let skill_md = format!("{skill}/SKILL.md");
-    let frontmatter_markers = conflicts.iter().any(|c| {
-        c.kind == ConflictKind::Markers
-            && c.path == "SKILL.md"
-            && merged
-                .file("SKILL.md")
-                .is_some_and(|f| markers_in_frontmatter(&f.content))
-    });
-    let skill_md_upstream = conflicts
-        .iter()
-        .any(|c| matches!(c.kind, ConflictKind::UpstreamVersion { .. }) && c.path == "SKILL.md");
-    let inside = format!("{skill}/");
-    let excused = |v: &Violation| {
-        (skill_md_upstream && v.rule == rule::SKILL_MD && v.path == skill)
-            || (v.path.starts_with(&inside)
-                && (v.rule == rule::UNRESOLVED_CONFLICT
-                    || (frontmatter_markers
-                        && v.path == skill_md
-                        && FRONTMATTER_RULES.contains(&v.rule))))
+    rules::refuse_write(&candidate, &scope, &excused(name, merge))
+}
+
+/// Whether `v` is part of the conflict representation the merge wrote into
+/// `skills/<name>`, which the rules excuse: an unresolved-conflict violation
+/// in the skill, a frontmatter rule on a `SKILL.md` whose markers start
+/// inside its frontmatter, a missing `SKILL.md` whose upstream version is in
+/// the conflict record.
+fn excused(name: &str, merge: &Merge) -> impl Fn(&Violation) -> bool {
+    let conflict = |kind: fn(&ConflictKind) -> bool| {
+        let mut on_skill_md = merge.conflicts.iter().filter(|c| c.path == "SKILL.md");
+        on_skill_md.any(|c| kind(&c.kind))
     };
-    rules::validate_write_except(&candidate, &scope, &excused)
+    let markers = conflict(|k| *k == ConflictKind::Markers)
+        && merge
+            .merged
+            .file("SKILL.md")
+            .is_some_and(|f| markers_in_frontmatter(&f.content));
+    let upstream_version = conflict(|k| matches!(k, ConflictKind::UpstreamVersion { .. }));
+    let skill = format!("skills/{name}");
+    move |v: &Violation| {
+        (upstream_version && v.rule == rule::SKILL_MD && v.path == skill)
+            || (v.path.starts_with(&format!("{skill}/"))
+                && (v.rule == rule::UNRESOLVED_CONFLICT
+                    || (markers
+                        && v.path == format!("{skill}/SKILL.md")
+                        && FRONTMATTER_RULES.contains(&v.rule))))
+    }
 }
 
 /// `true` when the first conflict marker line of `content` comes before the

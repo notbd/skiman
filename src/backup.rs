@@ -714,6 +714,42 @@ mod tests {
         assert!(to.join("SKILL.md").is_file() && std::fs::symlink_metadata(&from).is_err());
     }
 
+    /// The finish of a cut-short move renames the copy into this backup;
+    /// when its folder then cannot be flushed, the error says where the
+    /// copy is now, the note stays, and the backup counts as used.
+    #[test]
+    fn a_finish_whose_folder_cannot_be_flushed_says_where_the_copy_is() {
+        let temp = tempfile::tempdir().unwrap();
+        let entry = original(temp.path());
+        let parent = temp.path().join("backups");
+        let copy = parent.join("old/tool/skill");
+        std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+        copy_all(&entry, &copy).unwrap();
+        let note = note(&entry, &copy, &parent, None);
+        let before = inventory(&copy).unwrap();
+        let mut backups = Backups::under(parent);
+        // Write and search, no read: the rename goes in, the flush cannot open it.
+        let folder = backups.dir().unwrap().join("tool");
+        std::fs::DirBuilder::new()
+            .mode(0o300)
+            .create(&folder)
+            .unwrap();
+
+        let moved = backups.move_in(&entry, Path::new("tool/skill"));
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let dest = folder.join("skill");
+        let message = moved.unwrap_err().to_string();
+        assert!(
+            message.ends_with(&format!("; the complete copy is at {}", dest.display())),
+            "{message}"
+        );
+        assert_eq!(inventory(&dest).unwrap(), before);
+        assert!(std::fs::symlink_metadata(&entry).is_err());
+        assert!(note.is_file(), "the note stays");
+        assert!(backups.created().is_some());
+    }
+
     #[test]
     fn the_backup_folder_is_created_when_the_first_thing_goes_in() {
         let temp = tempfile::tempdir().unwrap();

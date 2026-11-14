@@ -498,6 +498,83 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{v2}\"")));
 }
 
+/// Killed after the source table and lock entry, before the snapshot: run
+/// again, the import reads the snapshot at the commit the lock entry has,
+/// from the cache, instead of fetching the branch, which moved since; the
+/// upstream need not be reachable.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_branch_that_moved_after_a_kill_before_the_snapshot_keeps_the_locked_commit() {
+    let sandbox = Sandbox::new();
+    let Setup {
+        folder,
+        upstream,
+        commit,
+    } = setup(&sandbox);
+    let manifest = folder.join("skiman.toml");
+    write(&manifest, read(&manifest).replace(&commit, "main"));
+    import_killed_at(&sandbox, &folder, "write:upstream/pdf");
+    upstream.write("skills/pdf/reference.md", "# Reference v2\n");
+    upstream.commit("v2");
+    std::fs::rename(upstream.path(), sandbox.root().join("moved-upstream")).unwrap();
+
+    let output = import(&sandbox, &folder);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.contains(&format!("at {commit} (as the skill repo holds it)")),
+        "{stdout}"
+    );
+    let repo = sandbox.skill_repo();
+    assert_eq!(
+        read(repo.join("upstream/pdf/reference.md")),
+        "# Reference\n"
+    );
+    assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{commit}\"")));
+    sandbox.skiman().arg("check").assert().code(0);
+}
+
+/// The commit the skill repo holds is kept only for the `ref` its lock
+/// entry was read at: an import folder whose `ref` changed, run again after
+/// a kill that wrote the new `ref` to `skiman.toml` but not yet the lock
+/// entry, fetches the new `ref`.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_lock_entry_read_at_another_ref_is_fetched_again() {
+    let sandbox = Sandbox::new();
+    let Setup {
+        folder,
+        upstream,
+        commit,
+    } = setup(&sandbox);
+    let manifest = folder.join("skiman.toml");
+    write(&manifest, read(&manifest).replace(&commit, "main"));
+    assert_eq!(import(&sandbox, &folder).status.code(), Some(0));
+    upstream.write("skills/pdf/reference.md", "# Reference v2\n");
+    let v2 = upstream.commit("v2");
+    upstream.branch("stable");
+    write(&manifest, read(&manifest).replace("\"main\"", "\"stable\""));
+    write(folder.join("skills/memo/SKILL.md"), skill_md("memo"));
+    import_killed_at(&sandbox, &folder, "write:skiman.lock");
+    let repo = sandbox.skill_repo();
+    assert!(read(repo.join("skiman.toml")).contains("ref = \"stable\""));
+
+    let output = import(&sandbox, &folder);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{v2}\"")));
+    assert_eq!(
+        read(repo.join("upstream/pdf/reference.md")),
+        "# Reference v2\n"
+    );
+}
+
 /// The skill repo, the home folder (tool directories, instruction files,
 /// machine state without the git cache) and the import folder, to prove a
 /// command changed nothing.

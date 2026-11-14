@@ -12,11 +12,10 @@
 //! skill repo holds against what the import writes ([`repo_todo`]) ->
 //! takeover plan, no special file in it and no local source it moves away
 //! -> preview -> confirm -> repo lock, checks again (the takeover plan
-//! included) -> tmp leftovers -> `upstream/`, `skiman.lock`, `skiman.toml`,
-//! `instructions/shared.md`, `skills/`, each not yet in place (staged under
-//! `.skiman/tmp/` and renamed into place; what it replaces goes to the
-//! backup first) -> originals in tool directories and instruction locations
-//! to the backup -> sync, which creates every link. Never commits.
+//! included) -> tmp leftovers -> `skiman.toml`, `skiman.lock`, `upstream/`,
+//! `instructions/shared.md`, `skills/`, each not yet in place ([`crate::change`],
+//! which backs up what it replaces) -> originals in tool directories and instruction
+//! locations to the backup -> sync, which creates every link. Never commits.
 //!
 //! There is no record of a run (ADR 0005). An import that stopped part-way
 //! is finished by running the same command again: every run works out the
@@ -547,7 +546,7 @@ fn fetch_sources(
         let url = &source.url;
         let kind = check_url(url)
             .map_err(|why| refuse(&format!("unsupported `url` `{url}`: it {why}")))?;
-        if let Some(third) = fetched_before(repo, &name, &source) {
+        if let Some(third) = fetched_before(paths, repo, &name, &source, prompts) {
             thirds.push(third);
             continue;
         }
@@ -576,21 +575,35 @@ fn fetch_sources(
 /// The third-party skill `name` as the skill repo holds it, when an earlier
 /// run fetched it from a git upstream as `source` declares it: the repo's
 /// source table names the same `url`, `path` and `ref`, and its lock entry
-/// (with that `ref` and a commit) matches `upstream/<name>`. Fetching it
-/// again would move a branch or tag that moved since, and needs the network.
-fn fetched_before(repo: &SkillRepo, name: &str, source: &SourceRecord) -> Option<Third> {
+/// has that `ref` and a commit. Its snapshot is `upstream/<name>` when that
+/// matches the entry, else the entry's commit read from the cache (fetched
+/// when the cache lacks it), for a run stopped before it wrote the
+/// snapshot. Fetching at the `ref` again would move a branch or tag that
+/// moved since, and needs the network.
+fn fetched_before(
+    paths: &Paths,
+    repo: &SkillRepo,
+    name: &str,
+    source: &SourceRecord,
+    prompts: Prompts,
+) -> Option<Third> {
     let manifest = Manifest::load(repo).ok()?;
     let recorded = manifest.source(name)?;
     let entry = Lockfile::load(repo).ok()?.entry(name)?;
-    let version = format!("at {} (as the skill repo holds it)", entry.commit.as_ref()?);
+    // A local folder has no commit: it is read again as it is now.
+    let commit = entry.commit.clone()?;
     let same = (&recorded.url, &recorded.path, &recorded.git_ref)
         == (&source.url, &source.path, &source.git_ref)
         && entry.git_ref == source.git_ref;
-    let snapshot = Snapshot::from_folder(&repo.upstream_dir(name)).ok()?;
-    (same && snapshot.tree_hash() == entry.snapshot).then(|| Third {
+    if !same {
+        return None;
+    }
+    let locked = upstream::locked_snapshot(paths, prompts, repo, name, source, &entry);
+    let snapshot = locked.ok().flatten()?;
+    Some(Third {
         name: name.to_owned(),
         source: source.clone(),
-        version,
+        version: format!("at {commit} (as the skill repo holds it)"),
         ref_kind: recorded.ref_kind,
         snapshot,
         entry,
@@ -1087,49 +1100,30 @@ fn print_plan(repo: &SkillRepo, plan: &Plan, paths: &Paths) {
 }
 
 impl Candidate<'_> {
-    /// Every piece, in the order the import writes them. [`progress`]
-    /// depends on that order:
-    /// - `skiman.toml` comes before the shared body, so a skill repo whose
-    ///   shared body is the import's holds the import's `skiman.toml` too.
-    ///   That holds for a run that starts with the skills, the source tables
-    ///   or the shared body to write (each comes with `skiman.toml` or after
-    ///   it), not for one that starts with only Consistency broken (a
-    ///   `skiman.lock` deleted after the import, say): stopped right before
-    ///   `skiman.toml`, it is taken as done when run again.
+    /// Every piece, in the order the import writes them: `skiman.toml`,
+    /// `skiman.lock`, `upstream/`, the shared body, `skills/`. [`progress`]
+    /// and [`fetched_before`] depend on that order:
+    /// - `skiman.toml` comes first, so a skill repo that holds any other
+    ///   piece as the import writes it holds the import's `skiman.toml` too,
+    ///   and a shared body that is the import's says so.
+    /// - The source tables and lock entries come before the snapshots, so a
+    ///   run stopped after them reads each snapshot again at the commit the
+    ///   lock entry has, instead of fetching a branch or tag that moved.
     /// - The skills come last: written before a shared body that held
     ///   something else, a run stopped between the two would be refused when
     ///   run again.
     fn change(&self) -> Change {
-        let mut pieces: Vec<(String, Want)> = self
-            .thirds
-            .iter()
-            .map(|t| {
-                (
-                    format!("upstream/{}", t.name),
-                    Want::Folder(t.snapshot.files.clone()),
-                )
-            })
-            .collect();
-        pieces.extend([
-            (
-                rules::LOCKFILE.to_owned(),
-                Want::File(self.lock.clone().into_bytes()),
-            ),
-            (
-                rules::MANIFEST.to_owned(),
-                Want::File(self.manifest.clone().into_bytes()),
-            ),
-            (
-                SHARED_BODY.to_owned(),
-                Want::File(self.content.shared_body.clone()),
-            ),
-        ]);
-        pieces.extend(
-            self.content
-                .skills
-                .iter()
-                .map(|(name, skill)| (format!("skills/{name}"), Want::Folder(skill.files.clone()))),
-        );
+        let file = |rel: &str, bytes: &[u8]| (rel.to_owned(), Want::File(bytes.to_vec()));
+        let folder = |rel: String, snapshot: &Snapshot| (rel, Want::Folder(snapshot.files.clone()));
+        let mut pieces = vec![
+            file(rules::MANIFEST, self.manifest.as_bytes()),
+            file(rules::LOCKFILE, self.lock.as_bytes()),
+        ];
+        let thirds = self.thirds.iter();
+        pieces.extend(thirds.map(|t| folder(format!("upstream/{}", t.name), &t.snapshot)));
+        pieces.push(file(SHARED_BODY, &self.content.shared_body));
+        let skills = self.content.skills.iter();
+        pieces.extend(skills.map(|(name, skill)| folder(format!("skills/{name}"), skill)));
         Change {
             pieces,
             command: "import",

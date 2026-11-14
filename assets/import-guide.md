@@ -235,9 +235,11 @@ import writes it, writes the rest, and moves each original still in place.
   `moved tmp leftovers to` holds copies skiman had staged, not originals.
 - Until the skill repo holds every piece of the import, a run fetches the
   upstreams again, except a git upstream the skill repo already holds as
-  declared: the same `url`, `path` and `ref` in its `skiman.toml`, and the
-  commit `skiman.lock` records with the snapshot that goes with it. That one
-  stays at its commit, without the network. Any other upstream not pinned to
+  declared: the same `url`, `path` and `ref` in its `skiman.toml`, and a
+  `skiman.lock` entry with that `ref` and a commit. That one stays at the
+  commit: its snapshot is `upstream/<name>` when that matches the entry,
+  else the commit read from the upstream cache, which goes to the network
+  only when it lacks the commit. Any other upstream not pinned to
   a commit (a branch, a tag, the default branch, a local folder) may bring
   newer content: the preview shows the new commit, and the old snapshot
   goes to the backup.

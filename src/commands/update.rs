@@ -16,7 +16,8 @@
 //! 3. When the snapshot changes, [`merge`] in a temporary repository
 //!    (conflicts are written into the result, exit 3).
 //!
-//! The merge base is the snapshot the lock entry records ([`base`]):
+//! The merge base is the snapshot the lock entry records
+//! ([`upstream::locked_snapshot`]):
 //! `upstream/<name>` when it matches the entry, else read again from where
 //! the entry says it came from.
 //!
@@ -287,7 +288,14 @@ fn prepare(
         None
     } else {
         let ours = Snapshot::from_folder(&repo.skill_dir(name))?;
-        let base = base(paths, prompts, repo, name, &current)?;
+        let (source, entry) = (&current.source, &current.entry);
+        let locked = upstream::locked_snapshot(paths, prompts, repo, name, source, entry)?;
+        let base = locked.ok_or_else(|| {
+            Failure::refused(format!(
+                "upstream/{name} does not match skiman.lock, and neither does {} at the locked version; restore upstream/{name} before updating",
+                source.url
+            ))
+        })?;
         let outcome = match merged_before(paths, repo, name, [&base, &ours, &target.snapshot]) {
             true => Outcome::Clean(ours.clone()),
             false => merge(&base, &ours, &target.snapshot)?,
@@ -309,43 +317,6 @@ fn prepare(
         target,
         merge,
     })
-}
-
-/// The snapshot the skill's lock entry records: `upstream/<name>` when it
-/// matches the entry, else the entry's commit read again from the cache
-/// (fetched when the cache lacks it), or a local folder as it is now. So an
-/// update stopped after it wrote the lock entry, before `upstream/<name>`,
-/// merges from the new entry when it runs again. Refuses (exit 1) when none
-/// matches the entry.
-fn base(
-    paths: &Paths,
-    prompts: Prompts,
-    repo: &SkillRepo,
-    name: &str,
-    current: &Current,
-) -> Result<Snapshot, Failure> {
-    let (source, locked) = (&current.source, &current.entry.snapshot);
-    let snapshot = Snapshot::from_folder(&repo.upstream_dir(name))?;
-    if snapshot.tree_hash() == *locked {
-        return Ok(snapshot);
-    }
-    let upstream = match &current.entry.commit {
-        Some(commit) => {
-            let cache = Cache::open(paths, &source.url, prompts)?;
-            Upstream::at(cache, commit.clone(), None, None)?
-        }
-        None => Upstream::Local {
-            dir: upstream::local_root(paths, &source.url)?,
-        },
-    };
-    let snapshot = upstream.snapshot(&source.path)?;
-    if snapshot.tree_hash() == *locked {
-        return Ok(snapshot);
-    }
-    Err(Failure::refused(format!(
-        "upstream/{name} does not match skiman.lock, and neither does {} at the locked version; restore upstream/{name} before updating",
-        source.url
-    )))
 }
 
 /// Whether `ours` already holds this merge, as an update stopped before the

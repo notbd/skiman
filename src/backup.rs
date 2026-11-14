@@ -232,6 +232,16 @@ impl Backups {
     }
 }
 
+/// A backup folder nothing went in is removed when the command is done,
+/// with the empty folders a failed move made in it; anything in it stays.
+impl Drop for Backups {
+    fn drop(&mut self) {
+        if let (Some(dir), false) = (&self.dir, self.used) {
+            fsutil::remove_empty_dirs(dir);
+        }
+    }
+}
+
 /// `e`, saying that the complete copy is at `copy`.
 fn kept(e: io::Error, copy: &Path) -> io::Error {
     let message = format!("{e}; the complete copy is at {}", copy.display());

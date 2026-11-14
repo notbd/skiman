@@ -399,8 +399,7 @@ fn a_failed_move_of_the_old_skill_to_the_backup_keeps_it_and_running_again_finis
         "chmod 555 \"$XDG_STATE_HOME\"/skiman/backups/*",
     )
     .code(4);
-    let backup = backup_dirs(&sandbox).pop().unwrap();
-    chmod(&backup, 0o755);
+    assert!(backup_dirs(&sandbox).is_empty(), "nothing went in");
     let (stdout, stderr) = (stdout_of(&assert), stderr_of(&assert));
     let skill = repo.join("skills/pdf");
     assert_eq!(stdout, format!("created {}\n", skill.display()));

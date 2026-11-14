@@ -8,16 +8,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::Exit;
+use crate::backup::Backups;
+use crate::change::{self, Change, Held, Want};
 use crate::cli::AddArgs as Args;
 use crate::commands::{ask, confirm, has_terminal, prompts};
 use crate::discovery;
 use crate::failure::{Failure, finish};
 use crate::fetch::Cache;
-use crate::fsutil::{self, read_text, write_atomic};
+use crate::fsutil::read_text;
 use crate::git::Prompts;
-use crate::lockfile;
-use crate::manifest::{self, SourceRecord};
-use crate::names;
+use crate::lockfile::{self, LockEntry, Lockfile};
+use crate::manifest::{self, Manifest, SourceRecord};
+use crate::names::{self, Taken};
 use crate::path_safety;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -28,7 +30,7 @@ use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
 use crate::staging::Staging;
 use crate::sync::{self, Output};
-use crate::tree::{Overlay, WorkingTree};
+use crate::tree::WorkingTree;
 use crate::upstream::{Upstream, print_not_installed, run_flags};
 
 pub fn run(args: Args) -> Exit {
@@ -107,7 +109,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         let source = source.clone().with_path(candidate.path.clone());
         installs.push(inspect(source, snapshot, candidate, name.clone())?);
     }
-    check_install_names(&repo, &installs)?;
+    check_install_names(&repo, &installs, &upstream)?;
 
     for install in &installs {
         print_file_list(install, &upstream);
@@ -126,12 +128,17 @@ fn add(args: Args) -> Result<Exit, Failure> {
     }
 
     let lock = RepoLock::wait(&paths, &repo)?;
-    check_install_names(&repo, &installs)?;
-    let files = candidate_files(&installs);
-    let records = Records::build(&repo, &installs, &upstream)?;
-    validate(&repo, &installs, &files, &records)?;
-    let staging = Staging::begin(&repo, &lock, &mut crate::backup::Backups::new(&paths))?;
-    write(&repo, &installs, &files, &records, &staging)?;
+    check_install_names(&repo, &installs, &upstream)?;
+    let change = change(&repo, &installs, &upstream)?;
+    validate(&repo, &installs, &change)?;
+    let held = change.held(repo.root())?;
+    let mut backups = Backups::new(&paths);
+    let staging = Staging::begin(&repo, &lock, &mut backups)?;
+    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
+    for line in &done {
+        out!("{line}");
+    }
+    result.map_err(|failure| change::stopped(failure, &done))?;
     drop(staging);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
@@ -377,7 +384,13 @@ fn inspect(
 
 /// Refuses (exit 1) the whole add when any install name is invalid,
 /// reserved or taken (also by another selected skill), pointing to `--name`.
-fn check_install_names(repo: &SkillRepo, installs: &[Install]) -> Result<(), Failure> {
+/// What this add writes itself does not take a name: an add stopped
+/// part-way finishes when it is run again.
+fn check_install_names(
+    repo: &SkillRepo,
+    installs: &[Install],
+    upstream: &Upstream,
+) -> Result<(), Failure> {
     let mut seen = BTreeMap::new();
     for install in installs {
         let name = &install.name;
@@ -387,7 +400,9 @@ fn check_install_names(repo: &SkillRepo, installs: &[Install]) -> Result<(), Fai
                 "the selected skills in {other}/ and {path}/ are both named `{name}`; nothing was installed; install each on its own with `--skill {other}/ --name <new name>` or `--skill {path}/ --name <new name>`"
             )));
         }
-        let check = names::check_new_name(name).and_then(|()| names::check_not_taken(repo, name));
+        let check = names::check_new_name(name).and_then(|()| {
+            names::check_not_taken(repo, name, |taken| ours(repo, install, upstream, taken))
+        });
         check.map_err(|failure| {
             let hint = if installs.len() == 1 {
                 "install it under another name with `--name <name>`".to_owned()
@@ -440,69 +455,81 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     }
 }
 
-/// The new `skiman.toml` and `skiman.lock` texts.
-struct Records {
-    manifest: String,
-    lock: String,
-    lock_existed: bool,
+/// The source table and lock entry `add` writes for `install`.
+fn records(install: &Install, upstream: &Upstream) -> (SourceRecord, LockEntry) {
+    let resolved = upstream.resolved();
+    let source = SourceRecord {
+        url: install.source.url.clone(),
+        path: install.source.path.clone(),
+        git_ref: resolved.map(|r| r.name.clone()),
+        ref_kind: resolved.map(|r| r.kind.as_str()),
+    };
+    (source, upstream.lock_entry(&install.snapshot))
 }
 
-impl Records {
-    fn build(
-        repo: &SkillRepo,
-        installs: &[Install],
-        upstream: &Upstream,
-    ) -> Result<Records, Failure> {
-        let manifest_file = repo.manifest_file();
-        let lock_file = repo.lockfile();
-        let refuse = |path: &Path, e: String| Failure::refused(format!("{}: {e}", path.display()));
-        let resolved = upstream.resolved();
-        let mut manifest = read_text(&manifest_file)?.unwrap_or_default();
-        let old_lock = read_text(&lock_file)?;
-        let mut lock = old_lock.clone().unwrap_or_default();
-        for install in installs {
-            let source = SourceRecord {
-                url: install.source.url.clone(),
-                path: install.source.path.clone(),
-                git_ref: resolved.map(|r| r.name.clone()),
-                ref_kind: resolved.map(|r| r.kind.as_str()),
-            };
-            manifest = manifest::with_source(&manifest, &install.name, &source)
-                .map_err(|e| refuse(&manifest_file, e))?;
-            let entry = upstream.lock_entry(&install.snapshot);
-            lock = lockfile::with_entry(&lock, &install.name, &entry)
-                .map_err(|e| refuse(&lock_file, e))?;
-        }
-        Ok(Records {
-            manifest,
-            lock,
-            lock_existed: old_lock.is_some(),
-        })
+/// The files of `skills/<name>`: the snapshot, with the `SKILL.md` whose
+/// `name` line is set when it had to be.
+fn skill_files(install: &Install) -> Vec<SnapshotFile> {
+    let mut files = install.snapshot.files.clone();
+    if let Some(renamed) = &install.renamed_skill_md {
+        let file = files.iter_mut().find(|f| f.path == "SKILL.md");
+        file.expect("a skill has a SKILL.md").content = renamed.clone().into_bytes();
     }
+    files
 }
 
-/// Every file `add` writes, with repo-relative paths.
-fn candidate_files(installs: &[Install]) -> Vec<SnapshotFile> {
-    let mut out = Vec::new();
+/// Whether `taken` is what this add writes for `install`, left by an add
+/// that stopped part-way: the folders hold the snapshot (`upstream/<name>`
+/// is written first, so `skills/<name>` counts only with it), the source
+/// table and lock entry are this add's.
+fn ours(
+    repo: &SkillRepo,
+    install: &Install,
+    upstream: &Upstream,
+    taken: Taken,
+) -> Result<bool, Failure> {
+    let name = &install.name;
+    let same = |rel: String, files| {
+        Ok::<_, Failure>(change::held(repo.root(), &rel, &Want::Folder(files))? == Held::Same)
+    };
+    let snapshot = || same(format!("upstream/{name}"), install.snapshot.files.clone());
+    let (source, entry) = records(install, upstream);
+    Ok(match taken {
+        Taken::Folder => same(format!("skills/{name}"), skill_files(install))? && snapshot()?,
+        Taken::Snapshot => snapshot()?,
+        Taken::Table => Manifest::load(repo)?.source(name) == Some(source),
+        Taken::LockEntry => Lockfile::load(repo)?.entry(name) == Some(entry),
+    })
+}
+
+/// For each skill `upstream/<name>` and `skills/<name>`, then `skiman.toml`
+/// with their source tables and, last, `skiman.lock` with their entries.
+fn change(repo: &SkillRepo, installs: &[Install], upstream: &Upstream) -> Result<Change, Failure> {
+    let refuse = |path: &Path, e: String| Failure::refused(format!("{}: {e}", path.display()));
+    let (manifest_file, lock_file) = (repo.manifest_file(), repo.lockfile());
+    let mut manifest = read_text(&manifest_file)?.unwrap_or_default();
+    let mut lock = read_text(&lock_file)?.unwrap_or_default();
+    let mut pieces = Vec::new();
     for install in installs {
-        for file in &install.snapshot.files {
-            let skill_content = match (&install.renamed_skill_md, file.path.as_str()) {
-                (Some(renamed), "SKILL.md") => renamed.clone().into_bytes(),
-                _ => file.content.clone(),
-            };
-            out.push(SnapshotFile {
-                path: format!("skills/{}/{}", install.name, file.path),
-                executable: file.executable,
-                content: skill_content,
-            });
-            out.push(SnapshotFile {
-                path: format!("upstream/{}/{}", install.name, file.path),
-                executable: file.executable,
-                content: file.content.clone(),
-            });
-        }
+        let name = &install.name;
+        let snapshot = install.snapshot.files.clone();
+        pieces.push((format!("upstream/{name}"), Want::Folder(snapshot)));
+        pieces.push((format!("skills/{name}"), Want::Folder(skill_files(install))));
+        let (source, entry) = records(install, upstream);
+        manifest = manifest::with_source(&manifest, name, &source)
+            .map_err(|e| refuse(&manifest_file, e))?;
+        lock = lockfile::with_entry(&lock, name, &entry).map_err(|e| refuse(&lock_file, e))?;
     }
-    out
+    pieces.push((
+        rules::MANIFEST.to_owned(),
+        Want::File(manifest.into_bytes()),
+    ));
+    pieces.push((rules::LOCKFILE.to_owned(), Want::File(lock.into_bytes())));
+    Ok(Change {
+        pieces,
+        command: "add",
+        save_files: false,
+    })
 }
 
 /// The rules on everything `add` writes, before anything is written. The
@@ -510,74 +537,24 @@ fn candidate_files(installs: &[Install]) -> Vec<SnapshotFile> {
 /// selected skill is in `scope.files` (the skills also in `scope.skills`,
 /// the snapshots in `scope.upstreams`), plus the new source tables and lock
 /// entries, so the secret rule scans the complete candidate output.
-fn validate(
-    repo: &SkillRepo,
-    installs: &[Install],
-    files: &[SnapshotFile],
-    records: &Records,
-) -> Result<(), Failure> {
+fn validate(repo: &SkillRepo, installs: &[Install], change: &Change) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
-    let executable = files
-        .iter()
-        .filter(|f| f.executable)
-        .map(|f| f.path.clone());
-    let mut contents: Vec<(String, Vec<u8>)> = files
-        .iter()
-        .map(|f| (f.path.clone(), f.content.clone()))
-        .collect();
-    contents.push((
-        rules::MANIFEST.to_owned(),
-        records.manifest.clone().into_bytes(),
-    ));
-    contents.push((
-        rules::LOCKFILE.to_owned(),
-        records.lock.clone().into_bytes(),
-    ));
-    let candidate = Overlay::new(&working_tree, contents).with_executable(executable.collect());
+    let mut files = BTreeSet::new();
+    for (rel, want) in &change.pieces {
+        if let Want::Folder(folder) = want {
+            files.extend(folder.iter().map(|f| format!("{rel}/{}", f.path)));
+        }
+    }
     let names: BTreeSet<String> = installs.iter().map(|i| i.name.clone()).collect();
     let scope = Scope {
-        files: files.iter().map(|file| file.path.clone()).collect(),
+        files,
         skills: names.clone(),
         upstreams: names.clone(),
         manifest_tables: names.clone(),
         lock_entries: names.clone(),
-        lock: !records.lock_existed,
+        lock: !repo.lockfile().exists(),
         consistency: names,
         ..Scope::default()
     };
-    rules::validate_write(&candidate, &scope)
-}
-
-/// Stages every folder under `tmp/<timestamp>/`, renames them into place,
-/// then writes `skiman.toml` and, last, `skiman.lock`.
-fn write(
-    repo: &SkillRepo,
-    installs: &[Install],
-    files: &[SnapshotFile],
-    records: &Records,
-    staging: &Staging,
-) -> Result<(), Failure> {
-    fsutil::write_files(staging.dir(), files)?;
-    for install in installs {
-        for root in ["upstream", "skills"] {
-            let rel = format!("{root}/{}", install.name);
-            let target = repo.root().join(&rel);
-            staging.place(&staging.dir().join(&rel), &target)?;
-            out!("created {}", target.display());
-        }
-    }
-    let write_file = |path: &Path, text: &str| {
-        write_atomic(path, text.as_bytes())
-            .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))
-    };
-    write_file(&repo.manifest_file(), &records.manifest)?;
-    out!("changed {}", repo.manifest_file().display());
-    write_file(&repo.lockfile(), &records.lock)?;
-    let verb = if records.lock_existed {
-        "changed"
-    } else {
-        "created"
-    };
-    out!("{verb} {}", repo.lockfile().display());
-    Ok(())
+    rules::validate_write(&change.overlay(&working_tree), &scope)
 }

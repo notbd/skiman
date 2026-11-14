@@ -2,7 +2,7 @@
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, assert_symlink, init, tree};
+use crate::support::{Sandbox, Tool, assert_each_kill_finishes, assert_symlink, init, tree};
 
 /// The skill repo and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<std::path::PathBuf, String>> {
@@ -29,7 +29,7 @@ fn new_creates_a_valid_skill_and_links_it_into_every_installed_tool_directory() 
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created [..]/skill-repo/skills/pdf/SKILL.md
+created [..]/skill-repo/skills/pdf
 linked [..]/home/.claude/skills/pdf
 linked [..]/home/.gemini/config/skills/pdf
 linked [..]/home/.gemini/config/skills/managing-skills
@@ -315,4 +315,26 @@ fn new_writes_nothing_through_a_linked_tmp_or_skills_folder() {
             tree(&elsewhere)
         );
     }
+}
+
+/// Killed after the skill folder is in place, before the sync, `new`
+/// finishes when run again: the folder it wrote does not take the name.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_new_killed_at_any_step_finishes_when_run_again() {
+    assert_each_kill_finishes(
+        |sandbox| {
+            init(sandbox);
+            ["new", "pdf", "-d", "Fill PDF forms"]
+                .map(String::from)
+                .to_vec()
+        },
+        &[
+            "new:write:skills/pdf",
+            "sync:link:<root>/home/.claude/skills/pdf",
+        ],
+    );
 }

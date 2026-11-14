@@ -58,9 +58,10 @@ pub fn final_state(sandbox: &Sandbox) -> BTreeMap<String, String> {
 }
 
 /// For each of `hooks`: a new sandbox made ready by `setup`, which returns
-/// the command's arguments; the command killed at the hook; then the same
-/// command run again, which must exit 0 and end in the [`final_state`] of
-/// a run that was never killed. Panics naming every hook that ends otherwise.
+/// the command's arguments; the command killed at the hook (`<root>` in it
+/// stands for the sandbox's root); then the same command run again, which
+/// must exit 0 and end in the [`final_state`] of a run that was never
+/// killed. Panics naming every hook that ends otherwise.
 #[track_caller]
 pub fn assert_each_kill_finishes(setup: impl Fn(&Sandbox) -> Vec<String>, hooks: &[&str]) {
     let sandbox = Sandbox::new();
@@ -78,7 +79,8 @@ pub fn assert_each_kill_finishes(setup: impl Fn(&Sandbox) -> Vec<String>, hooks:
         .filter_map(|hook| {
             let sandbox = Sandbox::new();
             let args = setup(&sandbox);
-            killed_at(&sandbox, &args, hook);
+            let root = sandbox.root().display().to_string();
+            killed_at(&sandbox, &args, &hook.replace("<root>", &root));
             let output = sandbox.skiman().args(&args).output().unwrap();
             let mut problems = Vec::new();
             if output.status.code() != Some(0) {

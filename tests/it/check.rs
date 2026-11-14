@@ -573,7 +573,7 @@ fn new_succeeds_while_another_skill_breaks_a_rule_and_warns_about_it() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created [..]/skills/pdf/SKILL.md
+created [..]/skills/pdf
 ...
 "#]])
         .stderr_eq(str![[r#"

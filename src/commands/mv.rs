@@ -39,7 +39,7 @@ fn mv(old: &str, new: &str) -> Result<Exit, Failure> {
             "skills/{old} is not a skill folder"
         )));
     }
-    names::check_not_taken(&repo, new)?;
+    names::check_not_taken(&repo, new, |_| Ok(false))?;
     let plan = Plan::build(&repo, old, new)?;
     plan.validate(&repo)?;
     plan.apply(&repo)?;

@@ -793,3 +793,60 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     sandbox.skiman().arg("check").assert().code(0);
     assert_eq!(tmp_entries(&repo), Vec::<PathBuf>::new());
 }
+
+/// An adopt killed while the original moves to a backup on another
+/// filesystem finishes when run again: `skills/<name>` already holds the
+/// copy, and what the cut-short move left is read from its complete copy
+/// and finished. Killed before the note (`copied`), the original is whole
+/// and is copied once more.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_adopt_killed_while_the_original_moves_to_another_filesystem_finishes_when_run_again() {
+    let first = Sandbox::new();
+    let Some(volume) = attached(second_filesystem(&first)) else {
+        return;
+    };
+    let args = ["adopt", "notes", "--from", "claude-code", "--yes"];
+    for (i, (point, copies)) in [("copied", 2), ("noted", 1), ("deleting", 1)]
+        .into_iter()
+        .enumerate()
+    {
+        let sandbox = Sandbox::new();
+        let state = volume.dir.join(i.to_string());
+        let skiman = || sandbox.skiman().env("XDG_STATE_HOME", &state);
+        skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(sandbox.skill_repo())
+            .assert()
+            .code(0);
+        let original = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+        write(original.join("SKILL.md"), skill_md("notes"));
+        for n in 0..5 {
+            write(original.join(format!("refs/{n}.md")), format!("{n}\n"));
+        }
+
+        let killed = skiman()
+            .args(args)
+            .env("SKIMAN_TEST_HOOK", format!("move:{point}"))
+            .env("SKIMAN_TEST_HOOK_RUN", "kill -9 $PPID")
+            .output()
+            .unwrap();
+        assert_eq!(killed.status.signal(), Some(9), "{point}");
+        let again = skiman().args(args).output().unwrap();
+        assert_eq!(
+            again.status.code(),
+            Some(0),
+            "{point}: {}",
+            String::from_utf8_lossy(&again.stderr)
+        );
+
+        let skill = sandbox.skill_repo().join("skills/notes");
+        assert_eq!(std::fs::read_link(&original).unwrap(), skill, "{point}");
+        assert_eq!(copies_of(&state, "4.md", "4\n"), copies, "{point}");
+        let check = skiman().arg("check").output().unwrap();
+        assert_eq!(check.status.code(), Some(0), "{point}");
+    }
+}

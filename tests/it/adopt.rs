@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use snapbox::str;
 
 use crate::support::{
-    Sandbox, Tool, assert_symlink, check_is_clean, exists, init, is_executable, only_backup, read,
-    skill_md, tree, write,
+    Sandbox, Tool, assert_each_kill_finishes, assert_symlink, check_is_clean, exists, init,
+    is_executable, only_backup, read, skill_md, tree, write,
 };
 
 /// The whole skill repo except `.git`, every tool directory and the
@@ -296,7 +296,7 @@ error: [..]/home/.claude/skills/notes holds more than 1000 files; a skill may ho
 }
 
 #[test]
-fn adopt_whose_original_cannot_be_moved_exits_4_and_prints_the_manual_finish() {
+fn adopt_whose_original_cannot_be_moved_exits_4_and_finishes_when_run_again() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let original = foreign_notes(&sandbox);
@@ -312,23 +312,27 @@ fn adopt_whose_original_cannot_be_moved_exits_4_and_prints_the_manual_finish() {
 
     assert_eq!(output.status.code(), Some(4));
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let backup = only_backup(&sandbox);
-    let dest = backup.join("claude-code/notes");
     assert!(
         stderr.contains(&format!(
-            "finish by hand: move {} to {}, then run `skiman sync`",
-            original.display(),
-            dest.display()
+            "cannot move {} to the backup: ",
+            original.display()
         )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with("run the same command again to finish it\n"),
         "{stderr}"
     );
     assert!(sandbox.skill_repo().join("skills/notes/SKILL.md").is_file());
     assert!(original.join("SKILL.md").is_file(), "the original stays");
 
-    // The manual finish works.
-    std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-    std::fs::rename(&original, &dest).unwrap();
-    sandbox.skiman().arg("sync").assert().code(0);
+    sandbox
+        .skiman()
+        .args(["adopt", "notes", "--from", "claude-code", "--yes"])
+        .assert()
+        .code(0);
+    let backup = only_backup(&sandbox);
+    assert!(backup.join("claude-code/notes/SKILL.md").is_file());
     assert_linked(&sandbox, "notes");
     check_is_clean(&sandbox);
 }
@@ -494,4 +498,61 @@ fn an_original_changed_or_moved_after_the_confirmation_refuses_adopt_and_changes
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     std::fs::rename(&moved, &original).unwrap();
     assert_eq!(world(&sandbox), before, "{stderr}");
+}
+
+/// Killed at any step, an adopt finishes when run again: a `skills/<name>`
+/// that holds the copy does not take the name.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_adopt_killed_at_any_step_finishes_when_run_again() {
+    assert_each_kill_finishes(
+        |sandbox| {
+            init(sandbox);
+            foreign_notes(sandbox);
+            ["adopt", "notes", "--from", "claude-code", "--yes"]
+                .map(String::from)
+                .to_vec()
+        },
+        &["adopt:write:skills/notes", "adopt:placed"],
+    );
+}
+
+/// A foreign folder that holds what an installed third-party skill of the
+/// same name holds is no adopt stopped part-way: the skill's records take
+/// the name.
+#[test]
+fn adopt_of_a_copy_of_an_installed_third_party_skill_is_refused() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/pdf");
+    up.write("SKILL.md", skill_md("pdf"))
+        .write("reference.md", "# Reference\n");
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(0);
+    let entry = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
+    std::fs::remove_file(&entry).unwrap();
+    for file in ["SKILL.md", "reference.md"] {
+        let text = read(sandbox.skill_repo().join("skills/pdf").join(file));
+        write(entry.join(file), text);
+    }
+    let before = world(&sandbox);
+
+    let adopt = sandbox
+        .skiman()
+        .args(["adopt", "pdf", "--from", "claude-code", "--yes"])
+        .assert()
+        .code(1);
+    let stderr = String::from_utf8_lossy(&adopt.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("the name `pdf` is taken: skiman.toml already has a [skills.pdf] table"),
+        "{stderr}"
+    );
+    assert_eq!(world(&sandbox), before);
 }

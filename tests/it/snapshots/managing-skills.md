@@ -39,6 +39,10 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
   written, occupied paths, leftover records); 4 operational error.
 - skiman never commits. Tell the user which files changed; skiman prints the
   ones it wrote.
+- A write command that stopped part-way (killed, or exit 4) finishes when
+  you run the same command again. If running it again is refused because
+  its skill repo part is done, `skiman sync` finishes it. After an update
+  finished that way, look at the skill's diff before you commit it.
 - After editing files by hand, run `skiman check`. It reports every rule
   violation with file and line. A skill needs `SKILL.md` with YAML frontmatter
   from line 1 holding `name` (lowercase letters, digits and single hyphens, at
@@ -155,8 +159,7 @@ copies every change made in the project into it at each sync.
 ## Import an existing setup
 
 Run `skiman import --guide` and follow the guide it prints. The skill repo
-may hold only skills the import folder holds too, with the same content. To
-finish an import that stopped part-way, run the same command again.
+may hold only skills the import folder holds too, with the same content.
 
 ## See the state
 

@@ -93,9 +93,23 @@ fn replace_atomic(
 pub fn place_new(from: &Path, to: &Path) -> io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
     match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
-        Err(e) if [Errno::NOTSUP, Errno::OPNOTSUPP, Errno::INVAL, Errno::NOSYS].contains(&e) => {
-            place_without_noreplace(from, to)
-        }
+        Err(e) if NO_FLAG.contains(&e) => place_without_noreplace(from, to),
+        other => Ok(other?),
+    }
+}
+
+/// What a filesystem answers a rename flag it does not have with.
+const NO_FLAG: [Errno; 4] = [Errno::NOTSUP, Errno::OPNOTSUPP, Errno::INVAL, Errno::NOSYS];
+
+/// Swaps the entries at `a` and `b` in one rename, so neither path is ever
+/// empty: `b` gets what `a` held. Only the rename: an error means nothing
+/// moved, and flushing is the caller's. `Unsupported` where the filesystem
+/// has no such rename (HFS+, exFAT, NFS); `CrossesDevices` as for
+/// [`place_new`].
+pub fn exchange(a: &Path, b: &Path) -> io::Result<()> {
+    use rustix::fs::{CWD, RenameFlags, renameat_with};
+    match renameat_with(CWD, a, CWD, b, RenameFlags::EXCHANGE) {
+        Err(e) if NO_FLAG.contains(&e) => Err(io::Error::new(io::ErrorKind::Unsupported, e)),
         other => Ok(other?),
     }
 }
@@ -224,6 +238,19 @@ pub fn flush_tree(root: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Removes each folder at or below `dir` that is empty once the ones below it
+/// are, deepest first; files and links stay (but on macOS volumes without
+/// native xattrs, exFAT, `rmdir` also takes `._*` files). With a folder it
+/// cannot read, nothing is removed. Empty folders are no content: tree
+/// hashes leave them out.
+pub fn remove_empty_dirs(dir: &Path) {
+    for (path, meta) in entries(dir).unwrap_or_default().into_iter().rev() {
+        if meta.is_dir() {
+            let _ = std::fs::remove_dir(path);
+        }
+    }
 }
 
 /// Every entry at or below `path`, parents before what they hold, never

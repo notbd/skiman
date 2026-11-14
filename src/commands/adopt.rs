@@ -74,9 +74,9 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         )));
     }
     validate(&repo, name, &files)?;
-    let staging = Staging::begin(&paths, &repo, &lock)?;
-    let staged = stage(&staging, name, &files)?;
     let mut backups = Backups::new(&paths);
+    let staging = Staging::begin(&repo, &lock, &mut backups)?;
+    let staged = stage(&staging, name, &files)?;
     let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
     let dir = backups.dir().map_err(nothing)?;
     let copy = repo.skill_dir(name);

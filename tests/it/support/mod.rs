@@ -7,6 +7,7 @@ mod fixtures;
 mod fs;
 mod hash;
 mod import;
+mod kill;
 mod pty;
 mod sandbox;
 mod tree;
@@ -19,6 +20,7 @@ pub use fs::{
 };
 pub use hash::{fingerprint, hex, tree_hash};
 pub use import::{Setup, import, import_killed_at, import_with_hook, setup};
+pub use kill::{assert_each_kill_finishes, final_state, normalised};
 pub use pty::Pty;
 pub use sandbox::{Sandbox, Tool, ToolSetup};
 pub use tree::tree;

@@ -75,7 +75,8 @@ struct Context<'a> {
 impl Context<'_> {
     fn staging(&mut self) -> Result<&Staging, Failure> {
         if self.staging.is_none() {
-            self.staging = Some(Staging::begin(self.paths, self.repo, &self.lock)?);
+            let mut backups = Backups::new(self.paths);
+            self.staging = Some(Staging::begin(self.repo, &self.lock, &mut backups)?);
         }
         Ok(self.staging.as_ref().expect("just begun"))
     }

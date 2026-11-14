@@ -1,24 +1,27 @@
 //! `skiman remove <name>`: move `skills/<name>` and `upstream/<name>` (each
 //! when present) to a fresh backup, then remove the skill's `skiman.toml`
-//! table and lock entry, then sync (which removes its links). Also cleans up
-//! the leftover records of a hand-deleted skill.
+//! table and secret exemptions and its lock entry, then sync (which removes
+//! its links). Also cleans up the leftover records of a hand-deleted skill.
+//! A remove stopped part-way finishes when it is run again.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
-use crate::fsutil::write_atomic;
+use crate::fsutil::read_text;
 use crate::lockfile::Lockfile;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
+use crate::staging::Staging;
 use crate::sync::{self, Output};
-use crate::tree::{Overlay, WorkingTree};
+use crate::tree::WorkingTree;
 
 pub fn run(name: &str, yes: bool) -> Exit {
     finish(remove(name, yes))
@@ -40,12 +43,18 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
     }
 
     let lock = RepoLock::wait(&paths, &repo)?;
-    let found = Found::read(&repo, name)?;
-    let records = Records::build(&repo, name, &found)?;
-    validate(&repo, name, &records)?;
-    let backup = move_folders(&paths, &found)?;
-    records.write()?;
-    match backup {
+    Found::read(&repo, name)?;
+    let change = change(&repo, name)?;
+    validate(&repo, name, &change)?;
+    let held = change.held(repo.root())?;
+    let mut backups = Backups::new(&paths);
+    let staging = Staging::begin(&repo, &lock, &mut backups)?;
+    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
+    for line in &done {
+        out!("{line}");
+    }
+    result.map_err(|failure| change::stopped(failure, &done))?;
+    match backups.created().filter(|_| change.backs_up(&held)) {
         Some(dir) => out!("removed skill {name}; its folders are in {}", dir.display()),
         None => out!("removed the records of skill {name}"),
     }
@@ -106,89 +115,37 @@ impl Found {
     }
 }
 
-/// The new `skiman.toml` and `skiman.lock` texts, for the files that change.
-struct Records {
-    manifest: Option<(PathBuf, String)>,
-    lock: Option<(PathBuf, String)>,
-}
-
-impl Records {
-    fn build(repo: &SkillRepo, name: &str, found: &Found) -> Result<Records, Failure> {
-        let edit = |path: PathBuf, needed: bool| -> Result<Option<(PathBuf, String)>, Failure> {
-            if !needed {
-                return Ok(None);
-            }
-            let text = std::fs::read_to_string(&path).map_err(|e| {
-                Failure::operational(format!("cannot read {}: {e}", path.display()))
-            })?;
+/// Both folders absent, then `skiman.toml` without the skill's table and
+/// secret exemptions, then `skiman.lock` without its entry.
+fn change(repo: &SkillRepo, name: &str) -> Result<Change, Failure> {
+    let mut pieces = vec![
+        (format!("skills/{name}"), Want::Absent),
+        (format!("upstream/{name}"), Want::Absent),
+    ];
+    for (rel, path) in [
+        (rules::MANIFEST, repo.manifest_file()),
+        (rules::LOCKFILE, repo.lockfile()),
+    ] {
+        if let Some(text) = read_text(&path)? {
             let text = manifest::without_skill(&text, name)
                 .map_err(|e| Failure::refused(format!("{}: {e}", path.display())))?;
-            Ok(Some((path, text)))
-        };
-        Ok(Records {
-            manifest: edit(repo.manifest_file(), found.table)?,
-            lock: edit(repo.lockfile(), found.lock_entry)?,
-        })
-    }
-
-    /// `skiman.toml` first, then `skiman.lock`.
-    fn write(&self) -> Result<(), Failure> {
-        for (path, text) in self.manifest.iter().chain(&self.lock) {
-            write_atomic(path, text.as_bytes()).map_err(|e| {
-                Failure::operational(format!(
-                    "cannot write {}: {e}; the skill's folders are already in the backup",
-                    path.display()
-                ))
-            })?;
-            out!("changed {}", path.display());
+            pieces.push((rel.to_owned(), Want::File(text.into_bytes())));
         }
-        Ok(())
     }
+    Ok(Change {
+        pieces,
+        command: "remove",
+        save_files: false,
+    })
 }
 
 /// The rules on the skill repo as it will be: the removed skill must leave
 /// nothing inconsistent; everything else is a warning.
-fn validate(repo: &SkillRepo, name: &str, records: &Records) -> Result<(), Failure> {
+fn validate(repo: &SkillRepo, name: &str, change: &Change) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
-    let texts = [
-        (rules::MANIFEST, &records.manifest),
-        (rules::LOCKFILE, &records.lock),
-    ]
-    .into_iter()
-    .filter_map(|(rel, edit)| {
-        edit.as_ref()
-            .map(|(_, text)| (rel.to_owned(), text.clone().into_bytes()))
-    })
-    .collect();
-    let candidate = Overlay::new(&working_tree, texts)
-        .replacing(vec![format!("skills/{name}"), format!("upstream/{name}")]);
     let scope = Scope {
         consistency: BTreeSet::from([name.to_owned()]),
         ..Scope::default()
     };
-    rules::validate_write(&candidate, &scope)
-}
-
-/// Moves every folder of the skill into one fresh backup; `None` when there
-/// is no folder. A failure stops before any record is removed.
-fn move_folders(paths: &Paths, found: &Found) -> Result<Option<PathBuf>, Failure> {
-    if found.folders.is_empty() {
-        return Ok(None);
-    }
-    let mut backups = Backups::new(paths);
-    let nothing = |e| Failure::operational(format!("{e}; nothing was removed"));
-    let dir = backups.dir().map_err(nothing)?;
-    for (path, rel) in &found.folders {
-        let dest = backups
-            .move_in(path, &Path::new("repo").join(rel))
-            .map_err(|e| {
-                Failure::operational(format!(
-                    "cannot move {} to the backup {}: {e}; the skill's records were not removed",
-                    path.display(),
-                    dir.display()
-                ))
-            })?;
-        out!("moved {} to {}", path.display(), dest.display());
-    }
-    Ok(backups.created().map(Path::to_path_buf))
+    rules::validate_write(&change.overlay(&working_tree), &scope)
 }

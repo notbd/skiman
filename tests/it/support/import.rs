@@ -1,11 +1,11 @@
 //! The setup most import tests start from, and the ways they run the import.
 
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use super::fixtures::skill_md;
 use super::fs::write;
+use super::kill::killed_at;
 use super::sandbox::{Sandbox, Tool};
 use super::upstream::Upstream;
 
@@ -118,12 +118,10 @@ pub fn import_with_hook(sandbox: &Sandbox, folder: &Path, hook: &str, run: &str)
 /// `import:<point>` of the test hook.
 #[track_caller]
 pub fn import_killed_at(sandbox: &Sandbox, folder: &Path, point: &str) {
-    let output = import_with_hook(sandbox, folder, &format!("import:{point}"), "kill -9 $PPID");
-    assert_eq!(
-        output.status.signal(),
-        Some(9),
-        "{point}: {:?}\n{}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let args = [
+        "import".to_owned(),
+        folder.display().to_string(),
+        "--yes".to_owned(),
+    ];
+    killed_at(sandbox, &args, &format!("import:{point}"));
 }

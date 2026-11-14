@@ -57,7 +57,7 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
     rules::validate_write(&candidate, &scope)?;
 
     // Staged whole, then renamed in: never half a skill, never over one.
-    let staging = Staging::begin(&paths, &repo, &lock)?;
+    let staging = Staging::begin(&repo, &lock, &mut crate::backup::Backups::new(&paths))?;
     let staged = staging.dir().join("skills").join(name);
     let skill_md = SnapshotFile {
         path: "SKILL.md".to_owned(),

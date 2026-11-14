@@ -172,11 +172,23 @@ pub fn skill_fragment(text: &str, name: &str) -> Result<String, String> {
 }
 
 /// `text` (a `skiman.toml` or `skiman.lock`) without the `[skills.<name>]`
-/// table and its subtables. Everything else keeps its bytes.
+/// table and its subtables, and without the `[[secrets.allow]]` entries for
+/// a path below `skills/<name>/` or `upstream/<name>/`. Everything else
+/// keeps its bytes.
 pub fn without_skill(text: &str, name: &str) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
     if let Some(skills) = doc.get_mut("skills").and_then(Item::as_table_like_mut) {
         skills.remove(name);
+    }
+    if let Some(Item::ArrayOfTables(allows)) = doc
+        .get_mut("secrets")
+        .and_then(|secrets| secrets.get_mut("allow"))
+    {
+        let in_skill = |allow: &Table| {
+            let path = allow.get("path").and_then(Item::as_str);
+            path.is_some_and(|p| renamed_path(p, name, name).is_some())
+        };
+        allows.retain(|allow| !in_skill(allow));
     }
     Ok(doc.to_string())
 }

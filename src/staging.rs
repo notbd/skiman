@@ -4,9 +4,9 @@
 //!
 //! Anything in `tmp/` that no running command staged is a **tmp leftover**
 //! (distinct from "leftover records", exit 3). [`Staging::begin`] moves tmp
-//! leftovers to a fresh backup, then creates the command's own
+//! leftovers to the command's backup, then creates the command's own
 //! `tmp/<timestamp>/`, which is removed when the [`Staging`] is dropped,
-//! except for old folders `update` swapped out that are still in `old/`.
+//! except for what [`crate::change`] swapped out that is still in `old/`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use crate::backup::{self, Backups};
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 
@@ -29,11 +28,15 @@ pub struct Staging {
 impl Staging {
     /// Call while holding the repo lock, after every check that can refuse
     /// the command without writing (exit 1 or 2), and before its first write.
-    /// Moves tmp leftovers to `backups/<timestamp>/repo/.skiman/tmp/` and
-    /// prints that path; if the move fails, stops with exit 4 naming the path
-    /// to move by hand. tmp leftovers are never deleted. Refuses (exit 4) a
+    /// Moves tmp leftovers to `<backup>/repo/.skiman/tmp/` and prints that
+    /// path; if the move fails, stops with exit 4 naming the path to move by
+    /// hand. tmp leftovers are never deleted. Refuses (exit 4) a
     /// `.skiman/tmp/` reached through a link.
-    pub fn begin(paths: &Paths, repo: &SkillRepo, _lock: &RepoLock) -> Result<Staging, Failure> {
+    pub fn begin(
+        repo: &SkillRepo,
+        _lock: &RepoLock,
+        backups: &mut Backups,
+    ) -> Result<Staging, Failure> {
         let tmp = repo.tmp_dir();
         let cannot = |why: String| {
             Failure::operational(format!(
@@ -44,7 +47,7 @@ impl Staging {
         if let Some(why) = fsutil::broken_chain(repo.root(), &tmp.join("new")) {
             return Err(cannot(why));
         }
-        move_tmp_leftovers(paths, &tmp)?;
+        move_tmp_leftovers(backups, &tmp)?;
         let dir = backup::fresh_dir(&tmp).map_err(|e| cannot(e.to_string()))?;
         Ok(Staging {
             dir,
@@ -55,21 +58,18 @@ impl Staging {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
-}
 
-impl Staging {
-    /// `tmp/<timestamp>/old/`: where `update` swaps out the old
-    /// `skills/<name>` and `upstream/<name>` folders before they go to the
-    /// backup. Never disposable.
+    /// `tmp/<timestamp>/old/`: where a folder that is replaced is swapped
+    /// out to before it goes to the backup. Never disposable.
     pub fn old_dir(&self) -> PathBuf {
         self.dir.join("old")
     }
 
-    /// Renames `from` (staged under `tmp/`, or an old folder `update` sets
-    /// aside) to `to`, where nothing may be: an entry that appeared there is
-    /// never replaced ([`fsutil::place_new_or_rename`]). Every folder of the
-    /// skill repo on the way to `to` must be a real folder. Fails with exit
-    /// 4, never copying instead.
+    /// Renames `from` (staged under `tmp/`, or an entry of the skill repo
+    /// that `mv` renames) to `to`, where nothing may be: an entry that
+    /// appeared there is never replaced ([`fsutil::place_new_or_rename`]).
+    /// Every folder of the skill repo on the way to `to` must be a real
+    /// folder. Fails with exit 4, never copying instead.
     pub fn place(&self, from: &Path, to: &Path) -> Result<(), Failure> {
         let fail = |why: String| {
             Failure::operational(format!(
@@ -97,8 +97,9 @@ impl Staging {
     }
 }
 
-/// Removes the disposable staging. Swapped-out old folders still in `old/`
-/// stay (with the folders above them) as tmp leftovers; they are never removed.
+/// Removes the disposable staging, then every empty folder in `tmp/<ts>`
+/// and `tmp/<ts>` itself once empty. What is still in `old/` stays (with the
+/// folders above it) as a tmp leftover; only its empty folders go.
 impl Drop for Staging {
     fn drop(&mut self) {
         let old = self.old_dir();
@@ -114,18 +115,11 @@ impl Drop for Staging {
                 };
             }
         }
-        for empty in [
-            old.join("skills"),
-            old.join("upstream"),
-            old,
-            self.dir.clone(),
-        ] {
-            let _ = std::fs::remove_dir(empty);
-        }
+        fsutil::remove_empty_dirs(&self.dir);
     }
 }
 
-fn move_tmp_leftovers(paths: &Paths, tmp: &Path) -> Result<(), Failure> {
+fn move_tmp_leftovers(backups: &mut Backups, tmp: &Path) -> Result<(), Failure> {
     let leftovers = match list(tmp) {
         Ok(leftovers) => leftovers,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -145,7 +139,6 @@ fn move_tmp_leftovers(paths: &Paths, tmp: &Path) -> Result<(), Failure> {
             path.display()
         )
     };
-    let mut backups = Backups::new(paths);
     let by_hand_tmp = by_hand(tmp);
     let dir = backups
         .dir()

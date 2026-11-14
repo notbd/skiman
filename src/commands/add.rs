@@ -130,7 +130,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     let files = candidate_files(&installs);
     let records = Records::build(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &files, &records)?;
-    let staging = Staging::begin(&paths, &repo, &lock)?;
+    let staging = Staging::begin(&repo, &lock, &mut crate::backup::Backups::new(&paths))?;
     write(&repo, &installs, &files, &records, &staging)?;
     drop(staging);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))

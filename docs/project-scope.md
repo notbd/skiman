@@ -280,8 +280,9 @@ never deletes the only copy:
   step 4. If the original path is taken meanwhile, both versions stay where
   they are and the command reports both paths.
 - A failure in step 4 puts the set-aside copy back and exits 4.
-- A failure in step 5 leaves the copy in the swap folder, keeps the folder,
-  and reports the path.
+- A failure in step 5 keeps the swap folder, exits 4 and reports where the
+  set-aside copy is whole: in the swap folder, or, when a move to another
+  filesystem fails after its copy is complete, in the backup.
 - A swap folder that outlives its command (a failure above, a killed
   process) is never cleaned up automatically: `doctor` lists it with what it
   holds, and the next `restore` in that project (or the next mirror write,

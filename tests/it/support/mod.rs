@@ -14,7 +14,9 @@ mod upstream;
 
 pub use commands::{backup_dirs, backups, check_is_clean, init, only_backup};
 pub use fixtures::{PDF_SKILL_MD, aws_key, lines, skill_md};
-pub use fs::{assert_dangling_symlink, assert_symlink, exists, is_executable, read, write};
+pub use fs::{
+    assert_dangling_symlink, assert_symlink, exists, is_executable, moved_note, read, write,
+};
 pub use hash::{fingerprint, hex, tree_hash};
 pub use import::{Setup, import, import_killed_at, import_with_hook, setup};
 pub use pty::Pty;

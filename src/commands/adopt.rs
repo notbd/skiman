@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
-use crate::backup::Backups;
+use crate::backup::{self, Backups};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil;
@@ -124,7 +124,7 @@ fn locate(
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
-    let ownership = Ownership::new(paths.home(), repo, manifest, None);
+    let ownership = Ownership::new(paths, repo, manifest, None);
     match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => Ok(entry),
         Entry::Owned(_) => Err(Failure::refused(format!(
@@ -135,6 +135,10 @@ fn locate(
             "{} is managed by another tool; skiman leaves it alone",
             entry.display()
         ))),
+        Entry::Moved(copy) => Err(Failure::refused(
+            backup::cut_short(&entry, &copy)
+                + "; to adopt the skill, delete it and move that copy here first",
+        )),
         Entry::NotASkill => Err(Failure::refused(format!(
             "{} is not a skill folder (a folder, or a link to one, holding SKILL.md)",
             entry.display()

@@ -720,7 +720,7 @@ impl Plan {
             .map(|name| (name.clone(), repo.skill_dir(name)))
             .collect();
         wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
-        let ownership = Ownership::new(home, repo, manifest, None);
+        let ownership = Ownership::new(paths, repo, manifest, None);
         let io = |path: &Path, e: std::io::Error| {
             Failure::operational(format!("cannot read {}: {e}", path.display()))
         };
@@ -749,7 +749,8 @@ impl Plan {
                 match ownership.classify(&real, &name, &meta) {
                     Entry::Owned(_) => {}
                     Entry::ManagedElsewhere => plan.skipped.push(path),
-                    Entry::Foreign => {
+                    // Moving a moved one again finishes the move.
+                    Entry::Foreign | Entry::Moved(_) => {
                         let real = real.join(&name);
                         entries.push(Move {
                             resolution: resolution(&real),

@@ -6,8 +6,10 @@ use std::ffi::OsStr;
 use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
+use crate::backup::noted_copy;
 use crate::fsutil::absolute_lexical;
 use crate::manifest::Manifest;
+use crate::paths::Paths;
 use crate::project::root::configured_skill_dirs;
 use crate::repo::SkillRepo;
 use crate::tools::{ManagedElsewhere, PLUGIN_MARKER, TOOLS};
@@ -24,6 +26,10 @@ pub enum Entry {
     /// Not owned and not a skill folder: a regular file, a folder without
     /// `SKILL.md`, a name starting with `.`, a dangling link.
     NotASkill,
+    /// What a move to a backup on another filesystem left when it was cut
+    /// short: an entry whose note names a copy ([`noted_copy`], which reads
+    /// no content), held here. Moving it again finishes the move.
+    Moved(PathBuf),
 }
 
 /// Classifies tool-directory entries for one skill repo.
@@ -39,17 +45,20 @@ pub struct Ownership {
     managed_paths: Vec<PathBuf>,
     /// Realpaths of the directories whose content is managed elsewhere.
     managed_under: Vec<PathBuf>,
+    /// `<state dir>/backups`: where the copy a note names must be.
+    backups: PathBuf,
 }
 
 impl Ownership {
     /// `manifest` is the `skiman.toml` the caller acts on (for import, the one
     /// it is about to write); its project roots' `skill_dirs` are managed elsewhere.
     pub fn new(
-        home: &Path,
+        paths: &Paths,
         repo: &SkillRepo,
         manifest: &Manifest,
         previous_repo: Option<PathBuf>,
     ) -> Ownership {
+        let home = paths.home();
         let mut managed_paths = Vec::new();
         let mut managed_under = Vec::new();
         for managed in TOOLS.iter().flat_map(|tool| tool.managed_elsewhere) {
@@ -79,6 +88,7 @@ impl Ownership {
             previous_repo,
             managed_paths,
             managed_under,
+            backups: paths.state_dir().join("backups"),
         }
     }
 
@@ -94,6 +104,9 @@ impl Ownership {
         }
         if self.managed_paths.iter().any(|p| path.starts_with(p)) {
             return Entry::ManagedElsewhere;
+        }
+        if let Some(copy) = noted_copy(&path, &self.backups) {
+            return Entry::Moved(copy);
         }
         let real = if meta.is_symlink() {
             match path.canonicalize() {

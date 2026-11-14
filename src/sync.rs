@@ -159,7 +159,7 @@ pub fn run_with(
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let mut report = reconcile(paths.home(), repo, &manifest, previous_repo);
+            let mut report = reconcile(paths, repo, &manifest, previous_repo);
             crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
             report
         }
@@ -221,11 +221,12 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
 /// tools that are not enabled. Then does the same for instruction locations
 /// and the shared body.
 pub fn reconcile(
-    home: &Path,
+    paths: &Paths,
     repo: &SkillRepo,
     manifest: &Manifest,
     previous_repo: Option<PathBuf>,
 ) -> Report {
+    let home = paths.home();
     let mut report = Report::default();
     if let Err(e) = managing_skills::materialise(repo) {
         report.errors.push(format!(
@@ -242,7 +243,7 @@ pub fn reconcile(
             return report;
         }
     };
-    let ownership = Ownership::new(home, repo, manifest, previous_repo);
+    let ownership = Ownership::new(paths, repo, manifest, previous_repo);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
     for tool in installed_tools(home, manifest) {
@@ -520,7 +521,7 @@ fn reconcile_tool_dir(
                 handled.insert(*name);
                 report.items.push(occupied(name, path));
             }
-            (Entry::ManagedElsewhere | Entry::NotASkill, None) => {}
+            (Entry::ManagedElsewhere | Entry::NotASkill | Entry::Moved(_), None) => {}
         }
     }
     for Wanted { name, target } in wanted {

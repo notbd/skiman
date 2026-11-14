@@ -3,23 +3,28 @@
 //! `skiman.toml` (with `enabled` and `source`), the lock entry and the
 //! `[[secrets.allow]]` paths, then syncs, which links the new name and
 //! removes the old links. Nothing is backed up: every piece is renamed in
-//! place.
+//! place. The folder goes last, so a mv stopped part-way leaves
+//! `skills/<old>` with a `SKILL.md` that names `<new>`, which no other
+//! command leaves; from there the same command finishes it.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::Exit;
+use crate::backup::Backups;
+use crate::change::{self, Change, Want};
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
-use crate::fsutil::{self, read_text, rewrite_atomic, write_atomic};
-use crate::lockfile;
-use crate::manifest;
+use crate::fsutil::read_text;
+use crate::lockfile::{self, Lockfile};
+use crate::manifest::{self, Manifest};
 use crate::names;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
+use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::{Kind, Overlay, Tree, WorkingTree};
 
@@ -34,16 +39,60 @@ fn mv(old: &str, new: &str) -> Result<Exit, Failure> {
     names::check_new_name(new)?;
 
     let lock = RepoLock::wait(&paths, &repo)?;
-    if !std::fs::symlink_metadata(repo.skill_dir(old)).is_ok_and(|m| m.is_dir()) {
+    let folder =
+        |name: &str| std::fs::symlink_metadata(repo.skill_dir(name)).is_ok_and(|m| m.is_dir());
+    if !folder(old) {
+        let done = match folder(new) {
+            true => format!(
+                "; skills/{new} is a skill folder: if `skiman mv {old} {new}` stopped part-way, it got through the skill repo, and `skiman sync` finishes the rest"
+            ),
+            false => String::new(),
+        };
         return Err(Failure::refused(format!(
-            "skills/{old} is not a skill folder"
+            "skills/{old} is not a skill folder{done}"
         )));
     }
-    names::check_not_taken(&repo, new, |_| Ok(false))?;
+    if half_renamed(&repo, old, new)? {
+        out!("skills/{old}/SKILL.md already names `{new}`: finishing the rename");
+    } else {
+        names::check_not_taken(&repo, new, |_| Ok(false))?;
+    }
     let plan = Plan::build(&repo, old, new)?;
     plan.validate(&repo)?;
-    plan.apply(&repo)?;
+    let change = plan.change();
+    let held = change.held(repo.root())?;
+    let mut backups = Backups::new(&paths);
+    let staging = Staging::begin(&repo, &lock, &mut backups)?;
+    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
+    for line in &done {
+        out!("{line}");
+    }
+    result.map_err(|failure| change::stopped(failure, &done))?;
+    drop(staging);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
+}
+
+/// Whether the skill repo is where a mv of `old` to `new` stopped part-way:
+/// `skills/<old>/SKILL.md` names `new` (the first thing mv writes),
+/// `skills/<new>` is not there (the last), and each of the `skiman.toml`
+/// table, the lock entry and `upstream/` has one of the two names at most
+/// (each is written in one step).
+fn half_renamed(repo: &SkillRepo, old: &str, new: &str) -> Result<bool, Failure> {
+    let (manifest, lock) = (
+        Manifest::load(repo)?.skills(),
+        Lockfile::load(repo)?.skill_names(),
+    );
+    let has = |name: &str| {
+        let upstream = std::fs::symlink_metadata(repo.upstream_dir(name)).is_ok();
+        [manifest.contains_key(name), lock.contains(name), upstream]
+    };
+    let (old_has, new_has) = (has(old), has(new));
+    let one_each = old_has.iter().zip(new_has).all(|(o, n)| !(*o && n));
+    let skill_md = std::fs::read(repo.skill_dir(old).join("SKILL.md")).unwrap_or_default();
+    let names_new =
+        SkillMd::parse_for_rename("SKILL.md", &skill_md).is_ok_and(|s| s.name() == Some(new));
+    let new_there = std::fs::symlink_metadata(repo.skill_dir(new)).is_ok();
+    Ok(names_new && !new_there && one_each)
 }
 
 /// Every change `mv` makes, computed before anything is written.
@@ -93,7 +142,9 @@ impl Plan {
             old: old.to_owned(),
             new: new.to_owned(),
             skill_md,
-            has_upstream: std::fs::symlink_metadata(repo.upstream_dir(old)).is_ok(),
+            has_upstream: [old, new]
+                .iter()
+                .any(|name| std::fs::symlink_metadata(repo.upstream_dir(name)).is_ok()),
             manifest: edit(repo.manifest_file(), manifest::with_skill_renamed)?,
             lock: edit(repo.lockfile(), lockfile::with_entry_renamed)?,
         })
@@ -109,7 +160,13 @@ impl Plan {
         let mut files = Vec::new();
         let mut executable = BTreeSet::new();
         for root in ["skills", "upstream"] {
-            let from = format!("{root}/{}", self.old);
+            // `upstream/` is renamed before the folder: a mv stopped part-way
+            // may have done it.
+            let at = |name: &str| format!("{root}/{name}");
+            let from = match working_tree.kind(&at(&self.old)).map_err(io)? {
+                Some(_) => at(&self.old),
+                None => at(&self.new),
+            };
             for entry in working_tree.walk(&from).map_err(io)? {
                 let Kind::File { executable: x, .. } = entry.kind else {
                     continue;
@@ -144,53 +201,33 @@ impl Plan {
         rules::validate_write(&candidate, &Scope::default())
     }
 
-    /// Folder first, then its `SKILL.md`, the snapshot, `skiman.toml` and
-    /// last `skiman.lock`. Each completed step is printed.
-    fn apply(&self, repo: &SkillRepo) -> Result<(), Failure> {
-        rename(&repo.skill_dir(&self.old), &repo.skill_dir(&self.new))?;
+    /// The `SKILL.md` first (in `skills/<old>`), then `skiman.toml`,
+    /// `skiman.lock`, the snapshot and, last, the folder.
+    fn change(&self) -> Change {
+        let (old, new) = (&self.old, &self.new);
+        let mut pieces = Vec::new();
         if let Some(content) = &self.skill_md {
-            let file = repo.skill_dir(&self.new).join("SKILL.md");
-            let write = std::fs::metadata(&file)
-                .and_then(|meta| rewrite_atomic(&file, content, meta.permissions()));
-            write.map_err(|e| {
-                Failure::operational(format!("cannot write {}: {e}", file.display()))
-            })?;
-            out!("changed {}", file.display());
+            let rel = format!("skills/{old}/SKILL.md");
+            pieces.push((rel, Want::File(content.clone())));
         }
-        if self.has_upstream {
-            rename(&repo.upstream_dir(&self.old), &repo.upstream_dir(&self.new))?;
-        }
-        for (path, text) in [
-            (repo.manifest_file(), &self.manifest),
-            (repo.lockfile(), &self.lock),
+        for (rel, text) in [
+            (rules::MANIFEST, &self.manifest),
+            (rules::LOCKFILE, &self.lock),
         ] {
             if let Some(text) = text {
-                write_atomic(&path, text.as_bytes()).map_err(|e| {
-                    Failure::operational(format!("cannot write {}: {e}", path.display()))
-                })?;
-                out!("changed {}", path.display());
+                pieces.push((rel.to_owned(), Want::File(text.clone().into_bytes())));
             }
         }
-        Ok(())
-    }
-}
-
-/// Renames `from` to `to`, which must not exist.
-fn rename(from: &Path, to: &Path) -> Result<(), Failure> {
-    let fail = |e: String| {
-        Failure::operational(format!(
-            "cannot rename {} to {}: {e}",
-            from.display(),
-            to.display()
-        ))
-    };
-    fsutil::publish(from, to).map_err(|e| match e.kind() {
-        std::io::ErrorKind::AlreadyExists => {
-            fail("it appeared while skiman was renaming".to_owned())
+        for root in ["upstream", "skills"] {
+            if root == "skills" || self.has_upstream {
+                let from = Want::From(format!("{root}/{old}"));
+                pieces.push((format!("{root}/{new}"), from));
+            }
         }
-        std::io::ErrorKind::CrossesDevices => Failure::operational(fsutil::crossing(from, to)),
-        _ => fail(e.to_string()),
-    })?;
-    out!("renamed {} to {}", from.display(), to.display());
-    Ok(())
+        Change {
+            pieces,
+            command: "mv",
+            save_files: false,
+        }
+    }
 }

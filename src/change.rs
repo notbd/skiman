@@ -34,13 +34,16 @@ pub enum Want {
     File(Vec<u8>),
     /// Nothing: what is there goes to the backup.
     Absent,
+    /// The entry at this repo path, renamed here (`mv`).
+    From(String),
 }
 
 /// What the skill repo holds where a piece goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Held {
+    /// Nothing there; for [`Want::From`], the entry is still at its old path.
     Nothing,
-    /// Something not of the piece's kind.
+    /// Something not of the piece's kind; for [`Want::From`], entries at both paths.
     WrongType,
     /// The piece as wanted.
     Same,
@@ -60,6 +63,7 @@ pub struct Change {
 impl Change {
     /// The skill repo as it will be, for the rules: each folder piece holds
     /// exactly its files, each file piece its bytes, an absent one nothing.
+    /// A renamed entry is not shown; `mv` checks its own.
     pub fn overlay<'a>(&self, tree: &'a WorkingTree) -> Overlay<'a> {
         let (mut files, mut executable, mut replaced) = (Vec::new(), BTreeSet::new(), Vec::new());
         for (rel, want) in &self.pieces {
@@ -76,6 +80,7 @@ impl Change {
                 }
                 Want::File(bytes) => files.push((rel.clone(), bytes.clone())),
                 Want::Absent => replaced.push(rel.clone()),
+                Want::From(_) => {}
             }
         }
         Overlay::new(tree, files)
@@ -182,6 +187,10 @@ impl Change {
         };
         match (want, seen) {
             (Want::Absent, _) => done.push(move_in(&target, backups)?),
+            (Want::From(from), _) => {
+                staging.place(&root.join(from), &target)?;
+                done.push(format!("renamed {} to {shown}", root.join(from).display()));
+            }
             (Want::File(bytes), Held::Nothing) => {
                 let parent = target.parent().expect("a piece has a folder");
                 std::fs::create_dir_all(parent)
@@ -269,6 +278,20 @@ pub fn held(root: &Path, rel: &str, want: &Want) -> Result<Held, Failure> {
         Ok(meta) => Some(meta),
     };
     Ok(match (want, meta) {
+        (Want::From(from), meta) => {
+            let source = match std::fs::symlink_metadata(root.join(from)) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+                there => there.map(|_| true).map_err(|e| {
+                    let source = root.join(from);
+                    Failure::operational(format!("cannot read {}: {e}", source.display()))
+                })?,
+            };
+            match (source, meta) {
+                (true, None) => Held::Nothing,
+                (true, Some(_)) => Held::WrongType,
+                (false, _) => Held::Same,
+            }
+        }
         (Want::Absent, None) => Held::Same,
         (Want::Absent, Some(_)) => Held::Other(Vec::new()),
         (_, None) => Held::Nothing,

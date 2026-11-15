@@ -11,7 +11,7 @@
 //!
 //! [`warnings_all`] returns what is printed as a warning but never fails:
 //! the shared body at 80 % of its size limit. [`missing_info`] returns the
-//! skills without a summary, group or origin, which only `skiman check`
+//! skills without a summary, group folder or origin, which only `skiman check`
 //! prints (every write command prints [`warnings_all`]).
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
@@ -74,7 +74,7 @@ pub mod rule {
     /// The only rule that exits 3: a source table, lock entry or upstream
     /// snapshot whose skill folder is gone.
     pub const LEFTOVER_RECORD: &str = "leftover-record";
-    /// A skill without a summary, group or origin: a warning that only
+    /// A skill without a summary, group folder or origin: a warning that only
     /// `skiman check` prints, never a violation.
     pub const SKILL_INFO: &str = "skill-info";
 }

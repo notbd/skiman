@@ -47,7 +47,7 @@ One line in `skiman.toml` saying what a skill is for, written for a person; the 
 _Avoid_: description, purpose, title
 
 **Group** (组):
-A free-form label in `skiman.toml` that puts skills which belong together in one section of `skiman overview`.
+A folder directly under `skills/` without a `SKILL.md` that holds the skill folders which belong together (`skills/<group>/<name>`); `skiman overview` shows each group as one section.
 _Avoid_: category, tag, bundle
 
 **Origin** (来历):

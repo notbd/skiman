@@ -22,22 +22,23 @@ cargo install --locked --path .
 ```
 
 Install a new version on every machine that uses the skill repo before you
-commit keys it adds to `skiman.toml` (such as `summary` or `group`): older
-versions report them as unknown keys, and the pre-commit hook then refuses
-the commit.
+commit what it adds: keys of `skiman.toml` (such as `summary`), which older
+versions report as unknown keys, or group folders under `skills/`, which
+older versions read as skill folders without a `SKILL.md`. The pre-commit
+hook then refuses the commit.
 
 ## Usage
 
 | Command | What it does |
 |---|---|
 | `skiman init <path> --session-hooks <ids>\|none` | Create or reuse a skill repo, install its git hooks and session-start hooks, then sync. |
-| `skiman new <name> -d <description>` | Create an own skill. |
-| `skiman add <source>` | Install third-party skills from a git URL, a GitHub tree URL, `<owner>/<repo>` or a local folder (`--skill`, `--all`, `--name`, `--ref`, `--dry-run`, `--yes`). |
+| `skiman new <name> -d <description>` | Create an own skill (`--group`). |
+| `skiman add <source>` | Install third-party skills from a git URL, a GitHub tree URL, `<owner>/<repo>` or a local folder (`--skill`, `--all`, `--name`, `--group`, `--ref`, `--dry-run`, `--yes`). |
 | `skiman update [names]` | Merge each third-party skill's new upstream version with its local modifications (`--ref` for one skill, `--dry-run`). |
 | `skiman diff <name>` | Show a third-party skill's local modifications. |
 | `skiman remove <name> --yes` | Remove a skill; its folders go to a backup. |
-| `skiman mv <old> <new>` | Rename a skill and its records. |
-| `skiman adopt <name> --from <tool id> --yes` | Bring a foreign skill from a tool directory into the skill repo. |
+| `skiman mv <old> [<new>]` | Rename a skill and its records, or move it to another group folder (`--group`, `--no-group`). |
+| `skiman adopt <name> --from <tool id> --yes` | Bring a foreign skill from a tool directory into the skill repo (`--group`). |
 | `skiman import [folder] --yes` | Import a prepared folder (default `<skill repo>/.skiman/import/`); `--guide` prints how to prepare one. |
 | `skiman sync` | Make every tool directory and instruction location match the skill repo (`--hook` from hooks). |
 | `skiman check` | Report every rule violation in the skill repo (`--staged` for the git index). |
@@ -48,6 +49,17 @@ the commit.
 | `skiman project adopt [paths]` | Copy project items into the mirror under `projects/` (`--dry-run`, `--yes`). |
 | `skiman project restore <paths>` | Write mirror items to the project (`--dry-run`, `--yes`). |
 | `skiman project eject <paths>` | Stop managing project items; the project files stay (`--yes`). |
+
+### Groups
+
+A folder under `skills/` without a `SKILL.md` is a group folder: every
+folder in it is a skill in that group (`skills/<group>/<name>`), so the
+folder tree shows how the skills are grouped. A skill directly under
+`skills/` is in no group, and `skiman check` reminds you of it. Tool
+directories stay flat: each skill is linked under its own name, wherever its
+folder sits, so skill names are unique across groups. Moving a skill to
+another group (`skiman mv <name> --group <group>`, or by hand followed by
+`skiman sync`) changes no record. Why: [docs/adr/0008-groups-are-folders.md](docs/adr/0008-groups-are-folders.md).
 
 ### Project instruction files and project skills
 

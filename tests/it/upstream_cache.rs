@@ -45,6 +45,8 @@ fn first_stderr_line(child: &mut Child) -> String {
         })
 }
 
+/// An add waits while another skiman fetches; the cache it then makes uses
+/// the `files` ref format, whatever the user's default.
 #[test]
 fn an_add_waits_while_another_skiman_fetches_into_the_same_cache() {
     let sandbox = Sandbox::new();

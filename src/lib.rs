@@ -25,6 +25,7 @@ mod cli;
 mod commands;
 mod config;
 mod discovery;
+mod elsewhere;
 mod exit;
 mod failure;
 mod fetch;

@@ -13,6 +13,22 @@ pub enum ManagedElsewhere {
     RealpathUnder(&'static str),
 }
 
+/// A place another manager keeps skills that an agent tool reads; `skiman
+/// overview` lists the skills there and never changes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillsElsewhere {
+    /// Skill folders exactly `depth` levels below `dir` (relative to `HOME`),
+    /// kept by `owner`.
+    Folders {
+        dir: &'static str,
+        depth: u8,
+        owner: &'static str,
+    },
+    /// The skills of every plugin in this Claude Code plugin registry
+    /// (`installed_plugins.json`, relative to `HOME`).
+    ClaudePlugins { registry: &'static str },
+}
+
 /// Any folder that contains this file is managed elsewhere (a plugin), in every tool.
 pub const PLUGIN_MARKER: &str = ".claude-plugin/plugin.json";
 
@@ -32,6 +48,11 @@ pub struct AgentTool {
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
     pub managed_elsewhere: &'static [ManagedElsewhere],
+    /// Where other managers keep skills this tool reads (`skiman overview`).
+    pub skills_elsewhere: &'static [SkillsElsewhere],
+    /// The tool also has built-in skills that are not stored on disk, so no
+    /// listing can show them.
+    pub builtin_skills_off_disk: bool,
     /// Skill names this tool reserves (on top of [`crate::names::RESERVED`]).
     pub reserved_names: &'static [&'static str],
     /// Settings file that holds the tool's session-start hooks; `None` when the tool has none.
@@ -76,6 +97,18 @@ pub const TOOLS: &[AgentTool] = &[
             ManagedElsewhere::Path(".claude/skills/.trash"),
             ManagedElsewhere::RealpathUnder(".claude/plugins"),
         ],
+        // One folder per claude.ai account under `synced`.
+        skills_elsewhere: &[
+            SkillsElsewhere::Folders {
+                dir: ".claude/skills/synced",
+                depth: 2,
+                owner: "claude.ai sync",
+            },
+            SkillsElsewhere::ClaudePlugins {
+                registry: ".claude/plugins/installed_plugins.json",
+            },
+        ],
+        builtin_skills_off_disk: true,
         reserved_names: &["synced"],
         session_hook_file: Some(".claude/settings.json"),
         session_hook_unavailable: None,
@@ -102,6 +135,12 @@ pub const TOOLS: &[AgentTool] = &[
             ManagedElsewhere::RealpathUnder(".codex/plugins"),
             ManagedElsewhere::Path(".codex/skills/.system"),
         ],
+        skills_elsewhere: &[SkillsElsewhere::Folders {
+            dir: ".codex/skills/.system",
+            depth: 1,
+            owner: "Codex, built in",
+        }],
+        builtin_skills_off_disk: false,
         reserved_names: &[],
         session_hook_file: Some(".codex/hooks.json"),
         // Phase 1 could not confirm that a trusted entry runs on startup and
@@ -123,6 +162,8 @@ pub const TOOLS: &[AgentTool] = &[
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
         managed_elsewhere: &[],
+        skills_elsewhere: &[],
+        builtin_skills_off_disk: false,
         reserved_names: &[],
         session_hook_file: None,
         session_hook_unavailable: None,

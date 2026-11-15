@@ -20,6 +20,20 @@ pub struct SkillEntry {
     pub enabled: bool,
 }
 
+/// The keys of `[skills.<name>]` that describe a skill to a person.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillInfo {
+    /// What the skill is for, in one line.
+    pub summary: Option<String>,
+    /// The group it belongs to, a free-form label.
+    pub group: Option<String>,
+    /// Where it came from before the skill repo held it: for an own skill,
+    /// the only record of its source.
+    pub origin: Option<String>,
+    /// The day it was installed, `YYYY-MM-DD`.
+    pub installed: Option<String>,
+}
+
 impl Manifest {
     pub fn load(repo: &SkillRepo) -> Result<Manifest, Failure> {
         let file = repo.manifest_file();
@@ -61,6 +75,24 @@ impl Manifest {
                 (name.to_owned(), entry)
             })
             .collect()
+    }
+
+    /// What `[skills.<name>]` tells a person about the skill. Values of the
+    /// wrong type read as absent; `skiman check` reports them.
+    pub fn info(&self, name: &str) -> SkillInfo {
+        let skill = self.doc.get("skills").and_then(|skills| skills.get(name));
+        let field = |key| skill.and_then(|s| s.get(key));
+        let text = |key| field(key).and_then(Item::as_str).map(str::to_owned);
+        SkillInfo {
+            summary: text("summary"),
+            group: text("group"),
+            origin: text("origin"),
+            installed: field("installed")
+                .and_then(Item::as_datetime)
+                .filter(|d| d.time.is_none() && d.offset.is_none())
+                .and_then(|d| d.date)
+                .map(|d| d.to_string()),
+        }
     }
 
     /// The `[skills.<name>.source]` table, when there is one. Missing or

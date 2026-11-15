@@ -30,6 +30,7 @@ mod ownership;
 mod project_add;
 mod project_adopt;
 mod project_check;
+mod project_kill;
 mod project_restore;
 mod project_sync;
 mod remove;

@@ -430,12 +430,13 @@ moved tmp leftovers to [..]/home/.local/state/skiman/backups/[..]/projects/work/
 }
 
 /// A tmp leftover in the anchor that cannot be moved to the backup stays
-/// where it is, says so, and the restore writes the item all the same.
+/// where it is, says so once, and the restore writes both items all the same.
 #[test]
 fn a_tmp_leftover_that_cannot_be_moved_does_not_stop_restore() {
     use std::os::unix::fs::PermissionsExt;
-    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS), ("a/CLAUDE.md", AGENTS)]);
     write(mirror(&sandbox, "a/AGENTS.md"), "from the mirror\n");
+    write(mirror(&sandbox, "a/CLAUDE.md"), "also from the mirror\n");
     let leftover = disk(&sandbox, "a/.skiman-swap-20200101T000000Z");
     write(leftover.join("old/AGENTS.md"), "only copy\n");
     // Neither the folder nor what is in `old/` can be moved out.
@@ -445,19 +446,22 @@ fn a_tmp_leftover_that_cannot_be_moved_does_not_stop_restore() {
         }
     };
     mode(0o555);
-    let out = restore(&sandbox, &[disk(&sandbox, "a/AGENTS.md")])
-        .output()
-        .unwrap();
+    let items = [disk(&sandbox, "a/AGENTS.md"), disk(&sandbox, "a/CLAUDE.md")];
+    let out = restore(&sandbox, &items).output().unwrap();
     mode(0o755);
 
     assert_eq!(out.status.code(), Some(0), "{out:?}");
     assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), "from the mirror\n");
+    assert_eq!(
+        read(disk(&sandbox, "a/CLAUDE.md")),
+        "also from the mirror\n"
+    );
     let said = String::from_utf8_lossy(&out.stdout);
     let named = format!(
         "cannot move the tmp leftover {} to a backup: ",
         leftover.display()
     );
-    assert!(said.contains(&named), "{said}");
+    assert_eq!(said.matches(&named).count(), 1, "{said}");
     assert_eq!(read(leftover.join("old/AGENTS.md")), "only copy\n");
 }
 

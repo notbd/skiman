@@ -91,6 +91,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             ..Scope::default()
         },
     )?;
+    crate::test_hook::at("project", "write:skiman.toml");
     write_atomic(&file, text.as_bytes())
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
     out!("registered project root {id}: {}", dir.display());
@@ -904,6 +905,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 all_out = false;
                 continue;
             }
+            crate::test_hook::at("project", &format!("eject:{}", item.mirror_rel()));
             match backups.move_in(&mirror, &Path::new("repo").join(item.mirror_rel())) {
                 Ok(to) => {
                     out!("moved {} to {}", item.mirror_rel(), to.display());
@@ -955,6 +957,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             remove_if_empty(&projects_dir.join(id));
         }
         remove_if_empty(&projects_dir);
+        crate::test_hook::at("project", "write:skiman.toml");
         write_atomic(&file, text.as_bytes())
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
         for id in &unregister {

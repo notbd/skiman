@@ -620,7 +620,29 @@ fn an_update_stopped_before_the_lock_does_not_merge_again() {
     let chmod = "chmod 555 \"$XDG_STATE_HOME\"/skiman/backups/*";
     update_with_hook(&stopped, &["pdf"], "update:write:skills/pdf", chmod).code(4);
     stopped.skiman().args(&args).assert().code(0);
-    assert_eq!(final_state(&stopped), final_state(&never));
+    let never_stopped = final_state(&never);
+    assert_eq!(final_state(&stopped), never_stopped);
+
+    // Without a swapping rename the old folder waits at `<name>.skiman-prev`;
+    // earlier versions left it at `old/prev/`. The run again finds either.
+    for layout in ["skills/pdf.skiman-prev", "prev/skills/pdf"] {
+        let stopped = Sandbox::new();
+        pdf_with_repeated_lines(&stopped);
+        update_with_hook(&stopped, &["pdf"], "update:write:skills/pdf", chmod).code(4);
+        let tmp = stopped.skill_repo().join(".skiman/tmp");
+        let leftovers: Vec<_> = std::fs::read_dir(&tmp)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        let [leftover] = &leftovers[..] else {
+            panic!("{leftovers:?}")
+        };
+        let to = leftover.join("old").join(layout);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::rename(leftover.join("old/skills/pdf"), &to).unwrap();
+        stopped.skiman().args(&args).assert().code(0);
+        assert_eq!(final_state(&stopped), never_stopped, "{layout}");
+    }
 
     // The next write command moves what the update swapped out to its own
     // backup; the update run again finds it there.

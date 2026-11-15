@@ -309,11 +309,16 @@ mod tests {
     fn a_changed_destination_is_a_conflict_and_stays_as_it_was() {
         let world = World::new();
         std::fs::write(world.dest(), "edited\n").unwrap();
-        let inode = std::fs::metadata(world.dest()).unwrap().ino();
+        let before = std::fs::metadata(world.dest()).unwrap();
         let outcome = world.replace(&hash("old\n"), &mut world.backups());
         assert!(matches!(outcome, Outcome::Conflict(_)), "{outcome:?}");
         assert_eq!(std::fs::read_to_string(world.dest()).unwrap(), "edited\n");
-        assert_eq!(std::fs::metadata(world.dest()).unwrap().ino(), inode);
+        // Never moved at all, not even swapped out and back (a rename sets the ctime).
+        let after = std::fs::metadata(world.dest()).unwrap();
+        assert_eq!(
+            (after.ino(), after.ctime(), after.ctime_nsec()),
+            (before.ino(), before.ctime(), before.ctime_nsec())
+        );
         assert!(world.swap_folders().is_empty());
     }
 

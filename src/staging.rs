@@ -213,7 +213,7 @@ impl Staging {
                     self.place(&new, target).map_err(|e| {
                         let (new, prev) = (new.display(), prev.display());
                         Failure::operational(format!(
-                            "{}; the old {shown} is at {prev} and the new one at {new}; rename the new one to {shown} before running the command again",
+                            "{}; the old {shown} is at {prev} and the new one at {new}",
                             e.message
                         ))
                     })?;
@@ -320,6 +320,24 @@ fn move_tmp_leftovers(
     Ok(lines)
 }
 
+/// Puts in place the new entry that a [`Staging::swap`] stopped between
+/// its two renames left in the tmp leftover `leftover` for `rel`, the path
+/// the caller is about to write: `old/<rel>`, with the old one at
+/// `old/<rel>.skiman-prev` and nothing at `<root>/<rel>`. Renamed there
+/// without replacing anything, and only into a folder that is there, so a
+/// path skiman is not writing now, and what was removed around it, stay as
+/// they are. The line that says so.
+pub fn finish_swap(leftover: &Path, root: &Path, rel: &str) -> Option<String> {
+    let (new, target) = (leftover.join("old").join(rel), root.join(rel));
+    let prev = leftover.join("old").join(format!("{rel}{PREV}"));
+    let stopped = prev.exists() && !target.exists();
+    let clear = stopped && fsutil::broken_chain(root, &target).is_none();
+    (clear && fsutil::publish(&new, &target).is_ok()).then(|| {
+        let (target, new) = (target.display(), new.display());
+        format!("put {target} in place from {new}, where a replace stopped part-way left it")
+    })
+}
+
 /// The entries of `dir`, sorted by path.
 pub fn list(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut out = Vec::new();
@@ -379,5 +397,59 @@ mod tests {
             drop(staging);
             assert!(at.exists(), "kept as a tmp leftover");
         }
+    }
+
+    /// The shape update calls it with: a skill folder. Only the path being
+    /// written goes back, and only into its folder if that is still there:
+    /// what was removed around it stays removed.
+    #[test]
+    fn finish_swap_puts_back_only_the_path_written() {
+        let temp = tempfile::tempdir().unwrap();
+        let temp = temp.path().canonicalize().unwrap();
+        let (root, leftover) = (temp.join("root"), temp.join("tmp/1"));
+        for (name, text) in [("pdf", "new"), (&format!("pdf{PREV}"), "old")] {
+            let dir = leftover.join("old/skills").join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), text).unwrap();
+        }
+        std::fs::create_dir(&root).unwrap();
+        assert_eq!(finish_swap(&leftover, &root, "skills/other"), None);
+        let gone = finish_swap(&leftover, &root, "skills/pdf");
+        assert_eq!(gone, None, "skills/ is gone");
+        std::fs::create_dir(root.join("skills")).unwrap();
+        assert!(finish_swap(&leftover, &root, "skills/pdf").is_some());
+        let put = std::fs::read_to_string(root.join("skills/pdf/SKILL.md")).unwrap();
+        assert_eq!(put, "new");
+    }
+
+    /// A tmp leftover with `old/skills/pdf` but nothing at `pdf.skiman-prev`
+    /// is no replace stopped between its two renames: after a swap,
+    /// `old/skills/pdf` is the old skill. Nothing goes back.
+    #[test]
+    fn finish_swap_needs_the_old_one_set_aside() {
+        let temp = tempfile::tempdir().unwrap();
+        let temp = temp.path().canonicalize().unwrap();
+        let (root, leftover) = (temp.join("root"), temp.join("tmp/1"));
+        std::fs::create_dir_all(leftover.join("old/skills/pdf")).unwrap();
+        std::fs::create_dir_all(root.join("skills")).unwrap();
+        assert_eq!(finish_swap(&leftover, &root, "skills/pdf"), None);
+        assert!(!root.join("skills/pdf").exists());
+    }
+
+    /// `skills/` turned into a link elsewhere: nothing goes back through it.
+    #[test]
+    fn finish_swap_never_puts_back_through_a_link() {
+        let temp = tempfile::tempdir().unwrap();
+        let temp = temp.path().canonicalize().unwrap();
+        let (root, leftover) = (temp.join("root"), temp.join("tmp/1"));
+        for name in ["pdf", &format!("pdf{PREV}")] {
+            std::fs::create_dir_all(leftover.join("old/skills").join(name)).unwrap();
+        }
+        let elsewhere = temp.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("skills")).unwrap();
+        assert_eq!(finish_swap(&leftover, &root, "skills/pdf"), None);
+        assert!(!elsewhere.join("pdf").exists());
     }
 }

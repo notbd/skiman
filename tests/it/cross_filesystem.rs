@@ -707,8 +707,7 @@ fn assert_both_versions(old: &Path, before: &std::collections::BTreeMap<PathBuf,
 /// Killed between the two renames of a replace without a swapping rename,
 /// `skills/<name>` is missing and both versions are in `.skiman/tmp/`: the
 /// old one at `old/skills/<name>.skiman-prev`, the new one at `old/skills/<name>`.
-/// Running the update again is refused (ADR 0005: one of the cases not
-/// finished that way).
+/// Run again, the update puts the new one in place and finishes.
 #[cfg(target_os = "macos")]
 #[test]
 #[cfg_attr(
@@ -733,17 +732,36 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
 
     assert!(!skill.exists());
     assert_both_versions(&the_only_old(&repo), &before);
-    let again = sandbox.skiman().args(["update", "pdf"]).output().unwrap();
-    let stderr = String::from_utf8_lossy(&again.stderr);
-    assert_eq!(again.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("skills/pdf is not a folder"), "{stderr}");
-    // Refused before it moves the tmp leftovers: both are still there.
-    assert_both_versions(&the_only_old(&repo), &before);
+    let new = the_only_old(&repo).join("skills/pdf");
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "put {} in place from {}, where a replace stopped part-way left it\n...\n",
+            skill.display(),
+            new.display()
+        ));
+    assert_updated(&sandbox, &repo);
+}
+
+/// `skills/pdf` holds the fix the update brings, and nothing is left over.
+#[cfg(target_os = "macos")]
+fn assert_updated(sandbox: &Sandbox, repo: &Path) {
+    let skill = repo.join("skills/pdf");
+    assert_eq!(read_text(&skill.join("reference.md")), "v2\n");
+    for n in 0..10 {
+        let file = skill.join(format!("refs/{n}.md"));
+        assert_eq!(read_text(&file), format!("{n}\n"));
+    }
+    sandbox.skiman().arg("check").assert().code(0);
+    assert_eq!(tmp_entries(repo), Vec::<PathBuf>::new());
 }
 
 /// When the second rename of such a replace fails, the update stops with
-/// exit 4, says where the old and the new version are and to rename the new
-/// one back before running it again; done so, the update finishes.
+/// exit 4 and says where the old and the new version are; run again, it
+/// finishes.
 #[cfg(target_os = "macos")]
 #[test]
 #[cfg_attr(
@@ -776,7 +794,7 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     let old = the_only_old(&repo);
     let (prev, new) = (old.join("skills/pdf.skiman-prev"), old.join("skills/pdf"));
     let place = format!(
-        "; the old {skill} is at {} and the new one at {}; rename the new one to {skill} before running the command again\n",
+        "; the old {skill} is at {} and the new one at {}\n",
         prev.display(),
         new.display(),
         skill = skill.display(),
@@ -785,17 +803,9 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     assert!(stderr.contains(&format!("{place}{stopped}")), "{stderr}");
     assert_both_versions(&old, &before);
 
-    std::fs::rename(&new, &skill).unwrap();
     sandbox.skiman().args(["update", "pdf"]).assert().code(0);
-    assert_eq!(read_text(&skill.join("reference.md")), "v2\n");
-    for n in 0..10 {
-        assert_eq!(
-            read_text(&skill.join(format!("refs/{n}.md"))),
-            format!("{n}\n")
-        );
-    }
-    sandbox.skiman().arg("check").assert().code(0);
-    assert_eq!(tmp_entries(&repo), Vec::<PathBuf>::new());
+    assert!(!new.exists());
+    assert_updated(&sandbox, &repo);
 }
 
 /// An adopt killed while the original moves to a backup on another

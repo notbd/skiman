@@ -621,4 +621,17 @@ fn an_update_stopped_before_the_lock_does_not_merge_again() {
     update_with_hook(&stopped, &["pdf"], "update:write:skills/pdf", chmod).code(4);
     stopped.skiman().args(&args).assert().code(0);
     assert_eq!(final_state(&stopped), final_state(&never));
+
+    // The next write command moves what the update swapped out to its own
+    // backup; the update run again finds it there.
+    let (never, moved) = (Sandbox::new(), Sandbox::new());
+    let new = ["new", "other", "-d", "Use when testing."];
+    pdf_with_repeated_lines(&never);
+    never.skiman().args(&args).assert().code(0);
+    never.skiman().args(new).assert().code(0);
+    pdf_with_repeated_lines(&moved);
+    update_with_hook(&moved, &["pdf"], "update:write:skills/pdf", chmod).code(4);
+    moved.skiman().args(new).assert().code(0);
+    moved.skiman().args(&args).assert().code(0);
+    assert_eq!(final_state(&moved), final_state(&never));
 }

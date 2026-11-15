@@ -5,7 +5,7 @@
 //! A precise step is hit with the test-only hook: `SKIMAN_TEST_HOOK` names
 //! `import:<point>` and `SKIMAN_TEST_HOOK_RUN` is the shell command debug
 //! builds run there; `kill -9 $PPID` kills the import. Points:
-//! `rename:<repo path>` before each repo piece is renamed into place, and
+//! `write:<repo path>` before each repo piece is written, and
 //! `back-up:` and `moved:` + `<backup path>` before and after each original
 //! moves to the backup.
 
@@ -13,35 +13,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::support::{
-    Sandbox, Setup, Tool, backup_dirs, import, import_killed_at, import_with_hook, only_backup,
-    read, setup, skill_md, tree, write,
+    Sandbox, Setup, Tool, backup_dirs, final_state, import, import_killed_at, import_with_hook,
+    normalised, only_backup, read, setup, skill_md, tree, write,
 };
-
-/// [`tree`] of `dir` with each path below `prefix` and the sandbox root
-/// replaced, so two sandboxes compare equal.
-fn normalised(sandbox: &Sandbox, prefix: &str, dir: &Path) -> BTreeMap<String, String> {
-    let root = sandbox.root().display().to_string();
-    tree(dir)
-        .into_iter()
-        .map(|(path, value)| {
-            let key = Path::new(prefix).join(path).display().to_string();
-            (key, value.replace(&root, "<root>"))
-        })
-        .collect()
-}
-
-/// The skill repo and the home folder (tool directories, instruction files,
-/// machine state). Backups and the git cache are left out: a killed run
-/// leaves a backup folder of its own, and fetching fills the cache.
-fn final_state(sandbox: &Sandbox) -> BTreeMap<String, String> {
-    let mut state = normalised(sandbox, "repo", &sandbox.skill_repo());
-    state.extend(normalised(sandbox, "home", &sandbox.home()));
-    state.retain(|key, _| {
-        !key.starts_with("home/.local/state/skiman/backups")
-            && !key.starts_with("home/.local/state/skiman/cache")
-    });
-    state
-}
 
 /// What an import that was never interrupted ends with.
 struct Uninterrupted {
@@ -169,7 +143,7 @@ fn standard_points() -> Vec<String> {
     ];
     renames
         .iter()
-        .map(|rel| format!("rename:{rel}"))
+        .map(|rel| format!("write:{rel}"))
         .chain(
             originals
                 .iter()
@@ -381,7 +355,7 @@ fn a_kill_while_skiman_toml_is_replaced_leaves_the_old_one_and_running_again_kee
     let repo = sandbox.skill_repo();
     let manifest = read(repo.join("skiman.toml"));
 
-    import_killed_at(&sandbox, &folder, "rename:skiman.toml");
+    import_killed_at(&sandbox, &folder, "write:skiman.toml");
     assert_eq!(read(repo.join("skiman.toml")), manifest);
     // A session start in between finds a skill repo it can read.
     sandbox
@@ -461,7 +435,7 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     } = setup(&sandbox);
     let manifest = folder.join("skiman.toml");
     write(&manifest, read(&manifest).replace(&commit, "main"));
-    import_killed_at(&sandbox, &folder, "rename:skills/notes");
+    import_killed_at(&sandbox, &folder, "write:skills/notes");
     upstream.write("skills/pdf/reference.md", "# Reference v2\n");
     upstream.commit("v2");
     // Unreachable now: the run must not fetch.
@@ -498,7 +472,7 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     let text = read(&manifest).replace("\"skills/pdf\"", "\"skills/pdf/\"");
     assert!(text.contains("path = \"skills/pdf/\"\n"), "{text}");
     write(&manifest, text.replace(&commit, "main"));
-    import_killed_at(&sandbox, &folder, "rename:skills/notes");
+    import_killed_at(&sandbox, &folder, "write:skills/notes");
     upstream.write("skills/pdf/reference.md", "# Reference v2\n");
     let v2 = upstream.commit("v2");
     write(
@@ -522,6 +496,83 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
         "# Reference v2\n"
     );
     assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{v2}\"")));
+}
+
+/// Killed after the source table and lock entry, before the snapshot: run
+/// again, the import reads the snapshot at the commit the lock entry has,
+/// from the cache, instead of fetching the branch, which moved since; the
+/// upstream need not be reachable.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_branch_that_moved_after_a_kill_before_the_snapshot_keeps_the_locked_commit() {
+    let sandbox = Sandbox::new();
+    let Setup {
+        folder,
+        upstream,
+        commit,
+    } = setup(&sandbox);
+    let manifest = folder.join("skiman.toml");
+    write(&manifest, read(&manifest).replace(&commit, "main"));
+    import_killed_at(&sandbox, &folder, "write:upstream/pdf");
+    upstream.write("skills/pdf/reference.md", "# Reference v2\n");
+    upstream.commit("v2");
+    std::fs::rename(upstream.path(), sandbox.root().join("moved-upstream")).unwrap();
+
+    let output = import(&sandbox, &folder);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(
+        stdout.contains(&format!("at {commit} (as the skill repo holds it)")),
+        "{stdout}"
+    );
+    let repo = sandbox.skill_repo();
+    assert_eq!(
+        read(repo.join("upstream/pdf/reference.md")),
+        "# Reference\n"
+    );
+    assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{commit}\"")));
+    sandbox.skiman().arg("check").assert().code(0);
+}
+
+/// The commit the skill repo holds is kept only for the `ref` its lock
+/// entry was read at: an import folder whose `ref` changed, run again after
+/// a kill that wrote the new `ref` to `skiman.toml` but not yet the lock
+/// entry, fetches the new `ref`.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_lock_entry_read_at_another_ref_is_fetched_again() {
+    let sandbox = Sandbox::new();
+    let Setup {
+        folder,
+        upstream,
+        commit,
+    } = setup(&sandbox);
+    let manifest = folder.join("skiman.toml");
+    write(&manifest, read(&manifest).replace(&commit, "main"));
+    assert_eq!(import(&sandbox, &folder).status.code(), Some(0));
+    upstream.write("skills/pdf/reference.md", "# Reference v2\n");
+    let v2 = upstream.commit("v2");
+    upstream.branch("stable");
+    write(&manifest, read(&manifest).replace("\"main\"", "\"stable\""));
+    write(folder.join("skills/memo/SKILL.md"), skill_md("memo"));
+    import_killed_at(&sandbox, &folder, "write:skiman.lock");
+    let repo = sandbox.skill_repo();
+    assert!(read(repo.join("skiman.toml")).contains("ref = \"stable\""));
+
+    let output = import(&sandbox, &folder);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(read(repo.join("skiman.lock")).contains(&format!("commit = \"{v2}\"")));
+    assert_eq!(
+        read(repo.join("upstream/pdf/reference.md")),
+        "# Reference v2\n"
+    );
 }
 
 /// The skill repo, the home folder (tool directories, instruction files,
@@ -564,7 +615,7 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
     let repo = sandbox.skill_repo();
     // upstream/pdf, skiman.lock, skiman.toml and shared.md are written;
     // skills/notes is next.
-    import_killed_at(&sandbox, &folder, "rename:skills/notes");
+    import_killed_at(&sandbox, &folder, "write:skills/notes");
 
     let manifest = read(repo.join("skiman.toml"));
     write(repo.join("skiman.toml"), format!("{manifest}# hand edit\n"));
@@ -722,7 +773,7 @@ fn adopted(sandbox: &Sandbox) {
 )]
 fn with_the_skills_already_in_the_skill_repo_a_kill_before_skiman_toml_then_the_same_command_ends_like_an_uninterrupted_import()
  {
-    let point = ["rename:skiman.toml".to_owned()];
+    let point = ["write:skiman.toml".to_owned()];
     assert_each_kill_ends_like_an_uninterrupted_import(instructions_only, &point, &[false]);
     assert_each_kill_ends_like_an_uninterrupted_import(adopted, &point, &[false]);
 }
@@ -777,7 +828,7 @@ fn originals_backed_up_before_the_kill_are_still_in_their_backup_after_the_same_
 fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_that_it_does_not() {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    import_killed_at(&sandbox, &folder, "rename:skills/notes");
+    import_killed_at(&sandbox, &folder, "write:skills/notes");
     let other = sandbox.root().join("other");
     write(other.join("skills/todo/SKILL.md"), skill_md("todo"));
     write(other.join("instructions/shared.md"), "Other.\n");
@@ -801,7 +852,7 @@ fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_t
 fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_out_until_it_is_removed()
  {
     // Before the last skill is written, and once the repo holds all of them.
-    for point in ["rename:skills/notes", "moved:claude-code/notes"] {
+    for point in ["write:skills/notes", "moved:claude-code/notes"] {
         let sandbox = Sandbox::new();
         let Setup { folder, .. } = setup(&sandbox);
         import_killed_at(&sandbox, &folder, point);

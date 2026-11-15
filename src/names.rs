@@ -46,17 +46,32 @@ pub fn check_new_name(name: &str) -> Result<(), Failure> {
     Ok(())
 }
 
+/// What can hold a skill name in the skill repo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Taken {
+    Folder,
+    Table,
+    LockEntry,
+    Snapshot,
+}
+
 /// Refuses (exit 1) a **taken** name: a `skills/<name>` entry in any form, a
-/// `skiman.toml` table, a lock entry or an upstream snapshot.
-pub fn check_not_taken(repo: &SkillRepo, name: &str) -> Result<(), Failure> {
+/// `skiman.toml` table, a lock entry or an upstream snapshot, except one that
+/// `ours` says is what this command writes, left by a run of it that stopped
+/// part-way (which then finishes).
+pub fn check_not_taken(
+    repo: &SkillRepo,
+    name: &str,
+    ours: impl Fn(Taken) -> Result<bool, Failure>,
+) -> Result<(), Failure> {
     let exists = |p: std::path::PathBuf| std::fs::symlink_metadata(p).is_ok();
-    let reason = if exists(repo.skill_dir(name)) {
+    let reason = if exists(repo.skill_dir(name)) && !ours(Taken::Folder)? {
         Some(format!("skills/{name} already exists"))
-    } else if Manifest::load(repo)?.skills().contains_key(name) {
+    } else if Manifest::load(repo)?.skills().contains_key(name) && !ours(Taken::Table)? {
         Some(format!("skiman.toml already has a [skills.{name}] table"))
-    } else if Lockfile::load(repo)?.skill_names().contains(name) {
+    } else if Lockfile::load(repo)?.skill_names().contains(name) && !ours(Taken::LockEntry)? {
         Some(format!("skiman.lock already has an entry for {name}"))
-    } else if exists(repo.upstream_dir(name)) {
+    } else if exists(repo.upstream_dir(name)) && !ours(Taken::Snapshot)? {
         Some(format!("upstream/{name} already exists"))
     } else {
         None

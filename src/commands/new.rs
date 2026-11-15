@@ -3,18 +3,18 @@
 use std::collections::BTreeSet;
 
 use crate::Exit;
+use crate::backup::Backups;
+use crate::change::{Change, Want};
 use crate::commands::{ask, has_terminal};
 use crate::failure::{Failure, finish};
-use crate::fsutil;
-use crate::names;
+use crate::names::{self, Taken};
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::SnapshotFile;
-use crate::staging::Staging;
 use crate::sync::{self, Output};
-use crate::tree::{Overlay, WorkingTree};
+use crate::tree::WorkingTree;
 
 pub const MAX_DESCRIPTION: usize = 1024;
 
@@ -43,34 +43,28 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
     }
 
     let lock = RepoLock::wait(&paths, &repo)?;
-    names::check_not_taken(&repo, name)?;
-    let content = skill_md(name, &description);
-    let rel = format!("skills/{name}/SKILL.md");
-    let working_tree = WorkingTree::new(repo.root());
-    let candidate = Overlay::new(&working_tree, vec![(rel, content.clone().into_bytes())]);
+    // Staged whole, then put in place: never half a skill.
+    let skill_md = SnapshotFile {
+        path: "SKILL.md".to_owned(),
+        executable: false,
+        content: skill_md(name, &description).into_bytes(),
+    };
+    let change = Change {
+        pieces: vec![(format!("skills/{name}"), Want::Folder(vec![skill_md]))],
+        command: "new",
+        save_files: false,
+    };
+    // A `new` stopped after the folder was in place finishes when run again.
+    let ours = |taken| Ok(taken == Taken::Folder && change.in_place(repo.root())?);
+    names::check_not_taken(&repo, name, ours)?;
     // The whole skill folder is new content.
     let scope = Scope {
         skills: BTreeSet::from([name.to_owned()]),
         consistency: BTreeSet::from([name.to_owned()]),
         ..Scope::default()
     };
-    rules::validate_write(&candidate, &scope)?;
-
-    // Staged whole, then renamed in: never half a skill, never over one.
-    let staging = Staging::begin(&paths, &repo, &lock)?;
-    let staged = staging.dir().join("skills").join(name);
-    let skill_md = SnapshotFile {
-        path: "SKILL.md".to_owned(),
-        executable: false,
-        content: content.into_bytes(),
-    };
-    fsutil::write_files(&staged, &[skill_md])?;
-    staging.place(&staged, &repo.skill_dir(name))?;
-    drop(staging);
-    out!(
-        "created {}",
-        repo.skill_dir(name).join("SKILL.md").display()
-    );
+    rules::validate_write(&change.overlay(&WorkingTree::new(repo.root())), &scope)?;
+    change.apply(&repo, &lock, &mut Backups::new(&paths))?;
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 

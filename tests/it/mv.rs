@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use snapbox::str;
 
 use crate::support::{
-    Sandbox, Tool, assert_symlink, aws_key, check_is_clean, exists, fingerprint, init, read, tree,
+    Sandbox, Tool, assert_each_kill_finishes, assert_symlink, aws_key, check_is_clean, exists,
+    fingerprint, init, killed_at, read, tree,
 };
 
 fn append(path: impl AsRef<Path>, text: &str) {
@@ -87,9 +88,9 @@ fn mv_of_an_own_skill_renames_the_folder_name_table_and_secret_exemption() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-renamed [..]/skill-repo/skills/notes to [..]/skill-repo/skills/memo
-changed [..]/skill-repo/skills/memo/SKILL.md
+changed [..]/skill-repo/skills/notes/SKILL.md
 changed [..]/skill-repo/skiman.toml
+renamed [..]/skill-repo/skills/notes to [..]/skill-repo/skills/memo
 removed [..]/home/.claude/skills/notes
 linked [..]/home/.claude/skills/memo
 removed [..]/home/.agents/skills/notes
@@ -135,11 +136,11 @@ fn mv_of_a_third_party_skill_renames_its_records_and_snapshot() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-renamed [..]/skill-repo/skills/pdf to [..]/skill-repo/skills/forms
-changed [..]/skill-repo/skills/forms/SKILL.md
-renamed [..]/skill-repo/upstream/pdf to [..]/skill-repo/upstream/forms
+changed [..]/skill-repo/skills/pdf/SKILL.md
 changed [..]/skill-repo/skiman.toml
 changed [..]/skill-repo/skiman.lock
+renamed [..]/skill-repo/upstream/pdf to [..]/skill-repo/upstream/forms
+renamed [..]/skill-repo/skills/pdf to [..]/skill-repo/skills/forms
 removed [..]/home/.claude/skills/pdf
 linked [..]/home/.claude/skills/forms
 removed [..]/home/.agents/skills/pdf
@@ -243,5 +244,173 @@ fn mv_of_a_name_without_a_skill_folder_exits_1_and_changes_nothing() {
 error: skills/nothing is not a skill folder
 
 "#]]);
+    assert_eq!(world(&sandbox), before);
+}
+
+/// Killed at any step, a mv finishes when run again: its first write makes
+/// `skills/<old>/SKILL.md` name `<new>`, which shows a mv stopped part-way,
+/// and its last renames the folder.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_mv_killed_at_any_step_finishes_when_run_again() {
+    assert_each_kill_finishes(
+        |sandbox| {
+            init(sandbox);
+            add_pdf(sandbox);
+            ["mv", "pdf", "forms"].map(String::from).to_vec()
+        },
+        &[
+            "mv:write:skills/pdf/SKILL.md",
+            "mv:write:skiman.toml",
+            "mv:write:skiman.lock",
+            "mv:write:upstream/forms",
+            "mv:write:skills/forms",
+        ],
+    );
+    // Run again after its first write, it says it finishes that mv.
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    add_pdf(&sandbox);
+    let args = ["mv", "pdf", "forms"].map(String::from).to_vec();
+    killed_at(&sandbox, &args, "mv:write:skiman.toml");
+    let again = sandbox.skiman().args(&args).assert().code(0);
+    let stdout = String::from_utf8_lossy(&again.get_output().stdout).into_owned();
+    assert!(
+        stdout.starts_with("skills/pdf/SKILL.md already names `forms`: finishing the rename\n"),
+        "{stdout}"
+    );
+}
+
+/// A link where `skills/<new>` goes, even one that points nowhere, is no mv
+/// stopped part-way: mv refuses (exit 1) and changes nothing.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_dangling_link_at_the_new_name_is_no_mv_stopped_part_way() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    add_pdf(&sandbox);
+    let args = ["mv", "pdf", "forms"].map(String::from).to_vec();
+    killed_at(&sandbox, &args, "mv:write:skiman.lock");
+    std::os::unix::fs::symlink("/nonexistent/x", sandbox.skill_repo().join("skills/forms"))
+        .unwrap();
+    let before = world(&sandbox);
+
+    sandbox.skiman().args(&args).assert().code(1);
+
+    assert_eq!(world(&sandbox), before);
+}
+
+/// States no mv leaves, where only the old name's records or snapshot are
+/// left, are not taken for a mv stopped part-way: mv refuses (exit 1) and
+/// changes nothing: a third-party `pdf` whose folder was deleted by hand,
+/// moved onto an own skill; a `pdf` a remove killed part-way left as
+/// records, moved onto a third-party `forms`; a hand-deleted own `notes`
+/// with a table, moved onto a third-party `pdf`.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn mv_of_what_only_records_are_left_of_is_refused_and_changes_nothing() {
+    type Setup = fn(&Sandbox) -> [&'static str; 2];
+    let cases: [Setup; 3] = [
+        |sandbox| {
+            add_pdf(sandbox);
+            std::fs::remove_dir_all(sandbox.skill_repo().join("skills/pdf")).unwrap();
+            let new = ["new", "notes", "-d", "Take notes"];
+            sandbox.skiman().args(new).assert().code(0);
+            ["pdf", "notes"]
+        },
+        |sandbox| {
+            add_pdf(sandbox);
+            let up = sandbox.upstream("acme/forms");
+            up.write("SKILL.md", "---\nname: forms\ndescription: Forms\n---\n");
+            up.commit("v1");
+            let add = ["add", "acme/forms", "--yes"];
+            sandbox.skiman().args(add).assert().code(0);
+            let args = ["remove", "pdf", "--yes"].map(String::from);
+            killed_at(sandbox, &args, "remove:write:skiman.toml");
+            ["pdf", "forms"]
+        },
+        |sandbox| {
+            add_pdf(sandbox);
+            let new = ["new", "notes", "-d", "Take notes"];
+            sandbox.skiman().args(new).assert().code(0);
+            let repo = sandbox.skill_repo();
+            append(
+                repo.join("skiman.toml"),
+                "\n[skills.notes]\nenabled = true\n",
+            );
+            std::fs::remove_dir_all(repo.join("skills/notes")).unwrap();
+            ["notes", "pdf"]
+        },
+    ];
+    for setup in cases {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let [old, new] = setup(&sandbox);
+        let repo = sandbox.skill_repo();
+        let records = || {
+            let lock = std::fs::read_to_string(repo.join("skiman.lock")).unwrap_or_default();
+            (
+                read(repo.join("skiman.toml")),
+                lock,
+                tree(repo.join("upstream")),
+            )
+        };
+        let before = records();
+
+        let mv = sandbox.skiman().args(["mv", old, new]).assert().code(1);
+        let stderr = String::from_utf8_lossy(&mv.get_output().stderr).into_owned();
+        assert!(
+            stderr.starts_with(&format!("error: skills/{old} is not a skill folder")),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("`skiman sync` finishes the rest"),
+            "{stderr}"
+        );
+        assert_eq!(records(), before, "mv {old} {new}");
+    }
+}
+
+/// A `skills/<old>/SKILL.md` that names `<new>` is where a mv stops
+/// part-way only while no record has both names: with the records of a
+/// `<new>` of its own (its folder deleted by hand), mv refuses the taken
+/// name and changes nothing.
+#[test]
+fn a_skill_md_naming_another_skill_is_no_mv_stopped_part_way() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    add_pdf(&sandbox);
+    let up = sandbox.upstream("acme/forms");
+    up.write("SKILL.md", "---\nname: forms\ndescription: Forms\n---\n");
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/forms", "--yes"])
+        .assert()
+        .code(0);
+    let repo = sandbox.skill_repo();
+    std::fs::remove_dir_all(repo.join("skills/forms")).unwrap();
+    let skill_md = repo.join("skills/pdf/SKILL.md");
+    let text = read(&skill_md).replace("name: pdf", "name: forms");
+    std::fs::write(&skill_md, text).unwrap();
+    let before = world(&sandbox);
+
+    sandbox
+        .skiman()
+        .args(["mv", "pdf", "forms"])
+        .assert()
+        .code(1)
+        .stderr_eq(
+            "error: the name `forms` is taken: skiman.toml already has a [skills.forms] table\n",
+        );
     assert_eq!(world(&sandbox), before);
 }

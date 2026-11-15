@@ -141,8 +141,11 @@ where
     S: AsRef<OsStr>,
 {
     let mut cmd = Command::new("git");
+    // A fixed date, so the same commits made in two sandboxes are the same.
     cmd.env_clear()
         .envs(envs.iter().cloned())
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
         .current_dir(dir)
         .args([
             "-c",

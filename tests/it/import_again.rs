@@ -425,7 +425,7 @@ fn a_skill_repo_whose_third_party_records_the_import_folder_no_longer_declares_r
     // Stopped before the last skill; the folder moved the source to notes.
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    import_killed_at(&sandbox, &folder, "rename:skills/pdf");
+    import_killed_at(&sandbox, &folder, "write:skills/pdf");
     std::fs::remove_dir_all(folder.join("skills/pdf")).unwrap();
     let manifest = folder.join("skiman.toml");
     write(
@@ -437,7 +437,7 @@ fn a_skill_repo_whose_third_party_records_the_import_folder_no_longer_declares_r
     // The same stop; the folder dropped pdf and its source.
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    import_killed_at(&sandbox, &folder, "rename:skills/pdf");
+    import_killed_at(&sandbox, &folder, "write:skills/pdf");
     notes_only(&folder, TOOLS);
     assert_pdf_records_refused(&sandbox, &folder);
 

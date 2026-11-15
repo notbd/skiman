@@ -20,6 +20,7 @@ macro_rules! err {
 }
 
 mod backup;
+mod change;
 mod cli;
 mod commands;
 mod config;

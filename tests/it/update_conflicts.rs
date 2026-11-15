@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::support::{PDF_SKILL_MD, Sandbox, Upstream, init, lines, tree, tree_hash, write};
+use crate::support::{
+    PDF_SKILL_MD, Sandbox, Upstream, backup_dirs, init, lines, tree, tree_hash, write,
+};
 
 fn read(path: impl AsRef<Path>) -> Vec<u8> {
     std::fs::read(path.as_ref()).unwrap_or_else(|e| panic!("read {}: {e}", path.as_ref().display()))
@@ -70,7 +72,7 @@ fn a_text_conflict_is_written_with_the_fixed_labels_and_exits_3() {
         .stdout_eq(format!(
             "skill pdf: updated to {commit} with conflicts; changed files:\n\
              \x20 modified reference.md\n\
-             saved the old folders and records of pdf to [..]\n\
+             saved the old folders of pdf to [..]\n\
              skill pdf: resolve these conflicts in skills/pdf, then delete the conflict records:\n\
              \x20 reference.md: conflict markers\n"
         ))
@@ -466,7 +468,7 @@ fn a_skill_with_unresolved_conflicts_is_refused_until_they_are_resolved() {
         .stdout_eq(format!(
             "skill pdf: updated to {commit}; changed files:\n\
              \x20 added forms.md\n\
-             saved the old folders and records of pdf to [..]\n"
+             saved the old folders of pdf to [..]\n"
         ));
     assert_eq!(
         read(skill.join("reference.md")),
@@ -474,36 +476,76 @@ fn a_skill_with_unresolved_conflicts_is_refused_until_they_are_resolved() {
     );
 }
 
+/// `check` flags a hand-edited snapshot; `update` merges from the snapshot
+/// the lock entry records instead, read again from the upstream, and puts
+/// the hand-edited one in the backup.
 #[test]
-fn a_hand_edited_snapshot_is_refused_with_the_check_line() {
+fn a_hand_edited_snapshot_is_replaced_and_kept_in_the_backup() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    write(
-        sandbox.skill_repo().join("upstream/pdf/reference.md"),
-        "edited by hand\n",
-    );
+    let repo = sandbox.skill_repo();
+    write(repo.join("upstream/pdf/reference.md"), "edited by hand\n");
     up.write("reference.md", lines(&[(5, "theirs")]));
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    sandbox.skiman().arg("check").assert().code(1);
 
-    let check = sandbox.skiman().arg("check").assert().code(1);
-    let check_line = String::from_utf8(check.get_output().stdout.clone())
-        .unwrap()
-        .lines()
-        .find(|l| l.starts_with("upstream/pdf: snapshot-hash: "))
-        .expect("check reports the snapshot")
-        .to_owned();
+    let update = sandbox.skiman().args(["update", "pdf"]).assert().code(0);
 
-    sandbox
+    let stdout = String::from_utf8_lossy(&update.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains(
+            "  note: upstream/pdf did not match skiman.lock; it is replaced by the snapshot the lock records, and what it held is moved to the backup\n"
+        ),
+        "{stdout}"
+    );
+    assert_eq!(
+        read(repo.join("skills/pdf/reference.md")),
+        lines(&[(5, "theirs")]).into_bytes()
+    );
+    let backup = backup_dirs(&sandbox).pop().unwrap();
+    assert_eq!(
+        read(backup.join("repo/upstream/pdf/reference.md")),
+        b"edited by hand\n"
+    );
+    sandbox.skiman().arg("check").assert().code(0);
+}
+
+/// With no new version upstream, a hand-edited snapshot is replaced all the
+/// same, and the note says so (a dry run, that it would be).
+#[test]
+fn a_hand_edited_snapshot_with_no_new_version_is_replaced_with_the_note() {
+    let sandbox = Sandbox::new();
+    installed(&sandbox);
+    let repo = sandbox.skill_repo();
+    write(repo.join("upstream/pdf/reference.md"), "edited by hand\n");
+
+    let dry_run = sandbox
         .skiman()
-        .args(["update", "pdf"])
-        .assert()
-        .code(1)
-        .stdout_eq("")
-        .stderr_eq(format!(
-            "error: skill pdf: upstream/pdf does not match skiman.lock; restore the snapshot before updating:\n  {check_line}\n"
-        ));
-    assert_eq!(skill_repo_tree(&sandbox), before);
+        .args(["update", "pdf", "--dry-run"])
+        .assert();
+    let stdout = String::from_utf8_lossy(&dry_run.code(0).get_output().stdout).into_owned();
+    assert!(
+        stdout.contains(
+            "  note: upstream/pdf did not match skiman.lock; it would be replaced by the snapshot the lock records, and what it held would be moved to the backup\n"
+        ),
+        "{stdout}"
+    );
+    let update = sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+
+    let stdout = String::from_utf8_lossy(&update.get_output().stdout).into_owned();
+    assert!(stdout.contains("no file of the skill changed"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "  note: upstream/pdf did not match skiman.lock; it is replaced by the snapshot the lock records, and what it held is moved to the backup\n"
+        ),
+        "{stdout}"
+    );
+    let backup = backup_dirs(&sandbox).pop().unwrap();
+    assert_eq!(
+        read(backup.join("repo/upstream/pdf/reference.md")),
+        b"edited by hand\n"
+    );
+    sandbox.skiman().arg("check").assert().code(0);
 }
 
 fn skill_md(description: &str, body: &str) -> String {
@@ -529,7 +571,7 @@ fn markers_that_break_the_frontmatter_do_not_refuse_the_update() {
         .stdout_eq(
             "skill pdf: updated to [..] with conflicts; changed files:\n\
              \x20 modified SKILL.md\n\
-             saved the old folders and records of pdf to [..]\n\
+             saved the old folders of pdf to [..]\n\
              skill pdf: resolve these conflicts in skills/pdf, then delete the conflict records:\n\
              \x20 SKILL.md: conflict markers\n",
         )

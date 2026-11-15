@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use snapbox::str;
 
 use crate::support::{
-    PDF_SKILL_MD, Sandbox, Tool, Upstream, assert_symlink, backups, fingerprint, init,
-    is_executable, read, skill_md, tree, tree_hash,
+    PDF_SKILL_MD, Sandbox, Tool, Upstream, assert_each_kill_finishes, assert_symlink, backups,
+    fingerprint, init, is_executable, read, skill_md, tree, tree_hash,
 };
 
 /// An upstream `acme/<repo>` whose root is one skill.
@@ -873,4 +873,57 @@ fn a_secret_in_the_upstream_is_refused_until_its_entry_is_added() {
             .join("upstream/pdf/tests/fixture.env")
             .is_file()
     );
+}
+
+/// Killed before any piece is written, an add finishes when run again: what
+/// it wrote itself does not take the name.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_add_killed_at_any_step_finishes_when_run_again() {
+    assert_each_kill_finishes(
+        |sandbox| {
+            init(sandbox);
+            single_skill(sandbox, "pdf", PDF_SKILL_MD);
+            ["add", "acme/pdf", "--name", "forms", "--yes"]
+                .map(String::from)
+                .to_vec()
+        },
+        &[
+            "add:write:upstream/forms",
+            "add:write:skills/forms",
+            "add:write:skiman.toml",
+            "add:write:skiman.lock",
+        ],
+    );
+}
+
+/// An own skill that holds exactly what an upstream holds is no add stopped
+/// part-way (that one writes `upstream/<name>` first): its name stays taken.
+#[test]
+fn add_over_an_own_skill_identical_to_the_upstream_is_refused() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let skill = sandbox.skill_repo().join("skills/pdf");
+    std::fs::create_dir_all(skill.join("scripts")).unwrap();
+    std::fs::write(skill.join("SKILL.md"), PDF_SKILL_MD).unwrap();
+    std::fs::write(skill.join("reference.md"), "# Reference\n").unwrap();
+    std::fs::write(skill.join("scripts/fill.sh"), "#!/bin/sh\necho fill\n").unwrap();
+    let run = std::fs::Permissions::from_mode(0o755);
+    std::fs::set_permissions(skill.join("scripts/fill.sh"), run).unwrap();
+    let before = world(&sandbox);
+
+    sandbox
+        .skiman()
+        .args(["add", "acme/pdf", "--yes"])
+        .assert()
+        .code(1)
+        .stderr_eq(str![[r#"
+error: the name `pdf` is taken: skills/pdf already exists; install it under another name with `--name <name>`
+
+"#]]);
+    assert_eq!(world(&sandbox), before);
 }

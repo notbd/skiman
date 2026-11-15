@@ -9,8 +9,11 @@ use std::path::{Path, PathBuf};
 use crate::discovery;
 use crate::failure::Failure;
 use crate::fetch::{Cache, RefKind, ResolvedRef};
+use crate::git::Prompts;
 use crate::lockfile::LockEntry;
+use crate::manifest::SourceRecord;
 use crate::paths::Paths;
+use crate::repo::SkillRepo;
 use crate::snapshot::{self, Snapshot};
 use crate::source::{Source, SourceKind};
 use crate::tree;
@@ -147,6 +150,38 @@ impl Upstream {
             Upstream::Local { .. } => "(local folder)".to_owned(),
         }
     }
+}
+
+/// The snapshot `entry` records for the third-party skill `name` from
+/// `source`: `upstream/<name>` when it matches the entry, else read again at
+/// the entry's commit from the cache (fetched when the cache lacks it), or a
+/// local folder as it is now. `None` when neither matches. A write stopped
+/// after it wrote the lock entry, before `upstream/<name>`, so goes on from
+/// the entry (`update`, `import`).
+pub fn locked_snapshot(
+    paths: &Paths,
+    prompts: Prompts,
+    repo: &SkillRepo,
+    name: &str,
+    source: &SourceRecord,
+    entry: &LockEntry,
+) -> Result<Option<Snapshot>, Failure> {
+    let matches = |snapshot: &Snapshot| snapshot.tree_hash() == entry.snapshot;
+    let held = Snapshot::from_folder(&repo.upstream_dir(name))?;
+    if matches(&held) {
+        return Ok(Some(held));
+    }
+    let upstream = match &entry.commit {
+        Some(commit) => {
+            let cache = Cache::open(paths, &source.url, prompts)?;
+            Upstream::at(cache, commit.clone(), None, None)?
+        }
+        None => Upstream::Local {
+            dir: local_root(paths, &source.url)?,
+        },
+    };
+    let snapshot = upstream.snapshot(&source.path)?;
+    Ok(matches(&snapshot).then_some(snapshot))
 }
 
 /// The local folder a recorded `source.url` (`/` or `~`) names, as `add`

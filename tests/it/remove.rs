@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, Tool, check_is_clean, exists, init, only_backup, read, tree};
+use crate::support::{
+    Sandbox, Tool, assert_each_kill_finishes, check_is_clean, exists, init, only_backup, read,
+    tree, write,
+};
 
 /// The skill repo (without `.git` and `.skiman`) and every tool directory.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
@@ -226,7 +229,6 @@ fn with_an_unwritable_backups_folder_remove_stops_and_the_records_stay() {
         stderr.contains("cannot create a backup folder in"),
         "{stderr}"
     );
-    assert!(stderr.contains("nothing was removed"), "{stderr}");
     assert_eq!(world(&sandbox), before);
 }
 
@@ -287,4 +289,88 @@ removed [..]/home/.gemini/config/skills/pdf
 "#]])
         .stderr_eq("");
     check_is_clean(&sandbox);
+}
+
+/// A tmp leftover goes to a backup before the remove writes; with no folder
+/// of the skill, the remove still says it removed only the records.
+#[test]
+fn remove_of_records_with_a_tmp_leftover_says_it_removed_only_the_records() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    add_pdf(&sandbox);
+    let repo = sandbox.skill_repo();
+    std::fs::remove_dir_all(repo.join("skills/pdf")).unwrap();
+    std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
+    write(
+        repo.join(".skiman/tmp/20990101T000000Z/old/skills/x/f"),
+        "leftover\n",
+    );
+
+    sandbox
+        .skiman()
+        .args(["remove", "pdf", "--yes"])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+moved tmp leftovers to [..]/state/skiman/backups/[..]/repo/.skiman/tmp
+changed [..]/skill-repo/skiman.toml
+changed [..]/skill-repo/skiman.lock
+removed the records of skill pdf
+removed [..]/home/.claude/skills/pdf
+removed [..]/home/.agents/skills/pdf
+removed [..]/home/.gemini/config/skills/pdf
+
+"#]])
+        .stderr_eq("");
+}
+
+#[test]
+fn remove_drops_the_secret_exemptions_of_the_skill_and_keeps_the_others() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    add_pdf(&sandbox);
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let allow = |path: &str| {
+        format!(
+            "\n[[secrets.allow]]\npath = \"{path}\"\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n"
+        )
+    };
+    let text = read(&manifest);
+    write(
+        &manifest,
+        format!(
+            "{text}{}{}{}",
+            allow("skills/pdf/keys.md"),
+            allow("projects/web/keys.md"),
+            allow("upstream/pdf/keys.md")
+        ),
+    );
+
+    sandbox
+        .skiman()
+        .args(["remove", "pdf", "--yes"])
+        .assert()
+        .code(0);
+
+    let text = read(&manifest);
+    assert!(text.contains("projects/web/keys.md"), "{text}");
+    assert!(!text.contains("pdf"), "{text}");
+}
+
+#[test]
+fn a_remove_killed_at_any_step_finishes_when_run_again() {
+    let hooks = [
+        "remove:write:skills/pdf",
+        "remove:write:upstream/pdf",
+        "remove:write:skiman.toml",
+        "remove:write:skiman.lock",
+    ];
+    assert_each_kill_finishes(
+        |sandbox| {
+            init(sandbox);
+            add_pdf(sandbox);
+            vec!["remove".into(), "pdf".into(), "--yes".into()]
+        },
+        &hooks,
+    );
 }

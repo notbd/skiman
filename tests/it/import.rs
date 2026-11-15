@@ -856,16 +856,11 @@ fn a_failure_during_takeover_stops_the_import_and_the_same_command_finishes_it()
         )),
         "{stderr}"
     );
-    assert!(stderr.contains("the import stopped part-way"), "{stderr}");
-    // The run's backup holds the repo files it replaced.
+    assert!(stderr.contains("stopped part-way"), "{stderr}");
+    // No original moved; the run's backup holds only the repo files it
+    // replaced, which the lines above list.
     let [first] = backup_dirs(&sandbox).try_into().unwrap();
-    assert!(
-        stderr.contains(&format!(
-            "the originals this run moved are in {}",
-            first.display()
-        )),
-        "{stderr}"
-    );
+    assert!(stderr.contains("this run moved no original"), "{stderr}");
     assert!(
         stderr.contains("run the same command again to finish it"),
         "{stderr}"
@@ -1208,7 +1203,7 @@ fn more_to_move(sandbox: &Sandbox) {
 /// [`more_to_move`].
 fn stopped_before_the_last_skill(sandbox: &Sandbox, local: bool) -> PathBuf {
     let folder = setup_with_source(sandbox, local);
-    import_killed_at(sandbox, &folder, "rename:skills/pdf");
+    import_killed_at(sandbox, &folder, "write:skills/pdf");
     more_to_move(sandbox);
     folder
 }

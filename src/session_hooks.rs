@@ -9,9 +9,10 @@
 //! would also claim, and later remove, another program's hook.
 //!
 //! A settings file is rewritten at its realpath (temporary file in that
-//! directory, then rename), keeping every other key and entry; a file that is
-//! not valid JSON, or whose `hooks.SessionStart` is not a list, is never
-//! rewritten (exit 4, and the entry to add by hand is printed). A missing
+//! directory, then rename), keeping every other key and entry but not its
+//! formatting, and a number that 64 bits cannot hold loses digits. A file
+//! that is not valid JSON, or whose `hooks.SessionStart` is not a list, is
+//! never rewritten (exit 4, and the entry to add by hand is printed). A missing
 //! settings file is created when the folder that holds it exists; when that
 //! folder is missing the tool is not installed and nothing is written.
 
@@ -152,6 +153,9 @@ enum Unusable {
     Broken(String),
 }
 
+/// What saving a settings file through `serde_json` does to the rest of it.
+const REWRITTEN: &str = "; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits";
+
 fn load(path: PathBuf) -> Result<Settings, Unusable> {
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -282,8 +286,9 @@ fn write_addition(settings: &Settings, group: &Value) -> Exit {
     match settings.save() {
         Ok(()) => {
             out!(
-                "added the session-start hook entry to {}",
-                settings.path.display()
+                "added the session-start hook entry to {}{}",
+                settings.path.display(),
+                settings.permissions.as_ref().map_or("", |_| REWRITTEN)
             );
             Exit::Success
         }
@@ -328,7 +333,7 @@ fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
     match settings.save() {
         Ok(()) => {
             out!(
-                "removed the session-start hook entries from {}",
+                "removed the session-start hook entries from {}{REWRITTEN}",
                 settings.path.display()
             );
             Exit::Success

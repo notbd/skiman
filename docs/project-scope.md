@@ -309,7 +309,8 @@ an error never deletes the only copy:
   made it), then moves it whole to the backup
   (`backups/<ts>/projects/<id>/<anchor>/`, `backups/<ts>/repo/.skiman/swap/`);
   empty folders and a `.gitignore` alone are dropped. One that cannot be moved
-  stays where it is, the command says so, and the replace goes on. Nothing in a
+  stays where it is, with those not reached yet; the command says where the
+  moved ones went and which one stopped it, and the replace goes on. Nothing in a
   leftover is put back: a replace killed between the two renames of step 4
   leaves the path empty. `adopt` or `restore` run again writes the item from its
   source, as it is then, like one that never ran; `sync` reports the empty side

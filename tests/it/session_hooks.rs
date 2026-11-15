@@ -68,6 +68,62 @@ fn init(sandbox: &Sandbox, session_hooks: &str) -> snapbox::cmd::OutputAssert {
         .assert()
 }
 
+/// Without `serde_json`'s `float_roundtrip`, this double came back one unit
+/// off in its last place.
+#[test]
+fn init_keeps_every_double_in_the_settings_file() {
+    let sandbox = Sandbox::new();
+    let settings = claude_settings(&sandbox);
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, r#"{"x": 62.572030410805404}"#).unwrap();
+
+    init(&sandbox, "claude-code").code(0);
+
+    let text = std::fs::read_to_string(&settings).unwrap();
+    assert!(text.contains(r#""x": 62.572030410805404,"#), "{text}");
+}
+
+/// Through a JSON reader that turns this key into a number
+/// (`serde_json`'s `arbitrary_precision`), the object would be lost.
+#[test]
+fn init_keeps_an_object_keyed_like_a_serde_json_number() {
+    let sandbox = Sandbox::new();
+    let settings = claude_settings(&sandbox);
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(
+        &settings,
+        r#"{"custom": {"$serde_json::private::Number": "123"}}"#,
+    )
+    .unwrap();
+
+    init(&sandbox, "claude-code").code(0);
+
+    let text = std::fs::read_to_string(&settings).unwrap();
+    assert!(
+        text.contains(r#""$serde_json::private::Number": "123""#),
+        "{text}"
+    );
+}
+
+#[test]
+fn init_that_creates_the_settings_file_does_not_say_it_rewrote_one() {
+    let sandbox = Sandbox::new();
+    let settings = claude_settings(&sandbox);
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+
+    let output = init(&sandbox, "claude-code")
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let line = format!(
+        "added the session-start hook entry to {}\n",
+        settings.display()
+    );
+    assert!(String::from_utf8(output).unwrap().ends_with(&line));
+}
+
 #[test]
 fn session_hooks_claude_code_and_codex_adds_one_claude_code_entry_and_keeps_every_other_key() {
     let sandbox = Sandbox::new();
@@ -80,7 +136,7 @@ fn session_hooks_claude_code_and_codex_adds_one_claude_code_entry_and_keeps_ever
         .stdout_eq(str![[r#"
 created skill repo [..]/skill-repo
 ...
-added the session-start hook entry to [..]/home/.claude/settings.json
+added the session-start hook entry to [..]/home/.claude/settings.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 
 "#]])
         .stderr_eq(str![[r#"
@@ -289,8 +345,8 @@ fn session_hooks_none_removes_only_skimans_entries() {
     init(&sandbox, "none").code(0).stdout_eq(str![[r#"
 created skill repo [..]/skill-repo
 ...
-removed the session-start hook entries from [..]/home/.claude/settings.json
-removed the session-start hook entries from [..]/home/.codex/hooks.json
+removed the session-start hook entries from [..]/home/.claude/settings.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
+removed the session-start hook entries from [..]/home/.codex/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 
 "#]]);
 

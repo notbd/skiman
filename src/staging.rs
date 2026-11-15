@@ -66,9 +66,8 @@ impl Staging {
         // looks for what it swapped out: the fix is the backup's.
         let again =
             |why| Failure::operational(format!("{why}; fix that, then run the command again"));
-        for line in move_tmp_leftovers(backups, &tmp, "", repo.root(), saved).map_err(again)? {
-            out!("{line}");
-        }
+        let say = &mut |line| out!("{line}");
+        move_tmp_leftovers(backups, &tmp, "", repo.root(), saved, say).map_err(again)?;
         Staging::create(&tmp, "", repo.root())
     }
 
@@ -77,23 +76,22 @@ impl Staging {
     /// without, every entry) to `<backup>/<saved>/`, first finishing any
     /// move into a backup cut short inside one, and gives each line that
     /// says so to `say`. What they hold is never deleted, only empty
-    /// folders; one that cannot be moved stays where it is, and a line says
-    /// so, so it never stops a project item's replace. Then creates the
-    /// staging folder ([`Staging::create`]).
+    /// folders; one that cannot be moved stays where it is, with those not
+    /// reached yet, and a line says so, so it never stops a project item's
+    /// replace. Then creates the staging folder ([`Staging::create`]).
     pub fn open(
         parent: &Path,
         prefix: &str,
         root: &Path,
         backups: &mut Backups,
         saved: &Path,
-        say: impl FnMut(String),
+        mut say: impl FnMut(String),
     ) -> io::Result<Staging> {
         // Once a command: what its earlier replaces left there stays where they said.
-        if backups.swept.insert(parent.to_owned()) {
-            move_tmp_leftovers(backups, parent, prefix, root, saved)
-                .unwrap_or_else(|why| vec![format!("{why}; the tmp leftovers stay where they are")])
-                .into_iter()
-                .for_each(say);
+        if backups.swept.insert(parent.to_owned())
+            && let Err(why) = move_tmp_leftovers(backups, parent, prefix, root, saved, &mut say)
+        {
+            say(format!("{why}; what was not moved stays where it is"));
         }
         Staging::create(parent, prefix, root).map_err(|failure| io::Error::other(failure.message))
     }
@@ -265,14 +263,15 @@ fn move_tmp_leftovers(
     prefix: &str,
     root: &Path,
     saved: &Path,
-) -> Result<Vec<String>, String> {
+    say: &mut impl FnMut(String),
+) -> Result<(), String> {
     // Not the place's if reached through a link; `create` reports that.
     if fsutil::broken_chain(root, &parent.join("new")).is_some() {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let leftovers = match list(parent) {
         Ok(leftovers) => leftovers,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(format!("cannot read {}: {e}", parent.display())),
     };
     let ours = |path: &&PathBuf| {
@@ -280,44 +279,42 @@ fn move_tmp_leftovers(
         prefix.is_empty()
             || (name.to_string_lossy().starts_with(prefix) && path.is_dir() && !path.is_symlink())
     };
-    let leftovers: Vec<&PathBuf> = leftovers.iter().filter(ours).collect();
-    if leftovers.is_empty() {
-        return Ok(Vec::new());
-    }
-    let dir = backups.dir().map_err(|e| e.to_string())?;
-    let (mut lines, mut moved) = (Vec::new(), false);
-    for leftover in leftovers {
+    // Each line is said as it happens, and what moved is said even when a
+    // later leftover stops the move.
+    let mut moved = None;
+    let result = leftovers.iter().filter(ours).try_for_each(|leftover| {
         let at = leftover.display();
         let failed = |e| format!("cannot move the tmp leftover {at} to a backup: {e}");
         // A move into a backup cut short inside it ends as it would have.
-        for (entry, copy) in backups.finish_cut_short(leftover).map_err(failed)? {
-            lines.push(format!(
+        let finished = |entry: &Path, copy: &Path| {
+            say(format!(
                 "deleted what was left of {}, cut short on its way to {}",
                 entry.display(),
                 copy.display()
             ));
-        }
+        };
+        backups
+            .finish_cut_short(leftover, finished)
+            .map_err(failed)?;
         // Empty folders and a `.gitignore` alone are no content.
         fsutil::remove_empty_dirs(leftover);
         if list(leftover).is_ok_and(|all| all == [leftover.join(".gitignore")]) {
             fsutil::remove_entry(leftover);
         }
         if std::fs::symlink_metadata(leftover).is_err() {
-            continue;
+            return Ok(());
         }
         let name = leftover.file_name().expect("entry has a name");
-        backups
+        let dest = backups
             .move_in(leftover, &saved.join(name))
             .map_err(failed)?;
-        moved = true;
+        moved = dest.parent().map(Path::to_owned);
+        Ok(())
+    });
+    if let Some(moved) = moved {
+        say(format!("moved tmp leftovers to {}", moved.display()));
     }
-    if moved {
-        lines.push(format!(
-            "moved tmp leftovers to {}",
-            dir.join(saved).display()
-        ));
-    }
-    Ok(lines)
+    result
 }
 
 /// Puts in place the new entry that a [`Staging::swap`] stopped between

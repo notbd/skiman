@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use crate::config::UserConfig;
 use crate::failure::Failure;
+use crate::layout::Layout;
 use crate::paths::Paths;
+use crate::tree::WorkingTree;
 
 /// A skill repo, addressed by its realpath (ownership compares link targets
 /// against the realpath, spec Ownership).
@@ -40,9 +42,33 @@ impl SkillRepo {
         self.root.join("skills")
     }
 
-    /// `skills/<name>`: the canonical copy of a skill, and the target of its links.
-    pub fn skill_dir(&self, name: &str) -> PathBuf {
-        self.skills_dir().join(name)
+    /// What `skills/` holds now: where each skill sits, and the group folders.
+    pub fn layout(&self) -> Result<Layout, Failure> {
+        Layout::read(&WorkingTree::new(&self.root)).map_err(|e| {
+            Failure::operational(format!("cannot read {}: {e}", self.skills_dir().display()))
+        })
+    }
+
+    /// `skills/<name>` or `skills/<group>/<name>`: the canonical copy of a
+    /// skill, and the target of its links; `skills/<name>` when there is none.
+    pub fn skill_dir(&self, name: &str) -> Result<PathBuf, Failure> {
+        Ok(self.root.join(self.layout()?.path(name)))
+    }
+
+    /// Removes the group folder of the skill folder `skill` (relative to the
+    /// skill repo) when nothing is left in it, printing a line; a skill in
+    /// no group has none.
+    pub fn remove_empty_group(&self, skill: &str) {
+        let Some(group) = Path::new(skill)
+            .parent()
+            .filter(|g| *g != Path::new("skills"))
+        else {
+            return;
+        };
+        let group = self.root.join(group);
+        if std::fs::remove_dir(&group).is_ok() {
+            out!("removed the empty group folder {}", group.display());
+        }
     }
 
     /// `upstream/<name>`: the upstream snapshot of a third-party skill.
@@ -86,23 +112,5 @@ impl SkillRepo {
     /// `.skiman/managing-skills`: the materialised `managing-skills` skill.
     pub fn managing_skills_dir(&self) -> PathBuf {
         self.local_dir().join("managing-skills")
-    }
-
-    /// Names of the entries under `skills/` (any kind of entry), sorted.
-    /// Names that are not valid UTF-8 are skipped: they can never be distributable.
-    pub fn skill_folder_names(&self) -> std::io::Result<Vec<String>> {
-        let entries = match std::fs::read_dir(self.skills_dir()) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(e),
-        };
-        let mut names = Vec::new();
-        for entry in entries {
-            if let Ok(name) = entry?.file_name().into_string() {
-                names.push(name);
-            }
-        }
-        names.sort();
-        Ok(names)
     }
 }

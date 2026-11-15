@@ -11,9 +11,10 @@ use crate::names;
 
 pub const MAX_DESCRIPTION: usize = 1024;
 
-/// `path` is `skills/<folder>/SKILL.md`.
+/// `path` is `<skill folder>/SKILL.md`; the folder's own name is the one
+/// `name` must equal.
 pub fn check(path: &str, content: &[u8], out: &mut BTreeSet<Violation>) {
-    let folder = path.split('/').nth(1).unwrap_or_default();
+    let folder = path.rsplit('/').nth(1).unwrap_or_default();
     let mut add = |line: Option<usize>, rule: &'static str, message: String| {
         out.insert(Violation::new(path, line, rule, message));
     };

@@ -1,8 +1,9 @@
-//! `skiman remove <name>`: move `skills/<name>` and `upstream/<name>` (each
-//! when present) to a fresh backup, then remove the skill's `skiman.toml`
-//! table and secret exemptions and its lock entry, then sync (which removes
-//! its links). Also cleans up the leftover records of a hand-deleted skill.
-//! A remove stopped part-way finishes when it is run again.
+//! `skiman remove <name>`: move the skill folder (`skills/[<group>/]<name>`)
+//! and `upstream/<name>` (each when present) to a fresh backup, then remove
+//! the skill's `skiman.toml` table and secret exemptions and its lock entry,
+//! then sync (which removes its links). A group folder the skill leaves
+//! empty is removed. Also cleans up the leftover records of a hand-deleted
+//! skill. A remove stopped part-way finishes when it is run again.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -43,7 +44,8 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
 
     let lock = RepoLock::wait(&paths, &repo)?;
     Found::read(&repo, name)?;
-    let change = change(&repo, name)?;
+    let skill = repo.layout()?.path(name);
+    let change = change(&repo, &skill, name)?;
     validate(&repo, name, &change)?;
     let mut backups = Backups::new(&paths);
     let backed_up = change.apply(&repo, &lock, &mut backups)?;
@@ -51,6 +53,7 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
         Some(dir) => out!("removed skill {name}; its folders are in {}", dir.display()),
         None => out!("removed the records of skill {name}"),
     }
+    repo.remove_empty_group(&skill);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 
@@ -65,17 +68,25 @@ pub(crate) fn check_single_name(name: &str) -> Result<(), Failure> {
 
 /// What exists of the skill: its folders (any kind of entry) and records.
 struct Found {
-    /// `(path, repo-relative path)` of `skills/<name>` and `upstream/<name>`.
+    /// `(path, repo-relative path)` of the skill folder and `upstream/<name>`.
     folders: Vec<(PathBuf, String)>,
     table: bool,
     lock_entry: bool,
 }
 
 impl Found {
-    /// Refuses (exit 1) a name with neither a folder nor any record.
+    /// Refuses (exit 1) a name with neither a folder nor any record, and
+    /// the name of a group folder.
     fn read(repo: &SkillRepo, name: &str) -> Result<Found, Failure> {
+        let layout = repo.layout()?;
+        if layout.find(name).is_none() && layout.groups().contains(name) {
+            return Err(Failure::refused(format!(
+                "skills/{name} is a group folder, not a skill; remove its skills one by one"
+            )));
+        }
+        let skill = layout.path(name);
         let folders: Vec<(PathBuf, String)> = [
-            (repo.skill_dir(name), format!("skills/{name}")),
+            (repo.root().join(&skill), skill),
             (repo.upstream_dir(name), format!("upstream/{name}")),
         ]
         .into_iter()
@@ -110,9 +121,9 @@ impl Found {
 
 /// Both folders absent, then `skiman.toml` without the skill's table and
 /// secret exemptions, then `skiman.lock` without its entry.
-fn change(repo: &SkillRepo, name: &str) -> Result<Change, Failure> {
+fn change(repo: &SkillRepo, skill: &str, name: &str) -> Result<Change, Failure> {
     let mut pieces = vec![
-        (format!("skills/{name}"), Want::Absent),
+        (skill.to_owned(), Want::Absent),
         (format!("upstream/{name}"), Want::Absent),
     ];
     for (rel, path) in [

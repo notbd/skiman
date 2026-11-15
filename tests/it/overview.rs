@@ -40,26 +40,29 @@ fn commit_on(sandbox: &Sandbox, day: &str) {
 fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    for (name, description) in [("notes", "Take notes"), ("todo", "Track todos")] {
-        sandbox
-            .skiman()
-            .args(["new", name, "-d", description])
-            .assert()
-            .code(0);
-    }
+    sandbox
+        .skiman()
+        .args(["new", "notes", "-d", "Take notes", "--group", "writing"])
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["new", "todo", "-d", "Track todos"])
+        .assert()
+        .code(0);
     let up = sandbox.upstream("acme/pdf");
     up.write("SKILL.md", skill_md("pdf"));
     up.commit("v1");
     sandbox
         .skiman()
-        .args(["add", "acme/pdf", "--yes"])
+        .args(["add", "acme/pdf", "--yes", "--group", "documents"])
         .assert()
         .code(0);
     append(
         sandbox.skill_repo().join("skiman.toml"),
-        "\n[skills.notes]\nsummary = \"Keep notes quickly\"\ngroup = \"writing\"\n\
+        "\n[skills.notes]\nsummary = \"Keep notes quickly\"\n\
          origin = \"adapted from a blog post\"\ninstalled = 2026-01-31\n\
-         \n[skills.pdf]\nsummary = \"Fill PDF forms\"\ngroup = \"documents\"\nenabled = false\n",
+         \n[skills.pdf]\nsummary = \"Fill PDF forms\"\nenabled = false\n",
     );
     commit_on(&sandbox, "2026-02-03");
 

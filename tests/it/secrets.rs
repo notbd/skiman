@@ -23,16 +23,19 @@ fn append(sandbox: &Sandbox, rel: &str, text: &str) {
     std::fs::write(path, old).unwrap();
 }
 
+/// The one warning `skiman check` prints for [`repo`]: `pdf` is in no group folder.
+const NO_GROUP: &str = "warning: skills/pdf: skill-info: it is in no group folder; move it into one with `skiman mv pdf --group <group>`\n";
+
 /// A skill repo with one own skill `pdf`.
 fn repo() -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
     write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
-    // What a person reads about the skill, so `skiman check` warns of nothing.
+    // What a person reads about the skill, so `skiman check` warns of its group only.
     append(
         &sandbox,
         "skiman.toml",
-        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\ngroup = \"documents\"\norigin = \"written here\"\n",
+        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\norigin = \"written here\"\n",
     );
     sandbox
 }
@@ -122,7 +125,7 @@ fn a_secret_is_reported_with_path_line_rule_and_fingerprint_and_a_ready_to_paste
              fingerprint = \"{fp}\"\n"
         )
     );
-    assert_eq!(checked.stderr, "");
+    assert_eq!(checked.stderr, NO_GROUP);
 }
 
 /// `(line, rule, fingerprint)` of every secret reported in `stdout`.
@@ -765,7 +768,7 @@ fn check_and_check_staged_apply_the_secret_and_shared_body_rules_to_their_own_tr
         "{}",
         checked.stdout
     );
-    assert_eq!(checked.stderr, "");
+    assert_eq!(checked.stderr, NO_GROUP);
 
     let staged = check_with(&sandbox, &["--staged"], &[&key]);
     assert_eq!(staged.code, 1, "{}", staged.stdout);

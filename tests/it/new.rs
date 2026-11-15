@@ -169,6 +169,8 @@ fn new_refuses_each_form_of_taken_name_and_writes_nothing() {
     std::fs::write(repo.join("skills/file"), "not a folder").unwrap();
     std::os::unix::fs::symlink(repo.join("nowhere"), repo.join("skills/dangling")).unwrap();
     std::fs::create_dir(repo.join("skills/no-skill-md")).unwrap();
+    std::fs::write(repo.join("skills/no-skill-md/README.md"), "no SKILL.md").unwrap();
+    std::fs::create_dir(repo.join("skills/empty-group")).unwrap();
     std::fs::write(
         repo.join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n\n[skills.parked]\nenabled = false\n",
@@ -186,6 +188,7 @@ fn new_refuses_each_form_of_taken_name_and_writes_nothing() {
         ("file", "skills/file already exists"),
         ("dangling", "skills/dangling already exists"),
         ("no-skill-md", "skills/no-skill-md already exists"),
+        ("empty-group", "skills/empty-group is a group folder"),
         ("parked", "skiman.toml already has a [skills.parked] table"),
         ("locked", "skiman.lock already has an entry for locked"),
         ("snap", "upstream/snap already exists"),

@@ -1,16 +1,17 @@
 //! The reminder `skiman check` prints for a skill that lacks what lets a
-//! person tell it apart: a `summary`, a `group`, and where it came from (the
-//! `source` table of a third-party skill, `origin` of an own skill). It is a
-//! warning, never a violation: no command fails on it, and only `skiman
-//! check` on the working tree prints it.
+//! person tell it apart: a `summary`, a group folder to sit in, and where it
+//! came from (the `source` table of a third-party skill, `origin` of an own
+//! skill). It is a warning, never a violation: no command fails on it, and
+//! only `skiman check` on the working tree prints it.
 
 use std::io;
 
 use super::config::{INFO_KEYS, Records};
-use super::{Violation, folder_names, rule};
+use super::{Violation, rule};
+use crate::layout::Layout;
 use crate::tree::{Kind, Tree};
 
-/// One warning per skill folder under `skills/` that lacks any of the keys.
+/// One warning per skill folder under `skills/` that lacks any of them.
 pub fn gaps(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     let records = Records::read(tree)?;
     let mut out = Vec::new();
@@ -19,30 +20,39 @@ pub fn gaps(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     if !records.manifest_parsed() {
         return Ok(out);
     }
-    for name in folder_names(tree, "skills")? {
-        if tree.kind(&format!("skills/{name}"))? != Some(Kind::Dir) {
+    for placed in Layout::read(tree)?.skills() {
+        let (name, path) = (&placed.name, placed.path());
+        if tree.kind(&path)? != Some(Kind::Dir) {
             continue;
         }
         // A value of the wrong type is a `toml-value` violation already.
-        let has = |key| records.skill_has(&name, key);
-        let [summary, group, origin] = INFO_KEYS;
-        let mut missing: Vec<&str> = [summary, group]
-            .into_iter()
-            .filter(|key| !has(key))
-            .collect();
-        if records.source(&name).is_none() && !has(origin) {
+        let has = |key| records.skill_has(name, key);
+        let [summary, origin] = INFO_KEYS;
+        let mut missing: Vec<&str> = [summary].into_iter().filter(|key| !has(key)).collect();
+        if records.source(name).is_none() && !has(origin) {
             missing.push(origin);
         }
-        if missing.is_empty() {
-            continue;
+        let mut gaps = Vec::new();
+        if !missing.is_empty() {
+            let keys: Vec<String> = missing.iter().map(|key| format!("`{key}`")).collect();
+            gaps.push(format!(
+                "[skills.{name}] in skiman.toml has no {}",
+                keys.join(", ")
+            ));
         }
-        let keys: Vec<String> = missing.iter().map(|key| format!("`{key}`")).collect();
-        out.push(Violation::new(
-            format!("skills/{name}"),
-            None,
-            rule::SKILL_INFO,
-            format!("[skills.{name}] in skiman.toml has no {}", keys.join(", ")),
-        ));
+        if placed.group.is_none() {
+            gaps.push(format!(
+                "it is in no group folder; move it into one with `skiman mv {name} --group <group>`"
+            ));
+        }
+        if !gaps.is_empty() {
+            out.push(Violation::new(
+                path,
+                None,
+                rule::SKILL_INFO,
+                gaps.join("; "),
+            ));
+        }
     }
     Ok(out)
 }

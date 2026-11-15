@@ -33,6 +33,7 @@ mod fsutil;
 mod git;
 mod git_hooks;
 mod import_guide;
+mod layout;
 mod lockfile;
 mod managing_skills;
 mod manifest;

@@ -16,8 +16,9 @@ pub const LOCKFILE: &str = "skiman.lock";
 const REF_KINDS: &[&str] = &["branch", "tag", "commit"];
 
 /// The one-line text keys of `[skills.<name>]` that describe a skill to a
-/// person (`skiman overview`); `skiman check` reminds of missing ones.
-pub const INFO_KEYS: [&str; 3] = ["summary", "group", "origin"];
+/// person (`skiman overview`); `skiman check` reminds of missing ones. A
+/// skill's group is the folder it sits in, not a key (ADR 0008).
+pub const INFO_KEYS: [&str; 2] = ["summary", "origin"];
 
 /// One parsed config file. `doc` is `None` when the file is missing or does not parse.
 pub struct ConfigFile {
@@ -504,11 +505,8 @@ impl Records {
             return;
         };
         let skill = m.section(table, format!("[skills.{name}]"), line);
-        let [summary, group, origin] = INFO_KEYS;
-        skill.unknown_keys(
-            &["enabled", summary, group, origin, "installed", "source"],
-            out,
-        );
+        let [summary, origin] = INFO_KEYS;
+        skill.unknown_keys(&["enabled", summary, origin, "installed", "source"], out);
         skill.value(
             "enabled",
             false,

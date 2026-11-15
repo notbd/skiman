@@ -351,6 +351,9 @@ fn folders_under_skills_that_are_not_distributable_are_not_linked_and_sync_hook_
     let skills = sandbox.skill_repo().join("skills");
     write_skill(&skills, "Bad_Name");
     write_skill(&skills, "synced");
+    std::fs::create_dir(skills.join("no-skill-md")).unwrap();
+    std::fs::write(skills.join("no-skill-md/README.md"), "x").unwrap();
+    // An empty folder is an empty group folder: nothing to report.
     std::fs::create_dir(skills.join("empty")).unwrap();
     std::fs::write(skills.join(".DS_Store"), "x").unwrap();
 
@@ -361,7 +364,7 @@ fn folders_under_skills_that_are_not_distributable_are_not_linked_and_sync_hook_
         .code(0)
         .stdout_eq(str![[r#"
 skiman: skill folder [..]/skill-repo/skills/Bad_Name is not distributed: its name is not a valid skill name
-skiman: skill folder [..]/skill-repo/skills/empty is not distributed: it holds no SKILL.md
+skiman: skill folder [..]/skill-repo/skills/no-skill-md is not distributed: it holds no SKILL.md
 skiman: skill folder [..]/skill-repo/skills/synced is not distributed: its name is reserved
 
 "#]])

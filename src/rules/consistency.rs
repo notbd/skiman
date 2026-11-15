@@ -9,10 +9,12 @@ use std::io;
 
 use super::config::{LOCKFILE, MANIFEST, Records};
 use super::{Violation, rule};
+use crate::layout::Layout;
 use crate::tree::{Kind, Tree, tree_hash};
 
 pub fn check(
     tree: &dyn Tree,
+    layout: &Layout,
     records: &Records,
     names: &BTreeSet<String>,
     out: &mut BTreeSet<Violation>,
@@ -23,7 +25,8 @@ pub fn check(
     let lock_names = records.lock_skills();
     for name in names {
         let upstream = format!("upstream/{name}");
-        let has_folder = tree.kind(&format!("skills/{name}"))?.is_some();
+        let skill = layout.path(name);
+        let has_folder = layout.find(name).is_some();
         let has_source = records.source(name).is_some();
         let has_lock = lock_names.contains(name);
         let upstream_kind = tree.kind(&upstream)?;
@@ -35,7 +38,7 @@ pub fn check(
                     line,
                     rule::LEFTOVER_RECORD,
                     format!(
-                        "{what}, but skills/{name} does not exist; run `skiman remove {name} --yes` (after a hand rename, rename this too)"
+                        "{what}, but {skill} does not exist; run `skiman remove {name} --yes` (after a hand rename, rename this too)"
                     ),
                 )
             };
@@ -100,8 +103,7 @@ pub fn check(
                 None => {}
             }
         } else {
-            let own =
-                format!("skills/{name} has no [skills.{name}.source] table, so it is an own skill");
+            let own = format!("{skill} has no [skills.{name}.source] table, so it is an own skill");
             if has_lock {
                 out.insert(Violation::new(LOCKFILE, records.lock_entry_line(name), rule::CONSISTENCY, format!("lock entry for {name}, but {own}; delete the entry, or restore the source table")));
             }

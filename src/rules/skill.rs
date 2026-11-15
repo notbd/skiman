@@ -1,11 +1,13 @@
-//! Rules on `skills/<name>/`: the folder, its files, symlinks, sizes and
-//! unresolved conflicts. The frontmatter rules are in `frontmatter`.
+//! Rules on a skill folder (`skills/<name>/` or `skills/<group>/<name>/`):
+//! where it sits, the folder, its files, symlinks, sizes and unresolved
+//! conflicts. The frontmatter rules are in `frontmatter`.
 
 use std::collections::BTreeSet;
 use std::io;
 
 use super::secrets::{self, Found};
 use super::{LIMITS, Violation, frontmatter, readable, rule};
+use crate::layout::{Layout, skill_path};
 use crate::names;
 use crate::tree::{Kind, Tree, basename, is_ignored};
 
@@ -18,20 +20,71 @@ pub const CONFLICTS_DIR: &str = ".skiman-conflicts";
 
 const MIB: u64 = 1024 * 1024;
 
-/// Every rule on the skill folder `skills/<name>` as a whole.
+/// Every rule on the skill folder of `name` as a whole, wherever it sits
+/// (`skills/<name>` or `skills/<group>/<name>`), and on where it sits: a
+/// name is in one place only, in a group folder with a valid name.
 pub fn check_skill(
     tree: &dyn Tree,
+    layout: &Layout,
     name: &str,
     out: &mut BTreeSet<Violation>,
     found: &mut Vec<Found>,
 ) -> io::Result<()> {
-    let dir = format!("skills/{name}");
-    match tree.kind(&dir)? {
+    let placed = layout.all_of(name);
+    if placed.len() > 1 {
+        let paths: Vec<String> = placed.iter().map(|p| p.path()).collect();
+        for path in &paths {
+            out.insert(Violation::new(
+                path,
+                None,
+                rule::SKILL_FOLDER,
+                format!(
+                    "the skill name `{name}` is in {}; a name may be in one place only, whatever its group",
+                    paths.join(" and ")
+                ),
+            ));
+        }
+    }
+    for placed in placed {
+        if let Some(group) = &placed.group {
+            check_group(layout, group, out);
+        }
+        check_one(tree, &placed.path(), name, out, found)?;
+    }
+    Ok(())
+}
+
+/// The rules on a group folder's name.
+fn check_group(layout: &Layout, group: &str, out: &mut BTreeSet<Violation>) {
+    let dir = skill_path(None, group);
+    if !names::is_valid(group) {
+        out.insert(Violation::new(&dir, None, rule::SKILL_FOLDER, format!("`{group}` is not a valid group name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
+    } else if let Some(skill) = layout.find(group) {
+        out.insert(Violation::new(
+            &dir,
+            None,
+            rule::SKILL_FOLDER,
+            format!(
+                "`{group}` names both this group folder and the skill {}; rename one of them",
+                skill.path()
+            ),
+        ));
+    }
+}
+
+fn check_one(
+    tree: &dyn Tree,
+    dir: &str,
+    name: &str,
+    out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
+) -> io::Result<()> {
+    match tree.kind(dir)? {
         None => return Ok(()),
         Some(Kind::Dir) => {}
         Some(Kind::Symlink) => {
             out.insert(Violation::new(
-                &dir,
+                dir,
                 None,
                 rule::SYMLINK,
                 "the skill folder is a symlink; skills must hold real files",
@@ -40,20 +93,20 @@ pub fn check_skill(
         }
         Some(_) => {
             out.insert(Violation::new(
-                &dir,
+                dir,
                 None,
                 rule::SKILL_FOLDER,
-                "not a folder; everything under skills/ must be a skill folder",
+                "not a folder; everything under skills/ must be a skill folder or a group folder of skill folders",
             ));
             return Ok(());
         }
     }
     if names::is_reserved(name) {
-        out.insert(Violation::new(&dir, None, rule::SKILL_FOLDER, format!("`{name}` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)")));
+        out.insert(Violation::new(dir, None, rule::SKILL_FOLDER, format!("`{name}` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)")));
     } else if !names::is_valid(name) {
-        out.insert(Violation::new(&dir, None, rule::SKILL_FOLDER, format!("`{name}` is not a valid skill name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
+        out.insert(Violation::new(dir, None, rule::SKILL_FOLDER, format!("`{name}` is not a valid skill name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
     }
-    check_folder(tree, &dir, out, found)
+    check_content(tree, dir, true, out, found)
 }
 
 /// The rules on a skill folder's content, wherever it sits (`skills/<name>`
@@ -62,6 +115,18 @@ pub fn check_skill(
 pub fn check_folder(
     tree: &dyn Tree,
     dir: &str,
+    out: &mut BTreeSet<Violation>,
+    found: &mut Vec<Found>,
+) -> io::Result<()> {
+    check_content(tree, dir, false, out, found)
+}
+
+/// [`check_folder`], with the frontmatter rules on its `SKILL.md` when
+/// `frontmatter` is set (a skill in the skill repo).
+fn check_content(
+    tree: &dyn Tree,
+    dir: &str,
+    frontmatter: bool,
     out: &mut BTreeSet<Violation>,
     found: &mut Vec<Found>,
 ) -> io::Result<()> {
@@ -96,7 +161,8 @@ pub fn check_folder(
             files += 1;
             bytes += size;
         }
-        check_entry(tree, &entry.path, entry.kind, out, found)?;
+        let top = frontmatter && entry.path == skill_md;
+        check_entry(tree, &entry.path, entry.kind, top, out, found)?;
     }
     if files > LIMITS.files {
         out.insert(Violation::new(
@@ -121,32 +187,46 @@ pub fn check_folder(
 }
 
 /// The per-file rules on one file a write command wrote under `skills/`,
-/// including the conflict-record rules on the folders above it.
+/// including the conflict-record rules on the folders above it inside its
+/// skill folder.
 pub fn check_written_file(
     tree: &dyn Tree,
+    layout: &Layout,
     path: &str,
     out: &mut BTreeSet<Violation>,
     found: &mut Vec<Found>,
 ) -> io::Result<()> {
-    let Some(rest) = path.strip_prefix("skills/") else {
+    let Some(skill) = layout
+        .skills()
+        .iter()
+        .map(|placed| placed.path())
+        .find(|skill| {
+            path.strip_prefix(skill.as_str())
+                .is_some_and(|r| r.starts_with('/'))
+        })
+    else {
         return Ok(());
     };
-    let parts: Vec<&str> = rest.split('/').collect();
-    for depth in 2..parts.len() {
-        let ancestor = format!("skills/{}", parts[..depth].join("/"));
+    let inside: Vec<&str> = path[skill.len() + 1..].split('/').collect();
+    for depth in 1..inside.len() {
+        let ancestor = format!("{skill}/{}", inside[..depth].join("/"));
         check_conflict_name(&ancestor, true, out);
     }
     if let Some(kind) = tree.kind(path)? {
-        check_entry(tree, path, kind, out, found)?;
+        let top = path == format!("{skill}/SKILL.md");
+        check_entry(tree, path, kind, top, out, found)?;
     }
     Ok(())
 }
 
 /// Rules on one entry inside a skill folder.
+/// `top_skill_md`: the entry is the `SKILL.md` of a skill in the skill
+/// repo, which the frontmatter rules check.
 fn check_entry(
     tree: &dyn Tree,
     path: &str,
     kind: Kind,
+    top_skill_md: bool,
     out: &mut BTreeSet<Violation>,
     found: &mut Vec<Found>,
 ) -> io::Result<()> {
@@ -178,19 +258,13 @@ fn check_entry(
             let content = tree.read(path)?;
             check_markers(path, &content, out);
             secrets::scan(path, &content, found);
-            if is_top_skill_md(path) {
+            if top_skill_md {
                 frontmatter::check(path, &content, out);
             }
         }
         _ => {}
     }
     Ok(())
-}
-
-/// `skills/<name>/SKILL.md`, not a deeper `SKILL.md`.
-fn is_top_skill_md(path: &str) -> bool {
-    let parts: Vec<&str> = path.split('/').collect();
-    parts.len() == 3 && parts[0] == "skills" && parts[2] == "SKILL.md"
 }
 
 fn check_conflict_name(path: &str, is_dir: bool, out: &mut BTreeSet<Violation>) {

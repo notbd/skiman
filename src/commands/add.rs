@@ -1,7 +1,8 @@
-//! `skiman add <source>`: install third-party skills. Fetches the upstream
-//! (or reads a local folder), finds the skills in it, lets the user choose,
-//! shows the file lists, then writes `skills/<name>/`, `upstream/<name>/`,
-//! the `[skills.<name>.source]` table and the lock entry of each, and syncs.
+//! `skiman add <source> [--group <group>]`: install third-party skills.
+//! Fetches the upstream (or reads a local folder), finds the skills in it,
+//! lets the user choose, shows the file lists, then writes the skill folder
+//! (`skills/[<group>/]<name>/`), `upstream/<name>/`, the
+//! `[skills.<name>.source]` table and the lock entry of each, and syncs.
 //! Never commits.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +18,7 @@ use crate::failure::{Failure, finish};
 use crate::fetch::Cache;
 use crate::fsutil::read_text;
 use crate::git::Prompts;
+use crate::layout::skill_path;
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::manifest::{self, Manifest, SourceRecord};
 use crate::names::{self, Taken};
@@ -51,8 +53,10 @@ struct Install {
     snapshot: Snapshot,
     /// The install name.
     name: String,
+    /// The skill folder it goes to, `skills/[<group>/]<name>`.
+    skill: String,
     upstream_name: String,
-    /// `SKILL.md` for `skills/<name>` when its `name` line had to be set.
+    /// `SKILL.md` for the skill folder when its `name` line had to be set.
     renamed_skill_md: Option<String>,
 }
 
@@ -106,7 +110,14 @@ fn add(args: Args) -> Result<Exit, Failure> {
     for candidate in selected {
         let snapshot = upstream.snapshot(&candidate.path)?;
         let source = source.clone().with_path(candidate.path.clone());
-        installs.push(inspect(source, snapshot, candidate, name.clone())?);
+        let group = args.group.as_deref();
+        installs.push(inspect(source, snapshot, candidate, name.clone(), group)?);
+    }
+    if let Some(group) = &args.group {
+        let layout = repo.layout()?;
+        for install in &installs {
+            names::check_group(group, &install.name, &layout)?;
+        }
     }
     check_install_names(&repo, &installs, &upstream)?;
 
@@ -347,6 +358,7 @@ fn inspect(
     snapshot: Snapshot,
     candidate: &Candidate,
     name: Option<String>,
+    group: Option<&str>,
 ) -> Result<Install, Failure> {
     let label = if source.path.is_empty() {
         format!("SKILL.md in {}", source.url)
@@ -367,6 +379,7 @@ fn inspect(
     Ok(Install {
         source,
         snapshot,
+        skill: skill_path(group, &name),
         name,
         upstream_name,
         renamed_skill_md,
@@ -440,8 +453,9 @@ fn print_file_list(install: &Install, upstream: &Upstream) {
     print_not_installed(&install.snapshot, "  ");
     if install.renamed_skill_md.is_some() {
         out!(
-            "the `name` line of skills/{0}/SKILL.md is set to `{0}` (a local modification; upstream/{0} keeps the upstream text)",
-            install.name
+            "the `name` line of {1}/SKILL.md is set to `{0}` (a local modification; upstream/{0} keeps the upstream text)",
+            install.name,
+            install.skill
         );
     }
 }
@@ -458,7 +472,7 @@ fn records(install: &Install, upstream: &Upstream) -> (SourceRecord, LockEntry) 
     (source, upstream.lock_entry(&install.snapshot))
 }
 
-/// The files of `skills/<name>`: the snapshot, with the `SKILL.md` whose
+/// The files of the skill folder: the snapshot, with the `SKILL.md` whose
 /// `name` line is set when it had to be.
 fn skill_files(install: &Install) -> Vec<SnapshotFile> {
     let mut files = install.snapshot.files.clone();
@@ -471,7 +485,7 @@ fn skill_files(install: &Install) -> Vec<SnapshotFile> {
 
 /// Whether `taken` is what this add writes for `install`, left by an add
 /// that stopped part-way: the folders hold the snapshot (`upstream/<name>`
-/// is written first, so `skills/<name>` counts only with it), the source
+/// is written first, so the skill folder counts only with it), the source
 /// table and lock entry are this add's.
 fn ours(
     repo: &SkillRepo,
@@ -486,14 +500,14 @@ fn ours(
     let snapshot = || same(format!("upstream/{name}"), install.snapshot.files.clone());
     let (source, entry) = records(install, upstream);
     Ok(match taken {
-        Taken::Folder => same(format!("skills/{name}"), skill_files(install))? && snapshot()?,
+        Taken::Folder => same(install.skill.clone(), skill_files(install))? && snapshot()?,
         Taken::Snapshot => snapshot()?,
         Taken::Table => Manifest::load(repo)?.source(name) == Some(source),
         Taken::LockEntry => Lockfile::load(repo)?.entry(name) == Some(entry),
     })
 }
 
-/// For each skill `upstream/<name>` and `skills/<name>`, then `skiman.toml`
+/// For each skill `upstream/<name>` and its skill folder, then `skiman.toml`
 /// with their source tables and, last, `skiman.lock` with their entries.
 fn change(repo: &SkillRepo, installs: &[Install], upstream: &Upstream) -> Result<Change, Failure> {
     let refuse = |path: &Path, e: String| Failure::refused(format!("{}: {e}", path.display()));
@@ -505,7 +519,7 @@ fn change(repo: &SkillRepo, installs: &[Install], upstream: &Upstream) -> Result
         let name = &install.name;
         let snapshot = install.snapshot.files.clone();
         pieces.push((format!("upstream/{name}"), Want::Folder(snapshot)));
-        pieces.push((format!("skills/{name}"), Want::Folder(skill_files(install))));
+        pieces.push((install.skill.clone(), Want::Folder(skill_files(install))));
         let (source, entry) = records(install, upstream);
         manifest = manifest::with_source(&manifest, name, &source)
             .map_err(|e| refuse(&manifest_file, e))?;

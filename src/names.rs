@@ -3,6 +3,7 @@
 //! `import` and sync's distributability test.
 
 use crate::failure::Failure;
+use crate::layout::Layout;
 use crate::lockfile::Lockfile;
 use crate::manifest::Manifest;
 use crate::repo::SkillRepo;
@@ -46,6 +47,29 @@ pub fn check_new_name(name: &str) -> Result<(), Failure> {
     Ok(())
 }
 
+/// Refuses (exit 1) a group name that breaks the name rule, or that names
+/// the skill `name` going into it or a skill folder in `layout` (a group
+/// folder and a skill never share a name).
+pub fn check_group(group: &str, name: &str, layout: &Layout) -> Result<(), Failure> {
+    if !is_valid(group) {
+        return Err(Failure::refused(format!(
+            "`{group}` is not a valid group name: use 1 to {MAX_LEN} lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)"
+        )));
+    }
+    if group == name {
+        return Err(Failure::refused(format!(
+            "`{group}` cannot be the group of a skill named `{name}`: a group and a skill never share a name"
+        )));
+    }
+    if let Some(skill) = layout.find(group) {
+        return Err(Failure::refused(format!(
+            "`{group}` cannot be a group: {} is a skill folder of that name",
+            skill.path()
+        )));
+    }
+    Ok(())
+}
+
 /// What can hold a skill name in the skill repo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Taken {
@@ -55,18 +79,23 @@ pub enum Taken {
     Snapshot,
 }
 
-/// Refuses (exit 1) a **taken** name: a `skills/<name>` entry in any form, a
-/// `skiman.toml` table, a lock entry or an upstream snapshot, except one that
-/// `ours` says is what this command writes, left by a run of it that stopped
-/// part-way (which then finishes).
+/// Refuses (exit 1) a **taken** name: a skill folder entry in any form in
+/// any group, a group folder, a `skiman.toml` table, a lock entry or an
+/// upstream snapshot, except one that `ours` says is what this command
+/// writes, left by a run of it that stopped part-way (which then finishes).
 pub fn check_not_taken(
     repo: &SkillRepo,
     name: &str,
     ours: impl Fn(Taken) -> Result<bool, Failure>,
 ) -> Result<(), Failure> {
     let exists = |p: std::path::PathBuf| std::fs::symlink_metadata(p).is_ok();
-    let reason = if exists(repo.skill_dir(name)) && !ours(Taken::Folder)? {
-        Some(format!("skills/{name} already exists"))
+    let layout = repo.layout()?;
+    let reason = if let Some(placed) = layout.find(name)
+        && !ours(Taken::Folder)?
+    {
+        Some(format!("{} already exists", placed.path()))
+    } else if layout.groups().contains(name) {
+        Some(format!("skills/{name} is a group folder"))
     } else if Manifest::load(repo)?.skills().contains_key(name) && !ours(Taken::Table)? {
         Some(format!("skiman.toml already has a [skills.{name}] table"))
     } else if Lockfile::load(repo)?.skill_names().contains(name) && !ours(Taken::LockEntry)? {

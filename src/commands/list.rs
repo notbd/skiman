@@ -35,8 +35,9 @@ fn list() -> Result<Exit, Failure> {
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
     let enabled = manifest.skills();
     let mut rows = vec![HEADER.map(str::to_owned)];
-    for name in repo.skill_folder_names().map_err(io)? {
-        if tree.kind(&format!("skills/{name}")).map_err(io)? != Some(Kind::Dir) {
+    for placed in repo.layout()?.skills() {
+        let name = placed.name.clone();
+        if tree.kind(&placed.path()).map_err(io)? != Some(Kind::Dir) {
             continue;
         }
         let conflicts = !rules::unresolved_conflicts(&tree, &name)
@@ -51,7 +52,7 @@ fn list() -> Result<Exit, Failure> {
                     "third-party".to_owned(),
                     source_text(&source),
                     version(&source, commit.as_deref()),
-                    modified(&tree, &name).map_err(io)?,
+                    modified(&tree, &placed.path(), &name).map_err(io)?,
                 ]
             }
         };
@@ -98,13 +99,14 @@ fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
-/// Whether `skills/<name>` differs from its upstream snapshot (tree hash).
-pub(crate) fn modified(tree: &dyn Tree, name: &str) -> std::io::Result<String> {
+/// Whether the skill folder `skill` differs from the upstream snapshot of
+/// `name` (tree hash).
+pub(crate) fn modified(tree: &dyn Tree, skill: &str, name: &str) -> std::io::Result<String> {
     let upstream = format!("upstream/{name}");
     if tree.kind(&upstream)? != Some(Kind::Dir) {
         return Ok("unknown".to_owned());
     }
-    let differs = tree_hash(tree, &format!("skills/{name}"))? != tree_hash(tree, &upstream)?;
+    let differs = tree_hash(tree, skill)? != tree_hash(tree, &upstream)?;
     Ok(yes_no(differs))
 }
 

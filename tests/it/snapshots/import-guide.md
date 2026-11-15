@@ -58,7 +58,8 @@ It holds these three entries and nothing else:
 
 ```
 <import folder>/
-  skills/<name>/          one folder per skill, own and third-party
+  skills/<name>/          one folder per skill, own and third-party,
+  skills/<group>/<name>/  or one per skill inside a group folder
   instructions/shared.md  the shared body of the global instructions
   skiman.toml             agent tools, skills and their sources
 ```
@@ -69,15 +70,20 @@ the import folder holds neither.
 ### skills/<name>/
 
 One folder per skill, holding the files as the user should have them after the
-import, including the user's local modifications to third-party skills. Every
-skill passes the everyday rules:
+import, including the user's local modifications to third-party skills. A
+folder directly under `skills/` without a `SKILL.md` is a group folder: every
+folder in it is a skill of that group (`skills/<group>/<name>/`), and the skill
+repo gets the same layout. Groups do not nest; a group name follows the skill
+name rule and is no skill's name. Put skills in groups only as the user
+wants them grouped. Every skill passes the everyday rules:
 
 - `SKILL.md` sits at the top of the folder. Its YAML frontmatter starts on
   line 1, has no duplicate keys, and holds `name` and `description`; other
   fields are allowed.
 - `name` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, has 1 to 64 characters, equals
-  the folder name, and is not reserved (`managing-skills`, `synced`, or any
-  name starting with `.`). When you rename a skill, rename both.
+  the skill's own folder name, is in one place only whatever its group, and
+  is not reserved (`managing-skills`, `synced`, or any name starting with
+  `.`). When you rename a skill, rename both.
 - `description` has 1 to 1024 characters.
 - Every entry is a regular file or folder: replace a symlink with the content
   it points to. At most 10 MiB per file, 1000 files and 50 MiB per skill.
@@ -117,7 +123,6 @@ enabled = ["claude-code", "codex", "antigravity"]
 [skills.notes]              # optional for an own skill
 enabled = false             # to disable it
 summary = "Keep meeting notes"  # one line each: what it is for,
-group = "writing"           # which skills belong with it,
 origin = "written here"     # and where an own skill came from (a URL, or "written here")
 installed = 2026-01-31      # optional: the day it was installed
 
@@ -127,13 +132,13 @@ path = "skills/pdf"         # required: folder inside the upstream; "" for its r
 ref = "<40-hex sha>"        # the commit the user's copy came from
 
 [[secrets.allow]]           # only for a secret that must stay
-path = "skills/pdf/tests/fixture.env"
+path = "skills/pdf/tests/fixture.env"  # the skill's path without its group
 rule = "aws-access-key"
 fingerprint = "sha256:<hash of the matched text>"
 ```
 
 - A skill is third-party exactly when it has a `source` table.
-- Fill `summary`, `group`, `origin` and `installed` only with what the user
+- Fill `summary`, `origin` and `installed` only with what the user
   says or the existing setup shows; leave out what you would have to guess.
 - Unknown keys are an error. Leave out `ref_kind`; skiman derives it.
 - skiman keeps the skill repo's project scope: every `[projects.<id>]` table

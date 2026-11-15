@@ -79,7 +79,10 @@ fn managing_skills_covers_every_everyday_operation() {
             format!("The skill repo is `{repo}`."),
         ),
         ("create", "skiman new <name> -d".to_owned()),
-        ("write the body", format!("{repo}/skills/<name>/SKILL.md")),
+        (
+            "write the body",
+            format!("{repo}/skills/<group>/<name>/SKILL.md"),
+        ),
         (
             "install a named source",
             "skiman add <source> --yes".to_owned(),
@@ -98,6 +101,10 @@ fn managing_skills_covers_every_everyday_operation() {
         ("resolve conflicts", "<<<<<<< local (skiman)".to_owned()),
         ("remove", "skiman remove <name> --yes".to_owned()),
         ("rename", "skiman mv <old> <new>".to_owned()),
+        (
+            "move to another group",
+            "skiman mv <name> --group <group>".to_owned(),
+        ),
         ("disable", "enabled = false".to_owned()),
         ("shared body", format!("{repo}/instructions/shared.md")),
         ("import", "skiman import --guide".to_owned()),

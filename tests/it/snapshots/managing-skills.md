@@ -12,9 +12,12 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
 
 ## Skill repo layout
 
-- `skills/<name>/`: every skill. An own skill is written by the user; a
-  third-party skill has a `[skills.<name>.source]` table in `skiman.toml` and
-  is tracked against its upstream.
+- `skills/<group>/<name>/` or `skills/<name>/`: every skill. A folder
+  directly under `skills/` without a `SKILL.md` is a group folder, and each
+  folder in it is a skill of that group; groups do not nest. A skill name is
+  unique across groups. An own skill is written by the user; a third-party
+  skill has a `[skills.<name>.source]` table in `skiman.toml` and is tracked
+  against its upstream. Below, `skills/<name>/` stands for either place.
 - `upstream/<name>/`: the upstream snapshot of a third-party skill. skiman
   writes it; leave its content as it is.
 - `instructions/shared.md`: the shared body of the global instructions, loaded
@@ -51,10 +54,13 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
 
 ## Create a skill
 
-1. Run `skiman new <name> -d "<what it does and when to use it>"`. It creates
-   `<SKILL_REPO>/skills/<name>/SKILL.md` and links it into every agent tool.
-2. Write the body in `<SKILL_REPO>/skills/<name>/SKILL.md` below the
-   frontmatter, and any further files in the same folder.
+1. Run `skiman new <name> -d "<what it does and when to use it>" --group
+   <group>`. It creates `<SKILL_REPO>/skills/<group>/<name>/SKILL.md` and
+   links it into every agent tool. Pick a group the skill repo already has
+   (`ls <SKILL_REPO>/skills`); a new group needs the user's approval.
+   Without `--group` the skill sits in no group.
+2. Write the body in that `SKILL.md` below the frontmatter, and any further
+   files in the same folder.
 3. Run `skiman check`.
 
 ## Install a third-party skill
@@ -78,6 +84,7 @@ Flags for `skiman add`:
   name.
 - `--name <name>`: install a single skill under another name, when the
   upstream name is invalid, reserved or already taken.
+- `--group <group>`: put the skills in this group folder.
 - `--ref <branch|tag|commit>`: follow a branch other than the default branch,
   or pin a tag or a full 40-hex commit.
 
@@ -130,15 +137,15 @@ person what the skill is; `skiman overview` shows it. Every value is one line.
 ```toml
 [skills.notes]
 summary = "Keep meeting notes"   # what it is for
-group = "writing"                # skills that belong together share a group
 origin = "written here"          # own skill: where it came from (a URL, or "written here")
 installed = 2026-01-31           # optional: the day it was installed
 ```
 
+- Its group is the folder it sits in, not a key.
 - A third-party skill's `source` table already says where it came from; it
   needs no `origin`.
-- `skiman check` warns about each skill without a `summary`, a `group`, or
-  where it came from. The warning never fails a command.
+- `skiman check` warns about each skill without a `summary`, a group folder,
+  or where it came from. The warning never fails a command.
 - Fill these keys only with what the user tells you or the skill's own
   files show. Leave a key out rather than guess: a guessed `origin` hides
   that nobody knows where the skill came from.
@@ -150,6 +157,9 @@ installed = 2026-01-31           # optional: the day it was installed
 - Remove: `skiman remove <name> --yes`. It moves the folders to a backup and
   prints its path.
 - Rename: `skiman mv <old> <new>`.
+- Move to another group: `skiman mv <name> --group <group>` (`--no-group`
+  takes it out of its group). It renames only the folder; the links follow.
+  A group folder left empty is removed.
 - Disable: in `<SKILL_REPO>/skiman.toml`, set `enabled = false` in the
   skill's `[skills.<name>]` table, then run `skiman sync`. Delete the line to
   enable it again.

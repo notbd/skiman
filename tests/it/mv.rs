@@ -425,7 +425,7 @@ fn the_summary_group_origin_and_installed_date_move_with_the_skill() {
         .assert()
         .code(0);
     let manifest = sandbox.skill_repo().join("skiman.toml");
-    let info = "summary = \"Keep notes\"\ngroup = \"writing\"\norigin = \"written here\"\ninstalled = 2026-01-31\n";
+    let info = "summary = \"Keep notes\"\norigin = \"written here\"\ninstalled = 2026-01-31\n";
     append(&manifest, &format!("\n[skills.notes]\n{info}"));
 
     sandbox

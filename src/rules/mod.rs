@@ -11,7 +11,7 @@
 //!
 //! [`warnings_all`] returns what is printed as a warning but never fails:
 //! the shared body at 80 % of its size limit. [`missing_info`] returns the
-//! skills without a summary, group or origin, which only `skiman check`
+//! skills without a summary, group folder or origin, which only `skiman check`
 //! prints (every write command prints [`warnings_all`]).
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
@@ -32,6 +32,7 @@ use std::io;
 
 use crate::Exit;
 use crate::failure::Failure;
+use crate::layout::Layout;
 use crate::project::item::MIRROR_DIR;
 use crate::tree::{Kind, Tree};
 
@@ -73,7 +74,7 @@ pub mod rule {
     /// The only rule that exits 3: a source table, lock entry or upstream
     /// snapshot whose skill folder is gone.
     pub const LEFTOVER_RECORD: &str = "leftover-record";
-    /// A skill without a summary, group or origin: a warning that only
+    /// A skill without a summary, group folder or origin: a warning that only
     /// `skiman check` prints, never a violation.
     pub const SKILL_INFO: &str = "skill-info";
 }
@@ -222,7 +223,7 @@ impl Scope {
     /// Everything in `tree`: what `skiman check` validates.
     pub fn all(tree: &dyn Tree) -> io::Result<Scope> {
         let records = config::Records::read(tree)?;
-        let skills = folder_names(tree, "skills")?;
+        let skills = Layout::read(tree)?.names();
         let mut consistency: BTreeSet<String> = skills.iter().cloned().collect();
         let upstreams = folder_names(tree, "upstream")?;
         consistency.extend(upstreams.iter().cloned());
@@ -277,7 +278,14 @@ fn folder_names(tree: &dyn Tree, dir: &str) -> io::Result<BTreeSet<String>> {
 pub fn consistent(tree: &dyn Tree) -> io::Result<bool> {
     let records = config::Records::read(tree)?;
     let mut out = BTreeSet::new();
-    consistency::check(tree, &records, &Scope::all(tree)?.consistency, &mut out)?;
+    let layout = Layout::read(tree)?;
+    consistency::check(
+        tree,
+        &layout,
+        &records,
+        &Scope::all(tree)?.consistency,
+        &mut out,
+    )?;
     Ok(records.parsed() && out.is_empty())
 }
 
@@ -348,12 +356,13 @@ fn run(
     let mut out = BTreeSet::new();
     let mut found = Vec::new();
     let records = config::Records::read(tree)?;
+    let layout = Layout::read(tree)?;
     for name in &scope.skills {
-        skill::check_skill(tree, name, &mut out, &mut found)?;
+        skill::check_skill(tree, &layout, name, &mut out, &mut found)?;
     }
     for name in &scope.content_only_skills {
         let mut all = BTreeSet::new();
-        skill::check_skill(tree, name, &mut all, &mut found)?;
+        skill::check_skill(tree, &layout, name, &mut all, &mut found)?;
         out.extend(all.into_iter().filter(|v| CONTENT_RULES.contains(&v.rule)));
     }
     for path in &scope.files {
@@ -363,7 +372,7 @@ fn run(
         match tree.kind(path)? {
             None => {}
             Some(_) if path.starts_with("skills/") => {
-                skill::check_written_file(tree, path, &mut out, &mut found)?;
+                skill::check_written_file(tree, &layout, path, &mut out, &mut found)?;
             }
             Some(Kind::File { .. })
                 if path.starts_with("upstream/") || path.starts_with("instructions/") =>
@@ -387,7 +396,11 @@ fn run(
         project::check_item(tree, path, &mut out, &mut found)?;
     }
     records.check(scope, &mut out);
-    consistency::check(tree, &records, &scope.consistency, &mut out)?;
+    consistency::check(tree, &layout, &records, &scope.consistency, &mut out)?;
+    // Exemptions name a skill's files without its group.
+    for f in &mut found {
+        f.allow_path = secrets::allow_path(&layout.without_group(&f.path));
+    }
     let allows = records.secret_allows();
     for f in &found {
         if !allows.iter().any(|(entry, _)| entry.covers(f)) {

@@ -12,6 +12,7 @@ mod cli;
 mod cross_filesystem;
 mod diff;
 mod doctor;
+mod groups;
 mod harness;
 mod hooks;
 mod hostile_upstream;

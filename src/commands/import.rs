@@ -36,6 +36,7 @@ use crate::failure::{Failure, finish};
 use crate::fetch::Cache;
 use crate::git::Prompts;
 use crate::import_guide;
+use crate::layout::{Layout, Placed};
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::managing_skills;
 use crate::manifest::{self, Manifest, SkillEntry, SourceRecord};
@@ -240,9 +241,17 @@ struct Folder {
     root: PathBuf,
     /// Tree hash of the whole folder.
     hash: String,
-    skills: BTreeMap<String, Snapshot>,
+    /// By skill name.
+    skills: BTreeMap<String, Skill>,
     shared_body: Vec<u8>,
     manifest: String,
+}
+
+/// One skill folder of the import folder.
+struct Skill {
+    /// `skills/[<group>/]<name>`, the same in the skill repo.
+    path: String,
+    snapshot: Snapshot,
 }
 
 impl Folder {
@@ -292,18 +301,15 @@ impl Folder {
                 }
             }
         }
-        let mut names = Vec::new();
+        let mut placed = Vec::new();
         if tree.kind("skills").map_err(io)? == Some(Kind::Dir) {
-            for entry in tree.children("skills").map_err(io)? {
-                if tree::is_ignored(&entry.path) {
-                    continue;
-                }
-                if entry.kind == Kind::Dir {
-                    names.push(tree::basename(&entry.path).to_owned());
+            for skill in Layout::read(&tree).map_err(io)?.skills() {
+                if tree.kind(&skill.path()).map_err(io)? == Some(Kind::Dir) {
+                    placed.push(skill.clone());
                 } else {
                     problems.push(format!(
-                        "{} is not a folder; every entry in skills/ is a skill folder",
-                        entry.path
+                        "{} is not a folder; every entry in skills/ is a skill folder or a group folder of skill folders",
+                        skill.path()
                     ));
                 }
             }
@@ -317,19 +323,29 @@ impl Folder {
             )));
         }
         let mut refusals = Vec::new();
-        let mut folded: BTreeMap<String, &str> = BTreeMap::new();
-        for name in &names {
-            let key = name.nfc().collect::<String>().to_lowercase();
-            if let Some(other) = folded.insert(key, name) {
-                refusals.push(format!(
-                    "{} holds skills/{other} and skills/{name}, which are the same path on a case- or normalisation-insensitive file system",
-                    root.display()
-                ));
+        // Skill names, and group names, on a case- or normalisation-insensitive file system.
+        let mut folded: BTreeMap<String, String> = BTreeMap::new();
+        for skill in &placed {
+            let key = skill.name.nfc().collect::<String>().to_lowercase();
+            if let Some(other) = folded.insert(key, skill.path()) {
+                let path = skill.path();
+                refusals.push(if other.ends_with(&format!("/{}", skill.name)) {
+                    format!(
+                        "{} holds {other} and {path}, two skills named `{}`; a name may be in one place only, whatever its group",
+                        root.display(),
+                        skill.name
+                    )
+                } else {
+                    format!(
+                        "{} holds {other} and {path}, whose names are the same on a case- or normalisation-insensitive file system",
+                        root.display()
+                    )
+                });
             }
         }
         let mut skills = BTreeMap::new();
-        for name in names {
-            let dir = format!("skills/{name}");
+        for skill in placed {
+            let dir = skill.path();
             match path_safety::check(
                 &tree,
                 &dir,
@@ -337,7 +353,14 @@ impl Folder {
                 Content::Upstream,
             ) {
                 Ok(()) => {
-                    skills.insert(name, Snapshot::from_folder(&root.join(&dir))?);
+                    let snapshot = Snapshot::from_folder(&root.join(&dir))?;
+                    skills.insert(
+                        skill.name,
+                        Skill {
+                            path: dir,
+                            snapshot,
+                        },
+                    );
                 }
                 Err(f) => refusals.push(f.message),
             }
@@ -730,9 +753,9 @@ impl Plan {
         let entries = manifest.skills();
         let mut wanted: BTreeMap<String, PathBuf> = content
             .skills
-            .keys()
-            .filter(|name| entries.get(*name).is_none_or(|e| e.enabled))
-            .map(|name| (name.clone(), repo.skill_dir(name)))
+            .iter()
+            .filter(|(name, _)| entries.get(*name).is_none_or(|e| e.enabled))
+            .map(|(name, skill)| (name.clone(), repo.root().join(&skill.path)))
             .collect();
         wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
         let ownership = Ownership::new(paths, repo, manifest, None);
@@ -1027,14 +1050,14 @@ fn print_writes(repo: &SkillRepo, candidate: &Candidate, change: &Change, todo: 
         i.map(|i| &todo[i])
     };
     for (name, skill) in &candidate.content.skills {
-        let verb = match held(&format!("skills/{name}")) {
+        let verb = match held(&skill.path) {
             Some(Held::Same) => "keep",
             _ => "add",
         };
         match candidate.thirds.iter().find(|t| &t.name == name) {
             None => out!("  {verb} skill {name} (own)"),
             Some(third) => {
-                let changes = local_modifications(skill, &third.snapshot);
+                let changes = local_modifications(&skill.snapshot, &third.snapshot);
                 let summary = if changes.is_empty() {
                     "; no file differs from upstream"
                 } else {
@@ -1122,8 +1145,8 @@ impl Candidate<'_> {
         let thirds = self.thirds.iter();
         pieces.extend(thirds.map(|t| folder(format!("upstream/{}", t.name), &t.snapshot)));
         pieces.push(file(SHARED_BODY, &self.content.shared_body));
-        let skills = self.content.skills.iter();
-        pieces.extend(skills.map(|(name, skill)| folder(format!("skills/{name}"), skill)));
+        let skills = self.content.skills.values();
+        pieces.extend(skills.map(|skill| folder(skill.path.clone(), &skill.snapshot)));
         Change {
             pieces,
             command: "import",
@@ -1207,15 +1230,18 @@ fn progress(
     folder_manifest: &Manifest,
     repo_manifest: &str,
 ) -> Result<Progress, Failure> {
-    if !names_in(&repo.skills_dir())?
-        .iter()
-        .eq(content.skills.keys())
+    let held: BTreeSet<String> = repo.layout()?.skills().iter().map(Placed::path).collect();
+    if !held.iter().eq(content
+        .skills
+        .values()
+        .map(|s| &s.path)
+        .collect::<BTreeSet<_>>())
     {
         return Ok(Progress::NotDone);
     }
-    for (name, skill) in &content.skills {
-        let want = Want::Folder(skill.files.clone());
-        if change::held(repo.root(), &format!("skills/{name}"), &want)? != Held::Same {
+    for skill in content.skills.values() {
+        let want = Want::Folder(skill.snapshot.files.clone());
+        if change::held(repo.root(), &skill.path, &want)? != Held::Same {
             return Ok(Progress::NotDone);
         }
     }
@@ -1297,21 +1323,20 @@ fn repo_todo(
         }
     }
     let third = |name: &str| candidate.thirds.iter().any(|t| t.name == name);
-    for root in ["skills", "upstream"] {
-        let names = names_in(&repo.root().join(root))?
-            .into_iter()
-            .filter(|name| match root {
-                "skills" => !candidate.content.skills.contains_key(name),
-                _ => !third(name),
-            });
-        lines.extend(names.map(|name| match root {
-            "skills" => format!(
-                "{root}/{name} is not in the import folder: remove it from the skill repo, or put it in the import folder"
-            ),
-            _ => format!(
-                "{root}/{name} is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put {name} in the import folder as a third-party skill"
-            ),
-        }));
+    let imported = |path: &str| candidate.content.skills.values().any(|s| s.path == path);
+    for path in repo.layout()?.skills().iter().map(Placed::path) {
+        if !imported(&path) && !tree::basename(&path).starts_with('.') {
+            lines.push(format!(
+                "{path} is not in the import folder: remove it from the skill repo, or put it in the import folder"
+            ));
+        }
+    }
+    for name in names_in(&repo.root().join("upstream"))? {
+        if !third(&name) {
+            lines.push(format!(
+                "upstream/{name} is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put {name} in the import folder as a third-party skill"
+            ));
+        }
     }
     for name in Lockfile::load(repo)?.skill_names() {
         if !third(&name) {

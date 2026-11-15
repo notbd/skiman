@@ -545,12 +545,8 @@ fn an_unwritable_backups_folder_stops_add_with_exit_4_and_keeps_the_tmp_leftover
     std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
 
-    let tmp = sandbox.skill_repo().join(".skiman/tmp");
     assert!(
-        stderr.contains(&format!(
-            "move {} out of the skill repo by hand",
-            tmp.display()
-        )),
+        stderr.ends_with("; fix that, then run the command again\n"),
         "{stderr}"
     );
     assert!(leftover.join("old/skills/pdf/SKILL.md").is_file());

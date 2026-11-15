@@ -23,7 +23,7 @@ use crate::fsutil;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::snapshot::SnapshotFile;
-use crate::staging::Staging;
+use crate::staging::{Staging, Swap};
 use crate::test_hook;
 use crate::tree::{self, Overlay, WorkingTree};
 
@@ -241,42 +241,24 @@ impl Change {
                 done.push(format!("created {shown}"));
             }
             (Want::Folder(files), _) => {
-                // Both in `old/`, which a command never deletes: `aside` holds
-                // the new content until it is in place, then (swapped) what
-                // was at `target` until that is in the backup.
-                let aside = staging.old_dir().join(rel);
-                let new_aside = |e: Failure| {
-                    let _ = std::fs::remove_dir_all(&aside);
-                    e
-                };
-                fsutil::write_files(&aside, files).map_err(new_aside)?;
-                let (old, flushed) = match fsutil::exchange(&aside, &target) {
-                    Ok(()) => (
-                        aside.clone(),
-                        fsutil::flush_path(target.parent().expect("named")),
-                    ),
-                    // Without a swapping rename: the old one is renamed out
-                    // within the filesystem, the new one in; only between the
-                    // two renames is the path empty.
-                    Err(e) if e.kind() == io::ErrorKind::Unsupported => {
-                        let prev = staging.old_dir().join("prev").join(rel);
-                        staging.place(&target, &prev).map_err(new_aside)?;
-                        test_hook::at(self.command, &format!("set-aside:{rel}"));
-                        staging.place(&aside, &target).map_err(|e| {
-                            let (new, prev) = (aside.display(), prev.display());
-                            Failure::operational(format!(
-                                "{}; the old {shown} is at {prev} and the new one at {new}; rename the new one to {shown} before running the command again",
-                                e.message
-                            ))
-                        })?;
-                        (prev, Ok(()))
+                // Staged in `old/`, which a command never deletes: it holds
+                // the new content until it is in place, then what was at
+                // `target` until that is in the backup.
+                let staged = staging.old_dir().join(rel);
+                fsutil::write_files(&staged, files)
+                    .inspect_err(|_| fsutil::remove_entry(&staged))?;
+                let swapped = staging.swap(rel, &target, self.command, |old| {
+                    let now = tree::tree_hash_of_dir(old);
+                    matches!((seen, now), (Held::Other(was), Ok(now)) if was.as_slice() == now.as_bytes())
+                })?;
+                let (old, flushed) = match swapped {
+                    Swap::Done { old, flushed } => (old, flushed),
+                    Swap::Changed(new) => {
+                        return Err(Failure::operational(format!(
+                            "{shown} changed while skiman was writing; it is back where it was, and what came out is at {}",
+                            new.display()
+                        )));
                     }
-                    Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
-                        return Err(new_aside(Failure::operational(fsutil::crossing(
-                            &target, &aside,
-                        ))));
-                    }
-                    Err(e) => return Err(new_aside(fail(format!("cannot replace {shown}"))(e))),
                 };
                 done.push(format!("created {shown}"));
                 done.push(move_in(&old, backups)?);

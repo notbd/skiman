@@ -329,3 +329,135 @@ instructions/shared.md:15: at-import: `@open` is read as a file import by Claude
 "#]])
         .stderr_eq("");
 }
+
+/// A file of the user's that takes the place of an instruction link right
+/// before `init` retargets it to another skill repo is kept, and nothing is
+/// left under a temporary name.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_file_that_replaces_an_instruction_link_init_is_about_to_retarget_is_kept() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let other = sandbox.root().join("other-repo");
+    let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
+    let swap_in = format!("rm '{0}' && printf mine > '{0}'", claude_md.display());
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&other)
+        .env(
+            "SKIMAN_TEST_HOOK",
+            format!("link:take:{}", claude_md.display()),
+        )
+        .env("SKIMAN_TEST_HOOK_RUN", swap_in)
+        .output()
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&claude_md).unwrap(), "mine");
+    assert!(!claude_md.is_symlink());
+    let dir = std::fs::read_dir(claude_md.parent().unwrap()).unwrap();
+    let names: Vec<String> = dir
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !names.iter().any(|n| n.contains(".skiman-tmp-")),
+        "{names:?}"
+    );
+    let shared = other.join("instructions/shared.md");
+    assert_symlink(sandbox.instruction_file(Tool::Codex), &shared, &shared);
+}
+
+/// On a filesystem with a swapping rename, a retargeted instruction link is
+/// never missing: at the step between swapping it out and removing the old
+/// one, the path is already the new link.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_retargeted_instruction_link_is_never_missing() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let other = sandbox.root().join("other-repo");
+    let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
+    let shared = other.join("instructions/shared.md");
+    let check = format!(
+        "test \"$(readlink '{}')\" = '{}'",
+        claude_md.display(),
+        shared.display()
+    );
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&other)
+        .env(
+            "SKIMAN_TEST_HOOK",
+            format!("link:aside:{}", claude_md.display()),
+        )
+        .env("SKIMAN_TEST_HOOK_RUN", check)
+        .assert()
+        .code(0);
+    assert_symlink(&claude_md, &shared, &shared);
+}
+
+/// A retarget whose swapped-out link turns out not to be skiman's swaps
+/// back; when something else, B, took the path in between, B comes out of
+/// that swap back and stays under the temporary name, never removed, and
+/// the error says where. B a file and a folder.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn what_comes_out_of_a_retarget_swapped_back_is_never_removed() {
+    for b in [
+        "printf B > \"$L\"",
+        "mkdir \"$L\" && printf B > \"$L/b.md\"",
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let other = sandbox.root().join("other-repo");
+        let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
+        // Right after the swap: the link swapped out becomes the user's A,
+        // and the new link at the path is replaced by B.
+        let run = format!(
+            "L='{}'; T=$(ls -d \"$(dirname \"$L\")\"/.CLAUDE.md.skiman-tmp-*); rm \"$T\" && printf A > \"$T\" && rm \"$L\" && {b}",
+            claude_md.display()
+        );
+        let output = sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(&other)
+            .env(
+                "SKIMAN_TEST_HOOK",
+                format!("link:aside:{}", claude_md.display()),
+            )
+            .env("SKIMAN_TEST_HOOK_RUN", run)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            std::fs::read_to_string(&claude_md).unwrap(),
+            "A",
+            "{stderr}"
+        );
+        let dir = claude_md.parent().unwrap();
+        let aside: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.to_string_lossy().contains(".skiman-tmp-"))
+            .collect();
+        let [aside] = &aside[..] else {
+            panic!("{aside:?}");
+        };
+        let b = match aside.is_dir() {
+            true => aside.join("b.md"),
+            false => aside.clone(),
+        };
+        assert_eq!(std::fs::read_to_string(b).unwrap(), "B");
+        let said = format!("what was there is at {}", aside.display());
+        assert!(stderr.contains(&said), "{stderr}");
+    }
+}

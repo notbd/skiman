@@ -549,16 +549,19 @@ fn a_move_cut_short_in_a_swap_folder_tmp_or_an_instruction_location_is_finished_
         assert!(empty.is_empty(), "{place} {point}: {empty:?}");
         // After `deleted` the old version is only in the backup: nothing to say.
         if point != "deleted" {
+            // A cut-short move in a staging folder leaves its copy where it is.
+            let said_line = match place {
+                "instructions" => "moved",
+                _ => "deleted what was left of",
+            };
             let line = said
                 .lines()
-                .find(|l| l.contains("moved") && (place != "instructions" || l.contains(name)))
+                .find(|l| l.contains(said_line) && (place != "instructions" || l.contains(name)))
                 .unwrap_or_else(|| panic!("{place} {point}: {said}"));
             let at = line.rsplit(" to ").next().unwrap();
             let held = match place {
-                "tmp" => Path::new(at)
-                    .join("20200101T000000Z/old/skills/keep")
-                    .join(name),
-                "swap" => Path::new(at).join("foo").join(name),
+                "tmp" => Path::new(at).join("old/skills/keep").join(name),
+                "swap" => Path::new(at).join(name),
                 _ => PathBuf::from(at),
             };
             assert!(read_text(&held).contains(text), "{place} {point}: {line}");
@@ -690,22 +693,21 @@ fn the_only_old(repo: &Path) -> PathBuf {
 
 /// Asserts that `old`, the `tmp/<ts>/old` of a replace of `skills/pdf`
 /// stopped between its two renames, holds the whole old skill (`before`) at
-/// `prev/skills/pdf` and the whole new one (the upstream fix merged in) at
+/// `skills/pdf.skiman-prev` and the whole new one (the upstream fix merged in) at
 /// `skills/pdf`.
 #[cfg(target_os = "macos")]
 fn assert_both_versions(old: &Path, before: &std::collections::BTreeMap<PathBuf, String>) {
     let mut new = before.clone();
     let reference = new.get_mut(Path::new("reference.md")).unwrap();
     *reference = reference.replace("v1\n", "v2\n");
-    assert_eq!(&tree(old.join("prev/skills/pdf")), before);
+    assert_eq!(&tree(old.join("skills/pdf.skiman-prev")), before);
     assert_eq!(tree(old.join("skills/pdf")), new);
 }
 
 /// Killed between the two renames of a replace without a swapping rename,
 /// `skills/<name>` is missing and both versions are in `.skiman/tmp/`: the
-/// old one at `old/prev/skills/<name>`, the new one at `old/skills/<name>`.
-/// Running the update again is refused (ADR 0005: one of the cases not
-/// finished that way).
+/// old one at `old/skills/<name>.skiman-prev`, the new one at `old/skills/<name>`.
+/// Run again, the update puts the new one in place and finishes.
 #[cfg(target_os = "macos")]
 #[test]
 #[cfg_attr(
@@ -730,17 +732,47 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
 
     assert!(!skill.exists());
     assert_both_versions(&the_only_old(&repo), &before);
-    let again = sandbox.skiman().args(["update", "pdf"]).output().unwrap();
-    let stderr = String::from_utf8_lossy(&again.stderr);
-    assert_eq!(again.status.code(), Some(1), "{stderr}");
+    // A dry run writes nothing: the skill stays missing and tmp as it is.
+    let dry = sandbox
+        .skiman()
+        .args(["update", "pdf", "--dry-run"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&dry.stderr);
+    assert_eq!(dry.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("skills/pdf is not a folder"), "{stderr}");
-    // Refused before it moves the tmp leftovers: both are still there.
+    assert!(!skill.exists());
     assert_both_versions(&the_only_old(&repo), &before);
+    let new = the_only_old(&repo).join("skills/pdf");
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "put {} in place from {}, where a replace stopped part-way left it\n...\n",
+            skill.display(),
+            new.display()
+        ));
+    assert_updated(&sandbox, &repo);
+}
+
+/// `skills/pdf` holds the fix the update brings, and nothing is left over.
+#[cfg(target_os = "macos")]
+fn assert_updated(sandbox: &Sandbox, repo: &Path) {
+    let skill = repo.join("skills/pdf");
+    assert_eq!(read_text(&skill.join("reference.md")), "v2\n");
+    for n in 0..10 {
+        let file = skill.join(format!("refs/{n}.md"));
+        assert_eq!(read_text(&file), format!("{n}\n"));
+    }
+    sandbox.skiman().arg("check").assert().code(0);
+    assert_eq!(tmp_entries(repo), Vec::<PathBuf>::new());
 }
 
 /// When the second rename of such a replace fails, the update stops with
-/// exit 4, says where the old and the new version are and to rename the new
-/// one back before running it again; done so, the update finishes.
+/// exit 4 and says where the old and the new version are; run again, it
+/// finishes.
 #[cfg(target_os = "macos")]
 #[test]
 #[cfg_attr(
@@ -771,9 +803,9 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     assert_eq!(output.status.code(), Some(4), "{stderr}");
 
     let old = the_only_old(&repo);
-    let (prev, new) = (old.join("prev/skills/pdf"), old.join("skills/pdf"));
+    let (prev, new) = (old.join("skills/pdf.skiman-prev"), old.join("skills/pdf"));
     let place = format!(
-        "; the old {skill} is at {} and the new one at {}; rename the new one to {skill} before running the command again\n",
+        "; the old {skill} is at {} and the new one at {}\n",
         prev.display(),
         new.display(),
         skill = skill.display(),
@@ -782,17 +814,9 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     assert!(stderr.contains(&format!("{place}{stopped}")), "{stderr}");
     assert_both_versions(&old, &before);
 
-    std::fs::rename(&new, &skill).unwrap();
     sandbox.skiman().args(["update", "pdf"]).assert().code(0);
-    assert_eq!(read_text(&skill.join("reference.md")), "v2\n");
-    for n in 0..10 {
-        assert_eq!(
-            read_text(&skill.join(format!("refs/{n}.md"))),
-            format!("{n}\n")
-        );
-    }
-    sandbox.skiman().arg("check").assert().code(0);
-    assert_eq!(tmp_entries(&repo), Vec::<PathBuf>::new());
+    assert!(!new.exists());
+    assert_updated(&sandbox, &repo);
 }
 
 /// An adopt killed while the original moves to a backup on another
@@ -850,4 +874,380 @@ fn an_adopt_killed_while_the_original_moves_to_another_filesystem_finishes_when_
         let check = skiman().arg("check").output().unwrap();
         assert_eq!(check.status.code(), Some(0), "{point}");
     }
+}
+
+/// On a volume without a swapping rename, a replace takes the old folder
+/// out first and checks it there. Edited as it was taken out, it goes back
+/// with the edit and the new one stays in `.skiman/tmp/`; run again, the
+/// update keeps the edit as a local change.
+#[cfg(target_os = "macos")]
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_folder_edited_as_it_was_taken_out_goes_back() {
+    let sandbox = Sandbox::new();
+    let Some((_disk, repo)) = pdf_on_a_volume_without_a_swap(&sandbox) else {
+        return;
+    };
+    let skill = repo.join("skills/pdf");
+    let prev = format!(
+        "{}/.skiman/tmp/*/old/skills/pdf.skiman-prev",
+        repo.display()
+    );
+    let edit = format!("printf 'edited\\n' >> $(ls -d {prev})/refs/0.md");
+    let output = sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .env("SKIMAN_TEST_HOOK", "update:set-aside:skills/pdf")
+        .env("SKIMAN_TEST_HOOK_RUN", edit)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "{stderr}");
+    let new = the_only_old(&repo).join("skills/pdf");
+    let changed = format!(
+        "{} changed while skiman was writing; it is back where it was, and what came out is at {}",
+        skill.display(),
+        new.display()
+    );
+    assert!(stderr.contains(&changed), "{stderr}");
+    assert_eq!(read_text(&skill.join("refs/0.md")), "0\nedited\n");
+    assert_eq!(read_text(&skill.join("reference.md")), "v1\n");
+    assert_eq!(read_text(&new.join("reference.md")), "v2\n");
+
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    assert_eq!(read_text(&skill.join("reference.md")), "v2\n");
+    assert_eq!(read_text(&skill.join("refs/0.md")), "0\nedited\n");
+}
+
+/// When something also took the folder's place, the edited folder cannot go
+/// back: both stay where they are, and the error says where.
+#[cfg(target_os = "macos")]
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_folder_edited_as_it_was_taken_out_whose_place_was_taken_stays_where_it_is() {
+    let sandbox = Sandbox::new();
+    let Some((_disk, repo)) = pdf_on_a_volume_without_a_swap(&sandbox) else {
+        return;
+    };
+    let skill = repo.join("skills/pdf");
+    let prev = format!(
+        "{}/.skiman/tmp/*/old/skills/pdf.skiman-prev",
+        repo.display()
+    );
+    let edit = format!(
+        "printf 'edited\\n' >> $(ls -d {prev})/refs/0.md && printf mine > '{}'",
+        skill.display()
+    );
+    let output = sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .env("SKIMAN_TEST_HOOK", "update:set-aside:skills/pdf")
+        .env("SKIMAN_TEST_HOOK_RUN", edit)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "{stderr}");
+    let old = the_only_old(&repo);
+    let (prev, new) = (old.join("skills/pdf.skiman-prev"), old.join("skills/pdf"));
+    let said = format!(
+        "{} changed while skiman was writing and cannot be put back (File exists (os error 17)): it is at {}, and the new one at {}",
+        skill.display(),
+        prev.display(),
+        new.display()
+    );
+    assert!(stderr.contains(&said), "{stderr}");
+    assert_eq!(read_text(&skill), "mine");
+    assert_eq!(read_text(&prev.join("refs/0.md")), "0\nedited\n");
+    assert_eq!(read_text(&new.join("reference.md")), "v2\n");
+}
+
+/// The same check for a project item: restore on a volume without a
+/// swapping rename puts back a project file edited as it was taken out,
+/// keeps the new one in the staging folder and reports a conflict.
+#[cfg(target_os = "macos")]
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_project_file_edited_as_restore_took_it_out_goes_back() {
+    let sandbox = Sandbox::new();
+    let Some(disk) = attached(DiskImage::attach(&sandbox, "HFS+", "proj")) else {
+        return;
+    };
+    init(&sandbox);
+    let project = disk.mount.join("proj");
+    let agents = project.join("AGENTS.md");
+    write(&agents, "project original\n");
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(&project)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    write(
+        sandbox.skill_repo().join("projects/proj/AGENTS.md"),
+        "mirror edit\n",
+    );
+    let prev = format!(
+        "{}/.skiman-swap-*/old/AGENTS.md.skiman-prev",
+        project.display()
+    );
+
+    let output = sandbox
+        .skiman()
+        .args(["project", "restore", "--yes"])
+        .arg(&agents)
+        .env("SKIMAN_TEST_HOOK", "project:set-aside:AGENTS.md")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("printf 'edited\\n' >> $(ls {prev})"),
+        )
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    let swaps: Vec<_> = std::fs::read_dir(&project)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".skiman-swap-")
+        })
+        .collect();
+    let [swap] = swaps.as_slice() else {
+        panic!("{swaps:?}")
+    };
+    let new = swap.join("old/AGENTS.md");
+    let said = format!(
+        "warning: {} changed since the plan was made (what came out is at {}); nothing was replaced, run the command again",
+        agents.display(),
+        new.display()
+    );
+    assert!(stderr.contains(&said), "{stderr}");
+    assert_eq!(read_text(&agents), "project original\nedited\n");
+    assert_eq!(read_text(&new), "mirror edit\n");
+}
+
+/// Killed between the two renames of a restore on a volume without a
+/// swapping rename, the project file is missing and both versions are in the
+/// staging folder: run again, the restore moves both to the backup with
+/// the tmp leftover and writes the item from the mirror.
+#[cfg(target_os = "macos")]
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_restore_killed_between_its_two_renames_finishes_when_run_again() {
+    let sandbox = Sandbox::new();
+    let Some(disk) = attached(DiskImage::attach(&sandbox, "HFS+", "proj")) else {
+        return;
+    };
+    init(&sandbox);
+    let project = disk.mount.join("proj");
+    let agents = project.join("AGENTS.md");
+    write(&agents, "project original\n");
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(&project)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    write(
+        sandbox.skill_repo().join("projects/proj/AGENTS.md"),
+        "mirror edit\n",
+    );
+    let restore = || {
+        sandbox
+            .skiman()
+            .args(["project", "restore", "--yes"])
+            .arg(&agents)
+    };
+    let killed = restore()
+        .env("SKIMAN_TEST_HOOK", "project:set-aside:AGENTS.md")
+        .env("SKIMAN_TEST_HOOK_RUN", "kill -9 $PPID")
+        .output()
+        .unwrap();
+    assert_eq!(killed.status.signal(), Some(9));
+    assert!(!agents.exists());
+
+    let again = restore().output().unwrap();
+    let said = String::from_utf8_lossy(&again.stdout);
+    assert_eq!(
+        again.status.code(),
+        Some(0),
+        "{said}{}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert!(said.contains("moved tmp leftovers to "), "{said}");
+    assert_eq!(read_text(&agents), "mirror edit\n");
+    // The original went to the backup with the tmp leftover it was in.
+    let backups = tree(sandbox.state_home().join("skiman/backups"));
+    let original = backups
+        .values()
+        .filter(|e| *e == "file 644 project original\n");
+    assert_eq!(original.count(), 1, "{backups:?}");
+}
+
+/// Killed between the two renames on a volume without a swapping rename,
+/// then the source edited (the project file for `adopt`, its mirror for
+/// `restore`): run again, the command writes the edited source, not what
+/// the stopped run had staged.
+#[cfg(target_os = "macos")]
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_project_write_killed_between_its_two_renames_writes_the_source_as_it_is_now() {
+    for verb in ["adopt", "restore"] {
+        let sandbox = Sandbox::new();
+        let Some(disk) = attached(DiskImage::attach(&sandbox, "HFS+", "vol")) else {
+            return;
+        };
+        let repo = disk.mount.join("skill-repo");
+        sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(&repo)
+            .assert()
+            .code(0);
+        let project = disk.mount.join("proj");
+        let (agents, mirror) = (
+            project.join("AGENTS.md"),
+            repo.join("projects/proj/AGENTS.md"),
+        );
+        write(&agents, "project original\n");
+        let skiman = |args: &[&str]| sandbox.skiman().args(args).output().unwrap();
+        assert_eq!(
+            skiman(&["project", "add", &project.to_string_lossy()])
+                .status
+                .code(),
+            Some(0)
+        );
+        assert_eq!(
+            skiman(&["project", "adopt", "--yes"]).status.code(),
+            Some(0)
+        );
+        // What the stopped run stages, then the edit after it was killed.
+        let (source, point) = match verb {
+            "adopt" => (&agents, "project:set-aside:projects/proj/AGENTS.md"),
+            _ => (&mirror, "project:set-aside:AGENTS.md"),
+        };
+        write(source, "staged\n");
+        let run = || {
+            sandbox
+                .skiman()
+                .args(["project", verb, "--yes"])
+                .arg(&agents)
+        };
+        let killed = run()
+            .env("SKIMAN_TEST_HOOK", point)
+            .env("SKIMAN_TEST_HOOK_RUN", "kill -9 $PPID")
+            .output()
+            .unwrap();
+        assert_eq!(killed.status.signal(), Some(9), "{verb}");
+        write(source, "edited after the kill\n");
+
+        let again = run().output().unwrap();
+        let stderr = String::from_utf8_lossy(&again.stderr);
+        assert_eq!(again.status.code(), Some(0), "{verb}: {stderr}");
+        assert_eq!(read_text(&agents), "edited after the kill\n", "{verb}");
+        assert_eq!(read_text(&mirror), "edited after the kill\n", "{verb}");
+        assert_eq!(skiman(&["sync"]).status.code(), Some(0), "{verb}");
+    }
+}
+
+/// A replaced project file moved to a backup on another filesystem, whose
+/// rest cannot be deleted once its complete copy is there: the error says
+/// the move did not finish and what is left to delete, not that the
+/// previous version is kept there.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_restore_whose_previous_version_is_copied_but_not_deleted_says_what_to_delete() {
+    let sandbox = Sandbox::new();
+    let Some(state) = attached(second_filesystem(&sandbox)) else {
+        return;
+    };
+    init(&sandbox);
+    let skiman = || sandbox.skiman().env("XDG_STATE_HOME", &state.dir);
+    let project = sandbox.home().join("work");
+    let agents = project.join("AGENTS.md");
+    write(&agents, "project original\n");
+    skiman()
+        .args(["project", "add"])
+        .arg(&project)
+        .assert()
+        .code(0);
+    skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    write(
+        sandbox.skill_repo().join("projects/work/AGENTS.md"),
+        "mirror edit\n",
+    );
+    let old = format!("{}/.skiman-swap-*/old", project.display());
+
+    let output = skiman()
+        .args(["project", "restore", "--yes"])
+        .arg(&agents)
+        .env("SKIMAN_TEST_HOOK", "move:noted")
+        .env("SKIMAN_TEST_HOOK_RUN", format!("chmod 555 {old}"))
+        .output()
+        .unwrap();
+    let left = std::fs::read_dir(&project)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".skiman-swap-")
+        })
+        .unwrap()
+        .join("old");
+    let unlocked = Command::new("chmod")
+        .arg("755")
+        .arg(&left)
+        .status()
+        .unwrap();
+    assert!(unlocked.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(4), "{stderr}");
+    let said = format!(
+        "{} is restored, but moving its previous version to the backup did not finish (",
+        agents.display()
+    );
+    assert!(stderr.contains(&said), "{stderr}");
+    let rest = format!(
+        "; delete what is left of it at {}\n",
+        left.join("AGENTS.md").display()
+    );
+    assert!(stderr.contains(&rest), "{stderr}");
+    assert_eq!(read_text(&agents), "mirror edit\n");
+    let copy = the_only_backup(&state.dir).join("projects/work/AGENTS.md");
+    assert_eq!(read_text(&copy), "project original\n");
 }

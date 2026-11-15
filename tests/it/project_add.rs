@@ -1,6 +1,7 @@
-//! `skiman project add`, the validation of project roots wherever they are
-//! used (a hand-edited `skiman.toml` seen through `sync` and `project adopt`),
-//! and `skiman check` on `[projects.<id>]` values (plan "Configuration").
+//! `skiman project add`, the validation of project roots wherever they are used
+//! (a hand-edited `skiman.toml` seen through `sync` and `project adopt`), and
+//! `skiman check` on `[projects.<id>]` values (project-scope.md
+//! "Configuration").
 
 use std::path::{Path, PathBuf};
 

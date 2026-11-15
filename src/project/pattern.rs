@@ -1,5 +1,6 @@
 //! Which paths under a project root are project items, from the tool table's
-//! `project_instruction_files` and `project_skill_dirs` (plan "Tool table").
+//! `project_instruction_files` and `project_skill_dirs`
+//! (project-scope.md "Tool table").
 //!
 //! Patterns are `/`-separated; `**` matches any number of folders and `*`
 //! any part of one name. A path is matched from its end: the earliest

@@ -410,11 +410,11 @@ impl Records {
         }
     }
 
-    /// The `[projects.<id>]` tables (plan "Configuration"): the id follows
-    /// the skill name rule; `path` is absolute or starts with `~/`; `exclude`
-    /// and `skill_dirs` are arrays of strings, and each `skill_dirs` entry is
-    /// a root-relative folder that holds no tool skill-dir pattern and lies
-    /// inside no other entry.
+    /// The `[projects.<id>]` tables (project-scope.md "Configuration"): the id
+    /// follows the skill name rule; `path` is absolute or starts with `~/`;
+    /// `exclude` and `skill_dirs` are arrays of strings, and each `skill_dirs`
+    /// entry is a root-relative folder that holds no tool skill-dir pattern and
+    /// lies inside no other entry.
     fn check_projects(
         &self,
         projects: &dyn TableLike,

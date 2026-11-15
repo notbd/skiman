@@ -150,6 +150,62 @@ fn a_project_edit_is_copied_into_the_mirror_with_the_old_mirror_in_a_backup() {
     assert_eq!(stderr_of(&again), "");
 }
 
+/// A mirror staging folder that cannot be opened stops every mirror write
+/// of the run with one error, not one per item.
+#[test]
+fn a_mirror_staging_that_cannot_be_opened_is_reported_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let dir = adopted_file(&sandbox);
+    write(dir.join("other/AGENTS.md"), "other v1\n");
+    adopt_all(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "v2\n");
+    write(dir.join("other/AGENTS.md"), "other v2\n");
+    let swap = sandbox.skill_repo().join(".skiman/swap");
+    std::fs::create_dir_all(&swap).unwrap();
+    std::fs::set_permissions(&swap, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let out = sync(&sandbox);
+    std::fs::set_permissions(&swap, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(out.status.code(), Some(4), "{}", stderr_of(&out));
+    let stderr = stderr_of(&out);
+    let said = format!("cannot create a folder in {}", swap.display());
+    assert_eq!(stderr.matches(&said).count(), 1, "{stderr}");
+    assert_sides(&sandbox, &dir, "proj/AGENTS.md", Some("v2\n"), Some("v1\n"));
+}
+
+/// A tmp leftover of the mirror that cannot be moved to the backup stays
+/// where it is, and the project edits are mirrored all the same.
+#[test]
+fn a_mirror_tmp_leftover_that_cannot_be_moved_does_not_stop_sync() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let dir = adopted_file(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "v2\n");
+    let leftover = sandbox.skill_repo().join(".skiman/swap/20200101T000000Z");
+    write(leftover.join("old/projects/work/proj/AGENTS.md"), "older\n");
+    // A folder moves to another parent only with write access to it.
+    let mode = |m| std::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(m)).unwrap();
+    mode(0o555);
+    let out = sync(&sandbox);
+    mode(0o755);
+
+    assert_sides(&sandbox, &dir, "proj/AGENTS.md", Some("v2\n"), Some("v2\n"));
+    let said = format!(
+        "cannot move the tmp leftover {} to a backup: ",
+        leftover.display()
+    );
+    assert!(
+        stderr_of(&out).contains(&said) || stdout_of(&out).contains(&said),
+        "{out:?}"
+    );
+    assert_eq!(
+        read(leftover.join("old/projects/work/proj/AGENTS.md")),
+        "older\n"
+    );
+}
+
 #[test]
 fn an_edited_project_skill_folder_is_copied_into_the_mirror() {
     let sandbox = Sandbox::new();

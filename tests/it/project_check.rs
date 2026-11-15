@@ -1,6 +1,6 @@
-//! `skiman check` and `skiman doctor` on the project scope (plan "Rules" and
-//! "Other changes"): `project-path` on the layout of `projects/`, the gate 2
-//! safety rules on every mirror item, and doctor's project section.
+//! `skiman check` and `skiman doctor` on the project scope (project-scope.md
+//! "Rules" and "Other changes"): `project-path` on the layout of `projects/`,
+//! the gate 2 safety rules on every mirror item, and doctor's project section.
 //!
 //! Secret-like fixtures are built at runtime from pieces, so no literal token
 //! is committed (GitHub push protection would block it).
@@ -360,7 +360,7 @@ fn doctor_lists_a_swap_folder_left_in_a_project_and_does_not_count_what_it_holds
     assert_has(
         &stdout,
         &format!(
-            "{} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
+            "{} is left from an earlier `skiman project restore`; the next restore there moves it to a backup",
             leftover.display()
         ),
     );

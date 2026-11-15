@@ -286,6 +286,14 @@ fn prepare(
     let current = Current::read(repo, name).or_else(|_| {
         test_hook::at(name, "read-again");
         let _lock = RepoLock::wait(paths, repo)?;
+        // A replace stopped between its two renames left the path empty and
+        // the new one in tmp; a dry run writes nothing, so it leaves it there.
+        let (tmp, skill) = (staging::list(&repo.tmp_dir()), format!("skills/{name}"));
+        for t in tmp.iter().flatten() {
+            if !dry_run && let Some(line) = staging::finish_swap(t, repo.root(), &skill) {
+                out!("{line}");
+            }
+        }
         Current::read(repo, name)
     })?;
     let mut target = fetch(paths, prompts, name, &current, git_ref)?;
@@ -332,21 +340,27 @@ fn prepare(
 }
 
 /// Whether `ours` already holds this merge, as an update stopped before the
-/// lock leaves it: an old `skills/<name>` (in `.skiman/tmp/`, or, to merge less,
-/// only the newest backup with it and no `upstream/<name>`) merges into `ours`.
+/// lock leaves it: an old `skills/<name>` (in a tmp leftover, here or moved to
+/// a backup, or, to merge less, only the newest backup with it and no
+/// `upstream/<name>`) merges into `ours`.
 /// Merging `ours` again could apply upstream's changes twice.
 fn merged_before(paths: &Paths, repo: &SkillRepo, name: &str, snapshots: [&Snapshot; 3]) -> bool {
     let [base, ours, theirs] = snapshots;
     let skill = Path::new("skills").join(name);
     let backups = staging::list(&paths.state_dir().join("backups")).unwrap_or_default();
-    let backup = backups
-        .into_iter()
-        .map(|b| b.join("repo"))
-        .rfind(|b| b.join(&skill).is_dir());
+    let repos = backups.iter().map(|b| b.join("repo"));
+    let backup = repos.clone().rfind(|b| b.join(&skill).is_dir());
     let backup = backup.filter(|b| !b.join("upstream").join(name).exists());
+    // tmp leftovers, and those a later write command moved to its backup.
+    let moved = repos.flat_map(|b| staging::list(&b.join(".skiman/tmp")).unwrap_or_default());
     let tmp = staging::list(&repo.tmp_dir()).unwrap_or_default();
-    let olds = tmp.iter().flat_map(|t| [t.join("old"), t.join("old/prev")]);
-    olds.chain(backup).map(|dir| dir.join(&skill)).filter(|old| old.is_dir()).any(|old| {
+    // The swap's own fallback leaves `<name>.skiman-prev`; earlier versions left `old/prev`.
+    let prev = format!("{name}{}", staging::PREV);
+    let olds = tmp.into_iter().chain(moved).flat_map(|t| {
+        let (old, earlier) = (t.join("old/skills"), t.join("old/prev"));
+        [old.join(name), old.join(&prev), earlier.join(&skill)]
+    });
+    olds.chain(backup.map(|b| b.join(&skill))).filter(|old| old.is_dir()).any(|old| {
         let again = Snapshot::from_folder(&old).and_then(|old| merge(base, &old, theirs));
         matches!(again, Ok(Outcome::Clean(m)) if with_install_name(name, m.clone()).files == ours.files)
     })

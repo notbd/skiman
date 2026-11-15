@@ -1,8 +1,8 @@
-//! Rules on `projects/`, the mirrors of project items (plan "Rules"):
-//! `project-path` on the layout, and the safety rules on every item. The
-//! skill frontmatter and name rules do not apply: the mirror records what
-//! the tools load, and they load a skill without `name` or `description`, in
-//! a folder of any name.
+//! Rules on `projects/`, the mirrors of project items (project-scope.md
+//! "Rules"): `project-path` on the layout, and the safety rules on every item.
+//! The skill frontmatter and name rules do not apply: the mirror records what
+//! the tools load, and they load a skill without `name` or `description`, in a
+//! folder of any name.
 
 use std::collections::BTreeSet;
 use std::io;

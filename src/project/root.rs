@@ -1,7 +1,7 @@
 //! Project roots: the `[projects.<id>]` tables of `skiman.toml`, resolved and
-//! validated on this machine (plan "Configuration"). `skiman.toml` is edited
-//! by hand and shared between machines, so every command that uses a root
-//! validates it here first.
+//! validated on this machine (project-scope.md "Configuration"). `skiman.toml`
+//! is edited by hand and shared between machines, so every command that uses a
+//! root validates it here first.
 
 use std::path::{Path, PathBuf};
 

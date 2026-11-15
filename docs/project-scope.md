@@ -239,57 +239,82 @@ tree.
 ### Writing: one protocol for every replace
 
 Used by sync row 13, `adopt` and `restore` (`eject` only moves the mirror to a
-backup and drops the synced hash). Every temporary entry lives in a swap
-folder, one per replaced item, on the destination's filesystem:
-`<repo>/.skiman/swap/<ts>/` for the mirror, `<anchor>/.skiman-swap-<ts>/` for
-the project (created with a `.gitignore` holding `*`, so a project repo never
-picks it up). Inside it, `new/` holds the snapshot (step 2), `old/` the
-set-aside copy (step 3), and `target` the destination path.
+backup and drops the synced hash), and by the write commands of the skill
+repo (`src/staging.rs`). Every temporary entry lives in a staging folder on
+the destination's filesystem, one per replace: `<repo>/.skiman/swap/<ts>/`
+for the mirror, `<anchor>/.skiman-swap-<ts>/` for the project (holding a
+`.gitignore` of `*` while it exists, so a project repo never picks it up).
+The new entry is staged at `old/<name>` in it, `<name>` being the item's
+file or folder name: a staging folder serves one replace.
 
 1. Read the source into an in-memory snapshot and run the safety rules on it.
    Its hash becomes the new synced hash; the live source is not re-read.
-2. Write the snapshot into the swap folder. For a file, also place it under
-   a probe name and back, as step 4 places it: on a filesystem with neither
-   a rename that never replaces nor hard links (exFAT) this probe fails, and
-   the destination is left untouched.
-3. If the destination exists, rename it into the swap folder (same
-   filesystem, so it keeps its inode and a late write through an open handle
-   lands in it) and hash it. If it no longer matches what the plan saw, put
-   it back without replacing anything, and report a conflict. A folder that
-   cannot be renamed there (on Linux, one from a lower overlayfs layer)
-   stops the replace before anything moved.
-4. Put the new entry in place without replacing anything: a rename that
-   never replaces (`RENAME_NOREPLACE`); where the filesystem has none, a hard
-   link for a file, and for a folder a `rename` once the name is found free
-   (`rename` never replaces a file or a non-empty folder).
-5. Move the set-aside copy into the backup (`backups/<ts>/repo/projects/…`
-   for mirror content, `backups/<ts>/projects/<id>/…` for project content):
-   a rename, or on another filesystem a copy compared entry by entry, then
-   the set-aside copy deleted. Then hash it again: a different hash means a
-   late write landed there, and is reported with the backup path. Nothing
-   skiman replaces is lost.
-6. Write the new synced hash; remove the swap folder.
+2. Open the staging folder: the tmp leftovers of that place go to the backup
+   first (below). Compare the destination with the plan: one that appeared,
+   disappeared or no longer hashes as the plan saw is a conflict and nothing
+   moves. Write the snapshot into the staging folder. For a file, also place
+   it under a probe name and back, as step 3 places it: on a filesystem with
+   neither a rename that never replaces nor hard links (exFAT) this probe
+   fails, and the destination is left untouched.
+3. Where nothing is, and the plan saw nothing, put the new entry in place
+   without replacing anything: a rename that never replaces
+   (`RENAME_NOREPLACE`); where the filesystem has none, a hard link for a
+   file, and for a folder a `rename` once the name is found free (`rename`
+   never replaces a file or a non-empty folder).
+4. Where the destination exists, the new entry and the destination swap
+   places in one rename (`RENAME_EXCHANGE`, `RENAME_SWAP`), so the path is
+   never empty. What came out is in the staging folder (same filesystem, so
+   it keeps its inode and a late write through an open handle lands in it)
+   and is hashed: if it no longer matches what the plan saw, the two swap
+   back and a conflict is reported. Where the filesystem has no such rename
+   (HFS+, exFAT, NFS), the destination is first renamed to
+   `old/<name>.skiman-prev` and hashed there; changed, it is put back without
+   replacing anything, else the new entry is renamed in. The path is empty
+   in between. Whatever a swap back or a put back leaves in the staging
+   folder (the new entry, or what took its place) is never removed: the
+   conflict says where it is. A folder that cannot be renamed into the
+   staging folder (on Linux, one from a lower overlayfs layer) stops the
+   replace before anything moved.
+5. Move what came out into the backup (`backups/<ts>/repo/projects/…` for
+   mirror content, `backups/<ts>/projects/<id>/…` for project content): a
+   rename, or on another filesystem a copy compared entry by entry, then
+   the set-aside copy deleted. Then fingerprint it again: a different
+   fingerprint means a late write landed there, and is reported with the
+   backup path. Nothing skiman replaces is lost.
+6. Write the new synced hash; remove the staging folder.
 
-A set-aside copy is only renamed while it is in the swap folder: copying and
-deleting it would lose a late write through an open handle. Only its move
-into a backup on another filesystem copies and deletes it (step 5), and a
-write after the comparison is lost (ADR 0005). Failure handling, so an error
-never deletes the only copy:
+A set-aside copy is only renamed while it is in the staging folder: copying
+and deleting it would lose a late write through an open handle. Only its
+move into a backup on another filesystem copies and deletes it (step 5),
+and a write after the comparison is lost (ADR 0005). Failure handling, so
+an error never deletes the only copy:
 
-- "Put back" (step 3) and every undo use the same no-replace placement as
-  step 4. If the original path is taken meanwhile, both versions stay where
-  they are and the command reports both paths.
-- A failure in step 4 puts the set-aside copy back and exits 4.
-- A failure in step 5 keeps the swap folder, exits 4 and reports where the
-  set-aside copy is whole: in the swap folder, or, when a move to another
-  filesystem fails after its copy is complete, in the backup.
-- A swap folder that outlives its command (a failure above, a killed
-  process) is never cleaned up automatically: `doctor` lists it with what it
-  holds, and the next `restore` in that project (or the next mirror write,
-  for `.skiman/swap/`) moves what is in `old/` into a backup first, as in
-  step 5, or leaves it and reports it when that fails. `new/` is
-  deleted, never backed up: it is a copy of a source that still exists, or a
-  second link to an entry already in place.
+- Swapping back is a second swap of the same two: what came out goes back,
+  and whatever was at the path then (the new entry, or what took its place)
+  comes out into the staging folder and stays there. Putting back, without
+  a swapping rename, uses the same no-replace placement as step 3: if the
+  original path is taken meanwhile, both versions stay where they are and
+  the command reports both paths.
+- A second rename in step 4 that fails leaves both versions in the staging
+  folder, exits 4 and says where each is.
+- A failure in step 5 keeps the staging folder, exits 4 and reports where
+  the set-aside copy is: in the staging folder, or, when a move to another
+  filesystem fails after its copy is complete, in the backup, with what is
+  left of it to delete.
+- A staging folder that outlives its command (a failure above, a swap back, a
+  killed process) is a tmp leftover. `doctor` lists it, and the next command
+  that replaces something in that place (`restore`, or for `.skiman/swap/` any
+  mirror write), once per command, first finishes a move into a backup cut short
+  inside it (what is left is deleted; the complete copy stays where that move
+  made it), then moves it whole to the backup
+  (`backups/<ts>/projects/<id>/<anchor>/`, `backups/<ts>/repo/.skiman/swap/`);
+  empty folders and a `.gitignore` alone are dropped. One that cannot be moved
+  stays where it is, the command says so, and the replace goes on. Nothing in a
+  leftover is put back: a replace killed between the two renames of step 4
+  leaves the path empty. `adopt` or `restore` run again writes the item from its
+  source, as it is then, like one that never ran; `sync` reports the empty side
+  instead: row 11 after a killed `adopt` or `sync` (the mirror is empty), row 10
+  after a killed `restore` (the project is).
 
 ### Commands
 
@@ -352,7 +377,7 @@ locks, staging, backups under machine state.
 - `doctor`: per root, whether it is valid, item count, every item not in
   step with its fix, managed items now tracked by a project repo, how many
   candidates are not adopted yet, how many items exist only in the mirror
-  (row 7), leftover swap folders, mirror paths git ignores, and whether
+  (row 7), leftover staging folders, mirror paths git ignores, and whether
   `projects/` has uncommitted changes (skiman never commits; mirror changes
   are committed by the user like any other change).
 - Ownership: a tool-directory link whose realpath is a managed project skill
@@ -417,7 +442,7 @@ locks, staging, backups under machine state.
 6. Restore: missing items under a folder; exact-path replace with the old
    project content in a backup; nothing replaced under a folder; a path the
    project repo tracks is not written; a failing step 4 or 5 keeps the
-   original; leftover swap folder handling; a folder restore does not undo a
+   original; leftover staging folder handling; a folder restore does not undo a
    deletion; every project command refuses during a skill repo merge.
 7. Eject: item, folder, root (table removed), with mirror or project gone.
 8. Check: `project-path`, `skill_dirs` values, the gate 2 rules (a skill

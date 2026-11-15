@@ -1,6 +1,6 @@
-//! Discovery (plan "Discovery"): every project item candidate under a root,
-//! found with `read_dir` and `lstat`, never following a symlink. Used by
-//! `project adopt` and `doctor`; sync never walks the roots.
+//! Discovery (project-scope.md "Discovery"): every project item candidate under
+//! a root, found with `read_dir` and `lstat`, never following a symlink. Used
+//! by `project adopt` and `doctor`; sync never walks the roots.
 
 use std::path::{Path, PathBuf};
 
@@ -8,9 +8,9 @@ use super::git::is_linked_worktree;
 use super::item::Item;
 use super::pattern::Kind;
 use super::root::Root;
-use super::swap::PROJECT_PREFIX;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
+use crate::staging::PROJECT_PREFIX;
 
 /// Folder names discovery never enters, at any depth.
 const SKIPPED_NAMES: &[&str] = &[".git", "node_modules"];
@@ -19,7 +19,7 @@ const SKIPPED_NAMES: &[&str] = &[".git", "node_modules"];
 pub struct Discovery {
     /// Items found on disk: regular files and real skill folders, in path order.
     pub items: Vec<Item>,
-    /// Project-side swap folders left by an interrupted write.
+    /// Project-side staging folders left by an earlier write.
     pub swap_leftovers: Vec<PathBuf>,
     /// Folders that could not be read, with the error.
     pub errors: Vec<String>,

@@ -2,6 +2,7 @@
 //! never replaces, lexical paths, and the check that a write's parent
 //! folders are real folders.
 
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
@@ -13,6 +14,7 @@ use rustix::io::Errno;
 
 use crate::failure::Failure;
 use crate::snapshot::SnapshotFile;
+use crate::test_hook;
 
 /// Creates a new entry next to `path` (same directory, so a rename stays on
 /// one filesystem) with `create`, which fails with `AlreadyExists` when the
@@ -255,6 +257,11 @@ pub fn remove_empty_dirs(dir: &Path) {
     }
 }
 
+/// Removes the entry at `path`, a folder with all it holds, a link as a link.
+pub fn remove_entry(path: &Path) {
+    let _ = std::fs::remove_dir_all(path).or_else(|_| std::fs::remove_file(path));
+}
+
 /// Every entry at or below `path`, parents before what they hold, never
 /// following symlinks.
 pub fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {
@@ -342,14 +349,71 @@ pub fn rewrite_atomic(
     replace_atomic(path, contents, 0o600, Some(permissions), true)
 }
 
-/// Points skiman's own link `link` at `target`: creates the new link under a
-/// temporary name in the same directory, then renames it over `link`. The
-/// rename replaces whatever is at `link`, so it is only for a link skiman owns.
-pub fn retarget_symlink(target: &Path, link: &Path) -> io::Result<()> {
-    let (tmp, ()) = create_temporary_sibling(link, |tmp| std::os::unix::fs::symlink(target, tmp))?;
-    std::fs::rename(&tmp, link).inspect_err(|_| {
-        let _ = std::fs::remove_file(&tmp);
-    })
+/// Takes skiman's own link at `link` (in the folder whose realpath is
+/// `real_dir`, pointing at `was`) away, and nothing else, then links `link`
+/// to `to` when given. With `to`, a new link swaps places with it in one
+/// rename ([`exchange`]), so `link` is never missing; elsewhere it is
+/// renamed to a temporary name beside it, missing until the new link is
+/// made. Either way what came out is removed only if it still points at
+/// `was`, else it goes back; what that brings out is removed only if it is
+/// the new link, else it stays under the temporary name and the error says
+/// where. `false` when it was not that link. Killed in between, it leaves
+/// the link under the temporary name ([`temporary_of`]).
+pub fn relink(link: &Path, real_dir: &Path, was: &Path, to: Option<&Path>) -> io::Result<bool> {
+    let ours =
+        |out: &Path| std::fs::read_link(out).is_ok_and(|t| absolute_lexical(real_dir, &t) == was);
+    let kept = |out: &Path| {
+        let message = format!("what was there is at {}", out.display());
+        move |e: io::Error| io::Error::new(e.kind(), format!("{e}; {message}"))
+    };
+    test_hook::at("link", &format!("take:{}", link.display()));
+    if let Some(to) = to {
+        let (new, ()) = create_temporary_sibling(link, |tmp| std::os::unix::fs::symlink(to, tmp))?;
+        match exchange(&new, link) {
+            Ok(()) => {
+                test_hook::at("link", &format!("aside:{}", link.display()));
+                let back = !ours(&new);
+                if back {
+                    exchange(&new, link).map_err(kept(&new))?;
+                }
+                // Swapped back, what came out may be what took its place.
+                if back && !std::fs::read_link(&new).is_ok_and(|t| t == to) {
+                    let changed = format!("{} changed as it was relinked", link.display());
+                    return Err(kept(&new)(io::Error::other(changed)));
+                }
+                return std::fs::remove_file(&new).map(|()| !back);
+            }
+            Err(e) => {
+                std::fs::remove_file(&new)?;
+                if e.kind() != io::ErrorKind::Unsupported {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    let (aside, ()) = create_temporary_sibling(link, |tmp| place_new(link, tmp))?;
+    test_hook::at("link", &format!("aside:{}", link.display()));
+    if !ours(&aside) {
+        return place_new(&aside, link)
+            .map(|()| false)
+            .map_err(kept(&aside));
+    }
+    std::fs::remove_file(&aside)?;
+    to.map_or(Ok(()), |to| std::os::unix::fs::symlink(to, link))
+        .map(|()| true)
+}
+
+/// The name whose temporary sibling ([`create_temporary_sibling`]) `name`
+/// is: `.<name>.skiman-tmp-<pid>`, maybe with `-<retry>`, nested to any depth.
+pub fn temporary_of(name: &OsStr) -> Option<&OsStr> {
+    let (name, tail) = name
+        .to_str()?
+        .strip_prefix('.')?
+        .rsplit_once(".skiman-tmp-")?;
+    let (pid, retry) = tail.split_once('-').unwrap_or((tail, "0"));
+    let number = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let name = OsStr::new(name);
+    (number(pid) && number(retry) && !name.is_empty()).then(|| temporary_of(name).unwrap_or(name))
 }
 
 /// Makes `path` absolute against `base` and normalises it lexically: `.` is
@@ -551,20 +615,40 @@ mod tests {
     }
 
     #[test]
-    fn retarget_symlink_leaves_an_entry_under_its_temporary_name_alone() {
+    fn an_own_link_that_became_something_else_is_put_back_not_removed() {
         let (_temp, dir) = root();
         let link = dir.join("notes");
-        let victim = dir.join("victim");
-        std::fs::write(&victim, "user original").unwrap();
-        let planted = plant_link(&link, &victim);
+        let old = Path::new("/skills/old");
+        std::fs::write(&link, "user file").unwrap();
 
-        retarget_symlink(Path::new("/skills/notes"), &link).unwrap();
+        assert!(!relink(&link, &dir, old, None).unwrap());
+        assert_eq!(std::fs::read_to_string(&link).unwrap(), "user file");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
 
-        assert_eq!(std::fs::read_link(&planted).unwrap(), victim);
-        assert_eq!(
-            std::fs::read_link(&link).unwrap(),
-            Path::new("/skills/notes")
-        );
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink("../../skills/old", &link).unwrap();
+        let new = Path::new("/skills/notes");
+        assert!(relink(&link, Path::new("/a/b"), old, Some(new)).unwrap());
+        assert_eq!(std::fs::read_link(&link).unwrap(), new);
+        // Swapped out and found to be another link: it goes back.
+        assert!(!relink(&link, &dir, old, Some(Path::new("/elsewhere"))).unwrap());
+        assert_eq!(std::fs::read_link(&link).unwrap(), new);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        let aside = format!(".notes.skiman-tmp-{}-3", std::process::id());
+        assert_eq!(temporary_of(OsStr::new(&aside)), Some(OsStr::new("notes")));
+        assert_eq!(temporary_of(OsStr::new(".notes.skiman-tmp-x")), None);
+        // A sync killed again while it took the left link aside.
+        let twice = OsStr::new("..notes.skiman-tmp-7.skiman-tmp-8-1");
+        assert_eq!(temporary_of(twice), Some(OsStr::new("notes")));
+        for odd in [
+            ".notes.skiman-tmp-",
+            ".notes.skiman-tmp-1-",
+            ".notes.skiman-tmp-1-2-3",
+            // No name left: not the sibling of any entry.
+            "..skiman-tmp-1",
+        ] {
+            assert_eq!(temporary_of(OsStr::new(odd)), None, "{odd}");
+        }
     }
 
     #[test]

@@ -86,7 +86,7 @@ fn overview() -> Result<Exit, Failure> {
         let installed = info
             .installed
             .clone()
-            .or_else(|| first_commit_day(repo.root(), &name).map(|day| format!("{day} (git)")));
+            .or_else(|| install_commit_day(repo.root(), &name).map(|day| format!("{day} (git)")));
         let row = [
             name.clone(),
             or_dash(info.summary.clone()),
@@ -126,8 +126,8 @@ fn overview() -> Result<Exit, Failure> {
             "-".to_owned(),
         ]],
     );
-    out!("## Managed elsewhere ({})\n", found.skills.len());
-    out!("skiman only lists these; it never changes them.\n");
+    out!("## Not managed by skiman ({})\n", found.skills.len());
+    out!("skiman lists these here and never changes them.\n");
     if !found.skills.is_empty() {
         let rows: Vec<[String; 4]> = found
             .skills
@@ -157,12 +157,22 @@ fn elsewhere_row(skill: &OutsideSkill, home: &Path) -> [String; 4] {
 }
 
 /// The day (`YYYY-MM-DD`) of the latest commit that added
-/// `skills/<name>/SKILL.md` (a skill removed and installed again counts
-/// from its last install), following renames; `None` when the skill repo is
+/// `skills/<name>/SKILL.md`, or created it as a copy of another file (a
+/// skill removed and installed again counts from its last install),
+/// following renames; `None` when the skill repo is
 /// not in a git repo or the file was never committed.
-fn first_commit_day(root: &Path, name: &str) -> Option<String> {
+fn install_commit_day(root: &Path, name: &str) -> Option<String> {
     let output = git::query_command(root)
-        .args(["log", "--follow", "--diff-filter=A", "--format=%as", "--"])
+        // `--follow` sees a skill adapted from another as a copy (C) of it:
+        // that commit is the skill's add. No signature lines before the day.
+        .args([
+            "log",
+            "--follow",
+            "--diff-filter=AC",
+            "--no-show-signature",
+            "--format=%as",
+            "--",
+        ])
         .arg(format!("skills/{name}/SKILL.md"))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -172,7 +182,16 @@ fn first_commit_day(root: &Path, name: &str) -> Option<String> {
         return None;
     }
     let days = String::from_utf8(output.stdout).ok()?;
-    days.lines().next().map(str::to_owned)
+    let day = days.lines().next()?;
+    let is_day = day.len() == 10
+        && day.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        });
+    is_day.then(|| day.to_owned())
 }
 
 fn or_dash(value: Option<String>) -> String {

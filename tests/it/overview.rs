@@ -149,9 +149,9 @@ fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
 | --- | --- | --- | --- | --- | --- | --- |
 | managing-skills | How to change skills and global instructions with skiman | built-in | skiman [..] | - | yes | - |
 
-## Managed elsewhere (6)
+## Not managed by skiman (6)
 
-skiman only lists these; it never changes them.
+skiman lists these here and never changes them.
 
 | Skill | Managed by | Location | Read by |
 | --- | --- | --- | --- |
@@ -195,11 +195,15 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     // An unreadable entry is named; the others are still listed.
     let plugin = sandbox.home().join("kit");
     write(plugin.join("skills/tdd/SKILL.md"), skill_md("tdd"));
+    // A plugin that is one skill: SKILL.md at its root, nothing listed.
+    let solo = sandbox.home().join("solo/2.0");
+    write(solo.join("SKILL.md"), skill_md("solo"));
     write(
         &registry,
         format!(
-            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}]}}}}"#,
-            plugin.display()
+            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}], "solo@market": [{{"installPath": "{}"}}]}}}}"#,
+            plugin.display(),
+            solo.display()
         ),
     );
     write(
@@ -209,6 +213,7 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     let stdout = overview();
     assert!(
         stdout.contains("The entry of plugin bad@market in ")
+            && stdout.contains("| solo | Claude Code plugin solo@market | ~/solo/2.0 | claude-code |")
             && stdout.contains(
                 "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/kit/skills/tdd | claude-code |"
             ),
@@ -237,6 +242,34 @@ fn a_renamed_skill_keeps_the_day_its_first_name_was_committed() {
     let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
     assert!(
         stdout.contains("| journal | - | own | - | 2026-02-03 (git) | yes | - |"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn a_skill_adapted_from_another_shows_the_day_it_was_added() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let body: String = (1..=40)
+        .map(|i| format!("Step {i} of the routine.\n"))
+        .collect();
+    let repo = sandbox.skill_repo();
+    write(
+        repo.join("skills/alpha/SKILL.md"),
+        format!("---\nname: alpha\ndescription: d\n---\n\n{body}"),
+    );
+    commit_on(&sandbox, "2026-01-05");
+    write(
+        repo.join("skills/zeta/SKILL.md"),
+        format!("---\nname: zeta\ndescription: d\n---\n\n{body}One more step.\n"),
+    );
+    commit_on(&sandbox, "2026-06-20");
+
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("| zeta | - | own | - | 2026-06-20 (git) | yes | - |")
+            && stdout.contains("| alpha | - | own | - | 2026-01-05 (git) | yes | - |"),
         "{stdout}"
     );
 }

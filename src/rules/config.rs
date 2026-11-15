@@ -228,6 +228,11 @@ impl Records {
         })
     }
 
+    /// Whether `skiman.toml` parsed.
+    pub fn manifest_parsed(&self) -> bool {
+        self.manifest.doc.is_some()
+    }
+
     /// Whether both files parsed, so Consistency can be decided.
     pub fn parsed(&self) -> bool {
         self.manifest.doc.is_some() && self.lock.doc.is_some()

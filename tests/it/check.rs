@@ -663,3 +663,19 @@ warning: skills/docx/SKILL.md:1: frontmatter: the frontmatter must start on line
 "#]]);
     assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
 }
+
+#[test]
+fn a_skiman_toml_that_does_not_parse_gives_no_skill_info_warning() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.pdf\nsummary = \"Fill PDF forms\"\n",
+    );
+
+    let output = check(&sandbox).code(1);
+    let stderr = String::from_utf8(output.get_output().stderr.clone()).unwrap();
+    assert!(!stderr.contains("skill-info"), "{stderr}");
+}

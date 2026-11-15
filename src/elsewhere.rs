@@ -55,14 +55,15 @@ pub fn find(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) -> Found {
             match *place {
                 SkillsElsewhere::Folders { dir, depth, owner } => {
                     for folder in skill_folders(&home.join(dir), depth) {
-                        found.add(&folder, owner, tool.id, false);
+                        found.add(&folder, None, owner, tool.id, false);
                     }
                 }
                 SkillsElsewhere::ClaudePlugins { registry, settings } => {
                     let turned_off = turned_off_plugins(&home.join(settings));
                     let registry = home.join(registry);
-                    for (owner, folder) in plugin_skills(&registry, &turned_off, &mut found.notes) {
-                        found.add(&folder, &owner, tool.id, false);
+                    for skill in plugin_skills(&registry, &turned_off, &mut found.notes) {
+                        let name = skill.name.as_deref();
+                        found.add(&skill.folder, name, &skill.owner, tool.id, false);
                     }
                 }
             }
@@ -95,7 +96,7 @@ pub fn find(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) -> Found {
             // A managed-elsewhere folder that is not itself a skill (claude.ai's
             // `synced`) is listed through its place, if at all.
             if entry.path().join("SKILL.md").is_file() {
-                found.add(&entry.path(), owner, tool.id, true);
+                found.add(&entry.path(), None, owner, tool.id, true);
             }
         }
     }
@@ -112,14 +113,25 @@ impl Collected {
     /// Records the skill folder at `path` (any link resolved) as read by
     /// `tool`. A folder seen before keeps its owner, except that a place's
     /// owner replaces the vaguer one of a tool-directory entry.
-    fn add(&mut self, path: &Path, owner: &str, tool: &'static str, from_tool_dir: bool) {
+    /// `name` is the skill's name; `None` takes the folder's.
+    fn add(
+        &mut self,
+        path: &Path,
+        name: Option<&str>,
+        owner: &str,
+        tool: &'static str,
+        from_tool_dir: bool,
+    ) {
         let Ok(location) = path.canonicalize() else {
             return;
         };
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let name = match name {
+            Some(name) => name.to_owned(),
+            None => path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
         let skill = self
             .by_location
             .entry(location.clone())
@@ -185,14 +197,23 @@ fn sorted_children(dir: &Path) -> Vec<PathBuf> {
     children
 }
 
-/// `(owner, skill folder)` for every skill of every plugin in Claude Code's
+/// One skill of a Claude Code plugin.
+struct PluginSkill {
+    owner: String,
+    folder: PathBuf,
+    /// The plugin's name for a skill at the plugin's root, whose folder is
+    /// named after the version; `None` takes the folder's name.
+    name: Option<String>,
+}
+
+/// Every skill of every plugin in Claude Code's
 /// plugin registry (`installed_plugins.json`, version 2). A missing registry
 /// lists nothing; what cannot be read adds a note, and the rest is listed.
 fn plugin_skills(
     registry: &Path,
     turned_off: &[String],
     notes: &mut Vec<String>,
-) -> Vec<(String, PathBuf)> {
+) -> Vec<PluginSkill> {
     let text = match std::fs::read(registry) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -245,7 +266,13 @@ fn plugin_skills(
                 owner.push_str(" (disabled)");
             }
             let (folders, problems) = plugin_skill_folders(Path::new(dir));
-            skills.extend(folders.into_iter().map(|f| (owner.clone(), f)));
+            let root = Path::new(dir).canonicalize().ok();
+            let plugin_name = plugin.split('@').next().unwrap_or(plugin);
+            skills.extend(folders.into_iter().map(|folder| PluginSkill {
+                name: (Some(&folder) == root.as_ref()).then(|| plugin_name.to_owned()),
+                owner: owner.clone(),
+                folder,
+            }));
             notes.extend(problems.into_iter().map(|p| format!("{owner}: {p}.")));
         }
     }
@@ -286,23 +313,36 @@ fn plugin_skill_folders(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
     };
     let manifest = root.join(".claude-plugin/plugin.json");
     let mut listed = vec!["skills".to_owned()];
+    // Whether plugin.json has a `skills` key, of any value.
+    let mut has_skills_key = false;
     match std::fs::read(&manifest) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => problems.push(format!("cannot read {}: {e}", manifest.display())),
         Ok(text) => match serde_json::from_slice::<Value>(&text) {
             Err(e) => problems.push(format!("{} is not valid JSON: {e}", manifest.display())),
-            Ok(value) => match value.get("skills") {
-                None => {}
-                Some(Value::String(path)) => listed.push(path.clone()),
-                Some(Value::Array(paths)) => {
-                    listed.extend(paths.iter().filter_map(|p| p.as_str().map(str::to_owned)))
+            Ok(value) => {
+                has_skills_key = value.get("skills").is_some();
+                match value.get("skills") {
+                    None => {}
+                    Some(Value::String(path)) => listed.push(path.clone()),
+                    Some(Value::Array(paths)) => {
+                        listed.extend(paths.iter().filter_map(|p| p.as_str().map(str::to_owned)))
+                    }
+                    Some(_) => problems.push(format!(
+                        "`skills` in {} is neither a path nor a list of paths",
+                        manifest.display()
+                    )),
                 }
-                Some(_) => problems.push(format!(
-                    "`skills` in {} is neither a path nor a list of paths",
-                    manifest.display()
-                )),
-            },
+            }
         },
+    }
+    // A plugin with a SKILL.md at its root, no `skills` folder and no
+    // `skills` key is one skill.
+    if !has_skills_key
+        && root.join("SKILL.md").is_file()
+        && root.join("skills").symlink_metadata().is_err()
+    {
+        return (vec![root], problems);
     }
     let inside = |path: &Path| {
         path.canonicalize()

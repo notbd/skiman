@@ -14,6 +14,11 @@ use crate::tree::{Kind, Tree};
 pub fn gaps(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     let records = Records::read(tree)?;
     let mut out = Vec::new();
+    // A `skiman.toml` that does not parse is a violation already; every
+    // skill would look as if it had none of the keys.
+    if !records.manifest_parsed() {
+        return Ok(out);
+    }
     for name in folder_names(tree, "skills")? {
         if tree.kind(&format!("skills/{name}"))? != Some(Kind::Dir) {
             continue;

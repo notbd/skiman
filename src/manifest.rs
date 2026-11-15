@@ -85,7 +85,9 @@ impl Manifest {
         let text = |key| {
             field(key)
                 .and_then(Item::as_str)
-                .map(|s| s.trim().to_owned())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_owned)
         };
         SkillInfo {
             summary: text("summary"),

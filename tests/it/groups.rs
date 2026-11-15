@@ -367,6 +367,18 @@ fn a_third_party_skill_in_a_group_is_listed_diffed_and_removed() {
 
 "#]]);
 
+    // A move to another group keeps the snapshot, and says nothing about it.
+    skiman(&sandbox, &["mv", "pdf", "--group", "forms"])
+        .code(0)
+        .stderr_eq("")
+        .stdout_eq(str![[r#"
+renamed [..]/skill-repo/skills/documents/pdf to [..]/skill-repo/skills/forms/pdf
+removed the empty group folder [..]/skill-repo/skills/documents
+retargeted [..]
+...
+"#]]);
+    skiman(&sandbox, &["mv", "pdf", "--group", "documents"]).code(0);
+
     skiman(&sandbox, &["remove", "pdf", "--yes"]).code(0);
     assert!(!repo.join("skills/documents").exists());
     assert!(!repo.join("upstream/pdf").exists());

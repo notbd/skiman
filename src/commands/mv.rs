@@ -241,9 +241,13 @@ impl Plan {
                 files.push((rel.to_owned(), text.clone().into_bytes()));
             }
         }
+        let mut replaced = vec![self.from.clone()];
+        if self.has_upstream {
+            replaced.push(upstream(&self.old));
+        }
         let candidate = Overlay::new(&working_tree, files)
             .with_executable(executable)
-            .replacing(vec![self.from.clone(), upstream(&self.old)]);
+            .replacing(replaced);
         rules::validate_write(&candidate, &Scope::default())
     }
 

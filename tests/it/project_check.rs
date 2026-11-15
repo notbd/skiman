@@ -1,6 +1,6 @@
-//! `skiman check` and `skiman doctor` on the project scope (plan "Rules" and
-//! "Other changes"): `project-path` on the layout of `projects/`, the gate 2
-//! safety rules on every mirror item, and doctor's project section.
+//! `skiman check` and `skiman doctor` on the project scope (project-scope.md
+//! "Rules" and "Other changes"): `project-path` on the layout of `projects/`,
+//! the gate 2 safety rules on every mirror item, and doctor's project section.
 //!
 //! Secret-like fixtures are built at runtime from pieces, so no literal token
 //! is committed (GitHub push protection would block it).

@@ -1,6 +1,6 @@
-//! `skiman project add|adopt|restore|eject` (plan "Commands"). One rule for
-//! all of them: a command given a folder never replaces existing content or
-//! undoes a local deletion on either side; that needs the item's exact path.
+//! `skiman project add|adopt|restore|eject` (project-scope.md "Commands"). One
+//! rule for all four: a command given a folder never replaces existing content
+//! or undoes a local deletion on either side; that needs the item's exact path.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

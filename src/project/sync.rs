@@ -1,7 +1,7 @@
-//! The project part of `skiman sync` (plan "Sync: the state table"): per
-//! mirror item and per synced-hash entry, never by walking the roots. Sync
-//! writes only the mirror (row 13) and machine state; it never writes a
-//! project folder and never spawns git.
+//! The project part of `skiman sync` (project-scope.md "Sync: the state
+//! table"): per mirror item and per synced-hash entry, never by walking the
+//! roots. Sync writes only the mirror (row 13) and machine state; it never
+//! writes a project folder and never spawns git.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

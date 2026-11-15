@@ -79,7 +79,7 @@ impl Ownership {
             }
         }
         // Skills under a project root's `skill_dirs` reach the tools through
-        // links another manager keeps (plan "Configuration").
+        // links another manager keeps (project-scope.md "Configuration").
         managed_under.extend(configured_skill_dirs(home, repo, manifest));
         Ownership {
             skills_dir: repo.skills_dir(),

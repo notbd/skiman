@@ -1,7 +1,7 @@
 //! Machine state: the synced hash of every project item, in
-//! `<state dir>/projects-synced.toml` (plan "Mirror layout and machine
-//! state"). Per root id: the root's realpath, and per item its kind and the
-//! content hash both sides had when skiman last saw them equal.
+//! `<state dir>/projects-synced.toml` (project-scope.md "Mirror layout and
+//! machine state"). Per root id: the root's realpath, and per item its kind and
+//! the content hash both sides had when skiman last saw them equal.
 //!
 //! ```toml
 //! [work]

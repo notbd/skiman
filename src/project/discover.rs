@@ -1,6 +1,6 @@
-//! Discovery (plan "Discovery"): every project item candidate under a root,
-//! found with `read_dir` and `lstat`, never following a symlink. Used by
-//! `project adopt` and `doctor`; sync never walks the roots.
+//! Discovery (project-scope.md "Discovery"): every project item candidate under
+//! a root, found with `read_dir` and `lstat`, never following a symlink. Used
+//! by `project adopt` and `doctor`; sync never walks the roots.
 
 use std::path::{Path, PathBuf};
 

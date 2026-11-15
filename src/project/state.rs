@@ -1,6 +1,6 @@
-//! The state table (plan "Sync: the state table"), rows 4 to 15, for one
-//! item, and the words every command uses for each state. Rows 1 to 3 (the
-//! skill repo mid-operation, an unusable root, a mirror path with no item
+//! The state table (project-scope.md "Sync: the state table"), rows 4 to 15,
+//! for one item, and the words every command uses for each state. Rows 1 to 3
+//! (the skill repo mid-operation, an unusable root, a mirror path with no item
 //! shape) are decided by the callers before an item is classified. Sync,
 //! `adopt`, `restore` and `doctor` all call [`classify`], so every command
 //! agrees on what an item's state is and how to settle it.

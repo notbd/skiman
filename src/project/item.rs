@@ -1,6 +1,6 @@
-//! Project items and the mirror tree (plan "Mirror layout"): `<root>/<rel>` on
-//! disk pairs with `projects/<id>/<rel>` in the skill repo, so the mirror
-//! tree is the only record of what is managed.
+//! Project items and the mirror tree (project-scope.md "Mirror layout"):
+//! `<root>/<rel>` on disk pairs with `projects/<id>/<rel>` in the skill repo,
+//! so the mirror tree is the only record of what is managed.
 
 use std::path::PathBuf;
 

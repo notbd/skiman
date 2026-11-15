@@ -1,8 +1,9 @@
-//! `skiman project restore` and `skiman project eject` (plan "Commands",
-//! "Writing: one protocol for every replace"). Restore under a folder writes
-//! only what this machine never had; named exactly it also replaces, with
-//! the project's version in `backups/*/projects/<id>/...`. Eject moves the
-//! mirror to `backups/*/repo/projects/...` and never touches the project.
+//! `skiman project restore` and `skiman project eject` (project-scope.md
+//! "Commands", "Writing: one protocol for every replace"). Restore under a
+//! folder writes only what this machine never had; named exactly it also
+//! replaces, with the project's version in `backups/*/projects/<id>/...`. Eject
+//! moves the mirror to `backups/*/repo/projects/...` and never touches the
+//! project.
 
 use std::path::{Path, PathBuf};
 

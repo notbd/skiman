@@ -10,7 +10,9 @@
 //!   secret violations in a list.
 //!
 //! [`warnings_all`] returns what is printed as a warning but never fails:
-//! the shared body at 80 % of its size limit.
+//! the shared body at 80 % of its size limit. [`missing_info`] returns the
+//! skills without a summary, group or origin, which only `skiman check`
+//! prints (every write command prints [`warnings_all`]).
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
 //! of content about to be written, or another snapshot.
@@ -22,6 +24,7 @@ mod project;
 mod secrets;
 mod shared_body;
 mod skill;
+mod skill_info;
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -35,6 +38,7 @@ use crate::tree::{Kind, Tree};
 pub use config::{LOCKFILE, MANIFEST};
 pub use secrets::AllowEntry;
 pub use skill::{CONFLICT_MARKERS, CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR};
+pub use skill_info::gaps as missing_info;
 
 /// Rule ids, printed with every violation.
 pub mod rule {
@@ -69,6 +73,9 @@ pub mod rule {
     /// The only rule that exits 3: a source table, lock entry or upstream
     /// snapshot whose skill folder is gone.
     pub const LEFTOVER_RECORD: &str = "leftover-record";
+    /// A skill without a summary, group or origin: a warning that only
+    /// `skiman check` prints, never a violation.
+    pub const SKILL_INFO: &str = "skill-info";
 }
 
 /// The frontmatter rules on a skill's `SKILL.md`.

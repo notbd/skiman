@@ -28,6 +28,12 @@ fn repo() -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
     write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
+    // What a person reads about the skill, so `skiman check` warns of nothing.
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\ngroup = \"documents\"\norigin = \"written here\"\n",
+    );
     sandbox
 }
 

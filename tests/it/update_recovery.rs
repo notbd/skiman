@@ -571,6 +571,11 @@ fn an_update_killed_at_any_step_finishes_when_run_again() {
 /// upstream version that adds one more of them; returns the update's
 /// arguments.
 fn pdf_with_repeated_lines(sandbox: &Sandbox) -> Vec<String> {
+    pdf_with_repeated_lines_in(sandbox, None)
+}
+
+/// [`pdf_with_repeated_lines`], with `pdf` in the group folder `group`.
+fn pdf_with_repeated_lines_in(sandbox: &Sandbox, group: Option<&str>) -> Vec<String> {
     let text = |lines: &[&str]| lines.iter().map(|l| format!("{l}\n")).collect::<String>();
     init(sandbox);
     let up = sandbox.upstream("acme/pdf");
@@ -580,13 +585,15 @@ fn pdf_with_repeated_lines(sandbox: &Sandbox) -> Vec<String> {
     )
     .write("reference.md", text(&["c", "}", "c", "", "}", "}", "}"]));
     up.commit("v1");
-    sandbox
-        .skiman()
-        .args(["add", "acme/pdf", "--yes"])
-        .assert()
-        .code(0);
+    let mut args = vec!["add", "acme/pdf", "--yes"];
+    args.extend(group.iter().flat_map(|group| ["--group", group]));
+    sandbox.skiman().args(args).assert().code(0);
+    let skill = match group {
+        Some(group) => format!("skills/{group}/pdf"),
+        None => "skills/pdf".to_owned(),
+    };
     let local = text(&["c", "}", "- item", "}", "}"]);
-    write(sandbox.skill_repo().join("skills/pdf/reference.md"), local);
+    write(sandbox.skill_repo().join(skill).join("reference.md"), local);
     up.write(
         "reference.md",
         text(&["c", "}", "c", "", "}", "}", "}", "}"]),
@@ -656,4 +663,78 @@ fn an_update_stopped_before_the_lock_does_not_merge_again() {
     moved.skiman().args(new).assert().code(0);
     moved.skiman().args(&args).assert().code(0);
     assert_eq!(final_state(&moved), final_state(&never));
+}
+
+/// The same for a skill in a group folder: killed at each write, or stopped
+/// with what it swapped out still in `.skiman/tmp/` (`old/skills/<group>/<name>`),
+/// the update run again finds the old folder and does not merge again.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_update_of_a_grouped_skill_stopped_before_the_lock_does_not_merge_again() {
+    let grouped = |sandbox: &Sandbox| pdf_with_repeated_lines_in(sandbox, Some("documents"));
+    assert_each_kill_finishes(
+        grouped,
+        &[
+            "update:write:skills/documents/pdf",
+            "update:write:skiman.lock",
+            "update:write:upstream/pdf",
+        ],
+    );
+
+    let (never, stopped) = (Sandbox::new(), Sandbox::new());
+    let args = grouped(&never);
+    never.skiman().args(&args).assert().code(0);
+    grouped(&stopped);
+    let chmod = "chmod 555 \"$XDG_STATE_HOME\"/skiman/backups/*";
+    let at = "update:write:skills/documents/pdf";
+    update_with_hook(&stopped, &["pdf"], at, chmod).code(4);
+    stopped.skiman().args(&args).assert().code(0);
+    assert_eq!(final_state(&stopped), final_state(&never));
+}
+
+/// What a replace stopped between its two renames left for a skill folder in
+/// one group is never put back once the skill sits in another: `mv` moves
+/// every tmp leftover to the backup before it moves the folder, and update
+/// looks for a set-aside skill only when the skill is in no folder at all.
+#[test]
+fn a_leftover_of_another_group_is_never_put_back() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    installed(&sandbox, "pdf");
+    let repo = sandbox.skill_repo();
+    let stopped = |group: &str| {
+        let old = repo.join(format!(".skiman/tmp/stopped-{group}/old/skills/{group}"));
+        write(old.join("pdf/SKILL.md"), "the new one\n");
+        write(old.join("pdf.skiman-prev/SKILL.md"), "the old one\n");
+    };
+    let mv = |group: &str| {
+        let args = ["mv", "pdf", "--group", group];
+        sandbox.skiman().args(args).assert().code(0);
+    };
+    mv("a");
+    let pdf = tree(repo.join("skills/a/pdf"));
+
+    // A leftover for `skills/b/pdf`: the move to `b` puts pdf's own folder there.
+    stopped("b");
+    mv("b");
+    assert_eq!(tree(repo.join("skills/b/pdf")), pdf);
+    assert!(!repo.join(".skiman/tmp/stopped-b").exists());
+
+    // A leftover for `skills/a/pdf`, with `a` still a group folder: an update
+    // that cannot read pdf's records refuses and puts nothing in `a`.
+    sandbox
+        .skiman()
+        .args(["new", "notes", "-d", "Take notes", "--group", "a"])
+        .assert()
+        .code(0);
+    stopped("a");
+    let lock = repo.join("skiman.lock");
+    std::fs::write(&lock, read(&lock).replace("[skills.pdf]", "[skills.gone]")).unwrap();
+    sandbox.skiman().args(["update", "pdf"]).assert().code(1);
+    assert!(!repo.join("skills/a/pdf").exists());
+    assert_eq!(tree(repo.join("skills/b/pdf")), pdf);
+    assert!(repo.join(".skiman/tmp/stopped-a/old/skills/a/pdf").is_dir());
 }

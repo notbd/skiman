@@ -75,15 +75,20 @@ fn a_clean_skill_repo_passes_check_with_no_output() {
     init(&sandbox);
     sandbox
         .skiman()
-        .args(["new", "pdf", "-d", "Fill PDF forms"])
+        .args(["new", "pdf", "-d", "Fill PDF forms", "--group", "documents"])
         .assert()
         .code(0);
     third_party(&sandbox, "docx");
+    sandbox
+        .skiman()
+        .args(["mv", "docx", "--group", "documents"])
+        .assert()
+        .code(0);
     append(
         &sandbox,
         "skiman.toml",
-        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\ngroup = \"documents\"\norigin = \"written here\"\n\
-         \n[skills.docx]\nsummary = \"Edit Word files\"\ngroup = \"documents\"\n",
+        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\norigin = \"written here\"\n\
+         \n[skills.docx]\nsummary = \"Edit Word files\"\n",
     );
 
     check(&sandbox).code(0).stdout_eq("").stderr_eq("");
@@ -101,7 +106,7 @@ fn a_skill_without_summary_group_or_origin_is_a_warning_of_check_only() {
         .stderr_eq("");
     sandbox
         .skiman()
-        .args(["new", "notes", "-d", "Take notes"])
+        .args(["new", "notes", "-d", "Take notes", "--group", "writing"])
         .assert()
         .code(0)
         .stderr_eq("");
@@ -109,13 +114,13 @@ fn a_skill_without_summary_group_or_origin_is_a_warning_of_check_only() {
     append(
         &sandbox,
         "skiman.toml",
-        "\n[skills.notes]\nsummary = \"Keep notes\"\ngroup = \"writing\"\norigin = \"written here\"\n\
-         \n[skills.docx]\ngroup = \"documents\"\n",
+        "\n[skills.notes]\nsummary = \"Keep notes\"\norigin = \"written here\"\n\
+         \n[skills.docx]\n",
     );
 
     check(&sandbox).code(0).stdout_eq("").stderr_eq(str![[r#"
-warning: skills/docx: skill-info: [skills.docx] in skiman.toml has no `summary`
-warning: skills/pdf: skill-info: [skills.pdf] in skiman.toml has no `summary`, `group`, `origin`
+warning: skills/docx: skill-info: [skills.docx] in skiman.toml has no `summary`; it is in no group folder; move it into one with `skiman mv docx --group <group>`
+warning: skills/pdf: skill-info: [skills.pdf] in skiman.toml has no `summary`, `origin`; it is in no group folder; move it into one with `skiman mv pdf --group <group>`
 
 "#]]);
 
@@ -139,21 +144,20 @@ warning: skills/pdf: skill-info: [skills.pdf] in skiman.toml has no `summary`, `
 }
 
 #[test]
-fn summary_group_origin_and_installed_must_have_their_type() {
+fn summary_origin_and_installed_must_have_their_type() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
     append(
         &sandbox,
         "skiman.toml",
-        "\n[skills.pdf]\nsummary = \"Fill\\nforms\"\ngroup = 3\norigin = \" \"\ninstalled = \"2026-01-31\"\n",
+        "\n[skills.pdf]\nsummary = \"Fill\\nforms\"\norigin = \" \"\ninstalled = \"2026-01-31\"\n",
     );
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
 skiman.toml:5: toml-value: `summary` in [skills.pdf] must be a non-empty string on one line
-skiman.toml:6: toml-value: `group` in [skills.pdf] must be a non-empty string on one line
-skiman.toml:7: toml-value: `origin` in [skills.pdf] must be a non-empty string on one line
-skiman.toml:8: toml-value: `installed` in [skills.pdf] must be a date without a time, such as 2026-01-31
+skiman.toml:6: toml-value: `origin` in [skills.pdf] must be a non-empty string on one line
+skiman.toml:7: toml-value: `installed` in [skills.pdf] must be a date without a time, such as 2026-01-31
 
 "#]]);
 
@@ -172,7 +176,7 @@ fn a_skill_folder_without_skill_md_is_reported() {
     write(&sandbox, "skills/notes.txt", "not a skill\n");
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
-skills/notes.txt: skill-folder: not a folder; everything under skills/ must be a skill folder
+skills/notes.txt: skill-folder: not a folder; everything under skills/ must be a skill folder or a group folder of skill folders
 skills/pdf: skill-md: no SKILL.md at the top of the skill folder
 
 "#]]);
@@ -424,7 +428,7 @@ fn unknown_keys_in_skiman_toml_are_reported_with_their_line() {
     check(&sandbox).code(1).stdout_eq(str![[r#"
 skiman.toml:7: unknown-key: unknown key `branch` in [skills.pdf.source] (allowed: url, path, ref, ref_kind, upstream_name)
 skiman.toml:10: toml-value: `enabled` in [skills.pdf] must be true or false
-skiman.toml:11: unknown-key: unknown key `pinned` in [skills.pdf] (allowed: enabled, summary, group, origin, installed, source)
+skiman.toml:11: unknown-key: unknown key `pinned` in [skills.pdf] (allowed: enabled, summary, origin, installed, source)
 skiman.toml:13: unknown-key: unknown key `colors` in skiman.toml (allowed: tools, skills, secrets, projects)
 
 "#]]);

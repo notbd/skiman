@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use crate::Exit;
 use crate::failure::Failure;
 use crate::fsutil;
+use crate::layout::Layout;
 use crate::managing_skills;
 use crate::manifest::Manifest;
 use crate::names;
@@ -25,6 +26,7 @@ use crate::repo_lock::RepoLock;
 use crate::reported::Reported;
 use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
+use crate::tree::WorkingTree;
 
 /// Who reads sync's output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -422,7 +424,8 @@ pub fn installed_tools<'a>(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wanted {
     pub name: String,
-    /// The exact absolute link target: `<repo realpath>/skills/<n>` or
+    /// The exact absolute link target: `<repo realpath>/skills/<n>`,
+    /// `<repo realpath>/skills/<group>/<n>` or
     /// `<repo realpath>/.skiman/managing-skills`.
     pub target: PathBuf,
 }
@@ -437,20 +440,28 @@ pub fn wanted_entries(
 ) -> std::io::Result<Vec<Wanted>> {
     let entries = manifest.skills();
     let scope = repo.skills_dir().display().to_string();
+    let layout = Layout::read(&WorkingTree::new(repo.root()))?;
     let mut wanted = Vec::new();
-    for name in repo.skill_folder_names()? {
-        let dir = repo.skill_dir(&name);
+    for placed in layout.skills() {
+        let (name, dir) = (&placed.name, repo.root().join(placed.path()));
         if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
             continue;
         }
-        match not_distributable(&name, &dir) {
+        let reason = match layout.all_of(name).len() {
+            1 => not_distributable(name, &dir),
+            _ => Some("its name is in more than one group folder"),
+        };
+        match reason {
             Some(reason) => report.items.push(Item {
                 scope: scope.clone(),
                 path: dir,
                 kind: ItemKind::InvalidSkillFolder { reason },
             }),
-            None if entries.get(&name).is_some_and(|e| !e.enabled) => {}
-            None => wanted.push(Wanted { name, target: dir }),
+            None if entries.get(name).is_some_and(|e| !e.enabled) => {}
+            None => wanted.push(Wanted {
+                name: name.clone(),
+                target: dir,
+            }),
         }
     }
     wanted.push(Wanted {
@@ -460,7 +471,7 @@ pub fn wanted_entries(
     Ok(wanted)
 }
 
-/// Why the skill folder `dir` (`skills/<name>`) is not distributable; a
+/// Why the skill folder `dir` (`skills/<name>` or `skills/<group>/<name>`) is not distributable; a
 /// distributable one's name passes the regex, is not reserved, and its
 /// folder holds a `SKILL.md`.
 fn not_distributable(name: &str, dir: &Path) -> Option<&'static str> {

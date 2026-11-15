@@ -159,12 +159,14 @@ fn install_git_hooks(repo: &SkillRepo, binary: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Whether any folder under `skills/` holds a `SKILL.md`.
+/// Whether any skill folder under `skills/` holds a `SKILL.md`.
 fn has_skills(repo: &SkillRepo) -> bool {
-    repo.skill_folder_names()
-        .unwrap_or_default()
-        .iter()
-        .any(|name| repo.skill_dir(name).join("SKILL.md").is_file())
+    repo.layout().is_ok_and(|layout| {
+        layout
+            .skills()
+            .iter()
+            .any(|placed| repo.root().join(placed.path()).join("SKILL.md").is_file())
+    })
 }
 
 fn inspect(path: &Path) -> Result<Target, Failure> {

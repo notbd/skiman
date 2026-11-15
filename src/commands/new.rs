@@ -1,4 +1,5 @@
-//! `skiman new <name> -d <description>`: create an own skill, then sync.
+//! `skiman new <name> -d <description> [--group <group>]`: create an own
+//! skill, in a group folder when one is given, then sync.
 
 use std::collections::BTreeSet;
 
@@ -7,6 +8,7 @@ use crate::backup::Backups;
 use crate::change::{Change, Want};
 use crate::commands::{ask, has_terminal};
 use crate::failure::{Failure, finish};
+use crate::layout::skill_path;
 use crate::names::{self, Taken};
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -18,11 +20,11 @@ use crate::tree::WorkingTree;
 
 pub const MAX_DESCRIPTION: usize = 1024;
 
-pub fn run(name: &str, description: Option<String>) -> Exit {
-    finish(new(name, description))
+pub fn run(name: &str, description: Option<String>, group: Option<&str>) -> Exit {
+    finish(new(name, description, group))
 }
 
-fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
+fn new(name: &str, description: Option<String>, group: Option<&str>) -> Result<Exit, Failure> {
     if description.is_none() && !has_terminal() {
         return Err(Failure::usage(
             "missing flag without a terminal: -d <description>",
@@ -31,6 +33,9 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
     names::check_new_name(name)?;
+    if let Some(group) = group {
+        names::check_group(group, &repo.layout()?)?;
+    }
     let description = match description {
         Some(description) => description,
         None => ask("Description: ")?,
@@ -50,7 +55,7 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
         content: skill_md(name, &description).into_bytes(),
     };
     let change = Change {
-        pieces: vec![(format!("skills/{name}"), Want::Folder(vec![skill_md]))],
+        pieces: vec![(skill_path(group, name), Want::Folder(vec![skill_md]))],
         command: "new",
         save_files: false,
     };

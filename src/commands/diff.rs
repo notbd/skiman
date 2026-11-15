@@ -26,7 +26,7 @@ fn diff(name: &str) -> Result<Exit, Failure> {
     let repo = SkillRepo::from_config(&paths)?;
     let tree = WorkingTree::new(repo.root());
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let skill = format!("skills/{name}");
+    let skill = repo.layout()?.path(name);
     let upstream = format!("upstream/{name}");
     if !names::is_valid(name) || tree.kind(&skill).map_err(io)? != Some(Kind::Dir) {
         return Err(Failure::refused(format!(

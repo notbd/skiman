@@ -20,6 +20,7 @@ use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::git;
 use crate::git_hooks::{self, Hook};
+use crate::layout::Layout;
 use crate::manifest::Manifest;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -342,9 +343,9 @@ fn report_instruction_locations(
 /// Unresolved conflicts in every skill folder, and leftover records.
 fn report_skill_repo(repo: &SkillRepo) -> std::io::Result<()> {
     let tree = WorkingTree::new(repo.root());
-    for name in repo.skill_folder_names()? {
-        if tree.kind(&format!("skills/{name}"))? == Some(Kind::Dir) {
-            for violation in rules::unresolved_conflicts(&tree, &name)? {
+    for placed in Layout::read(&tree)?.skills() {
+        if tree.kind(&placed.path())? == Some(Kind::Dir) {
+            for violation in rules::unresolved_conflicts(&tree, &placed.name)? {
                 out!("{violation}");
             }
         }

@@ -1,9 +1,9 @@
-//! `skiman adopt <name> --from <tool id>`: bring a foreign skill in as an own
-//! skill. Reads the entry's resolved content (path safety applies, `.git/`
+//! `skiman adopt <name> --from <tool id> [--group <group>]`: bring a foreign
+//! skill in as an own skill, in a group folder when one is given. Reads the entry's resolved content (path safety applies, `.git/`
 //! is not skill content), rewrites the `name` line when needed, locates and
 //! reads the entry again under the repo lock (refusing when the copy
 //! changed), checks the whole copy as new content, stages it under
-//! `.skiman/tmp/`, renames it to `skills/<name>`, moves the original entry
+//! `.skiman/tmp/`, renames it to `skills/[<group>/]<name>`, moves the original entry
 //! (a link as a link) to `backups/<timestamp>/<tool id>/<name>`, then syncs,
 //! which links the copy in its place. A link's target is never moved,
 //! edited or deleted. An adopt stopped before the original moved finishes
@@ -18,6 +18,7 @@ use crate::backup::{self, Backups};
 use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
+use crate::layout::skill_path;
 use crate::manifest::Manifest;
 use crate::names::{self, Taken};
 use crate::ownership::{Entry, Ownership};
@@ -32,11 +33,11 @@ use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
 use crate::tree::WorkingTree;
 
-pub fn run(name: &str, from: &str, yes: bool) -> Exit {
-    finish(adopt(name, from, yes))
+pub fn run(name: &str, from: &str, yes: bool, group: Option<&str>) -> Exit {
+    finish(adopt(name, from, yes, group))
 }
 
-fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
+fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit, Failure> {
     if !yes && !has_terminal() {
         return Err(Failure::usage("missing flag without a terminal: --yes"));
     }
@@ -48,10 +49,13 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         .expect("clap accepts only known tool ids");
     let entry = tool.tool_dir(paths.home()).join(name);
     check_name(&repo, name, &entry, None)?;
+    if let Some(group) = group {
+        names::check_group(group, &repo.layout()?)?;
+    }
     let manifest = Manifest::load(&repo)?;
     let (entry, files) = read(&paths, &repo, &manifest, tool, name)?;
     let change = Change {
-        pieces: vec![(format!("skills/{name}"), Want::Folder(files.clone()))],
+        pieces: vec![(skill_path(group, name), Want::Folder(files.clone()))],
         command: "adopt",
         save_files: false,
     };
@@ -89,8 +93,9 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         .move_in(&entry, &Path::new(tool.id).join(name))
         .map_err(|e| {
             change::stopped(Failure::operational(format!(
-                "cannot move {} to the backup: {e}; skills/{name} is in place",
-                entry.display()
+                "cannot move {} to the backup: {e}; {} is in place",
+                entry.display(),
+                skill_path(group, name)
             )))
         })?;
     out!("moved {} to {}", entry.display(), moved.display());
@@ -137,9 +142,14 @@ fn read(
 ) -> Result<(PathBuf, Vec<SnapshotFile>), Failure> {
     let tool_dir = tool.tool_dir(paths.home());
     // An adopt that stopped part-way may have moved the entry already.
-    let done = match repo.skill_dir(name).is_dir() {
+    let skill_dir = repo.skill_dir(name)?;
+    let done = match skill_dir.is_dir() {
         true => format!(
-            "; if `skiman adopt {name}` stopped part-way, skills/{name} is in place and `skiman sync` finishes it"
+            "; if `skiman adopt {name}` stopped part-way, {} is in place and `skiman sync` finishes it",
+            skill_dir
+                .strip_prefix(repo.root())
+                .unwrap_or(&skill_dir)
+                .display()
         ),
         false => String::new(),
     };
@@ -153,7 +163,7 @@ fn read(
             let files = read_copy(&entry, name)?;
             return Ok((entry, files));
         }
-        Entry::Moved(copy) if repo.skill_dir(name).exists() => {
+        Entry::Moved(copy) if skill_dir.exists() => {
             let files = read_copy(&copy, name)?;
             return Ok((entry, files));
         }

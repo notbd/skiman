@@ -148,6 +148,9 @@ pub struct Found {
     /// `sha256:<hex of the secret's text>`: the matched text, or a whole
     /// private key block.
     pub fingerprint: String,
+    /// The path an exemption names for this match ([`allow_path`], without
+    /// the skill's group; the rule engine sets it once it knows the groups).
+    pub allow_path: String,
 }
 
 /// Every detector match in `content`, the file at `path`.
@@ -168,6 +171,7 @@ pub fn scan(path: &str, content: &[u8], found: &mut Vec<Found>) {
                 let secret = &content[whole.start()..end];
                 found.push(Found {
                     path: path.to_owned(),
+                    allow_path: allow_path(path),
                     line,
                     rule: detector.id,
                     fingerprint: format!("sha256:{}", hex(&Sha256::digest(secret))),
@@ -183,9 +187,11 @@ pub fn scan(path: &str, content: &[u8], found: &mut Vec<Found>) {
     }
 }
 
-/// The path a ready-to-paste entry uses for a match at `path`: the
+/// The path a ready-to-paste entry uses for a match at `path` (given
+/// without a group, see [`crate::layout::Layout::without_group`]): the
 /// `skills/<n>/<p>` form for matches in a skill, its upstream snapshot or
-/// its conflict records; the path itself elsewhere (`instructions/`).
+/// its conflict records, so an exemption stays put when the skill changes
+/// group; the path itself elsewhere (`instructions/`).
 pub fn allow_path(path: &str) -> String {
     let Some((name, rest)) = path
         .strip_prefix("upstream/")
@@ -218,7 +224,7 @@ impl AllowEntry {
     /// The entry a refusal prints for `found`.
     pub fn for_match(found: &Found) -> AllowEntry {
         AllowEntry {
-            path: allow_path(&found.path),
+            path: found.allow_path.clone(),
             rule: found.rule.to_owned(),
             fingerprint: found.fingerprint.clone(),
         }
@@ -229,7 +235,7 @@ impl AllowEntry {
     pub fn covers(&self, found: &Found) -> bool {
         self.rule == found.rule
             && self.fingerprint == found.fingerprint
-            && (self.path == found.path || self.path == allow_path(&found.path))
+            && (self.path == found.path || self.path == found.allow_path)
     }
 }
 

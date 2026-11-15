@@ -646,6 +646,16 @@ fn an_update_killed_while_the_old_skill_moves_to_another_filesystem_finishes_whe
 /// (no swapping rename), and an upstream fix to update to.
 #[cfg(target_os = "macos")]
 fn pdf_on_a_volume_without_a_swap(sandbox: &Sandbox) -> Option<(DiskImage, PathBuf)> {
+    pdf_on_a_volume_without_a_swap_at(sandbox, "skills/pdf")
+}
+
+/// [`pdf_on_a_volume_without_a_swap`] with the skill folder at `skill`
+/// (`skills/pdf` or `skills/<group>/pdf`).
+#[cfg(target_os = "macos")]
+fn pdf_on_a_volume_without_a_swap_at(
+    sandbox: &Sandbox,
+    skill: &str,
+) -> Option<(DiskImage, PathBuf)> {
     let disk = attached(DiskImage::attach(sandbox, "HFS+", "repo"))?;
     let repo = disk.mount.join("skill-repo");
     sandbox
@@ -658,16 +668,16 @@ fn pdf_on_a_volume_without_a_swap(sandbox: &Sandbox) -> Option<(DiskImage, PathB
     up.write("SKILL.md", skill_md("pdf"))
         .write("reference.md", "v1\n");
     up.commit("v1");
-    sandbox
-        .skiman()
-        .args(["add", "acme/pdf", "--yes"])
-        .assert()
-        .code(0);
+    let mut args = vec!["add", "acme/pdf", "--yes"];
+    if let Some(group) = skill
+        .strip_prefix("skills/")
+        .and_then(|s| s.strip_suffix("/pdf"))
+    {
+        args.extend(["--group", group]);
+    }
+    sandbox.skiman().args(args).assert().code(0);
     for n in 0..10 {
-        write(
-            repo.join(format!("skills/pdf/refs/{n}.md")),
-            format!("{n}\n"),
-        );
+        write(repo.join(format!("{skill}/refs/{n}.md")), format!("{n}\n"));
     }
     up.write("reference.md", "v2\n");
     up.commit("v2");
@@ -691,17 +701,21 @@ fn the_only_old(repo: &Path) -> PathBuf {
     entries[0].join("old")
 }
 
-/// Asserts that `old`, the `tmp/<ts>/old` of a replace of `skills/pdf`
-/// stopped between its two renames, holds the whole old skill (`before`) at
-/// `skills/pdf.skiman-prev` and the whole new one (the upstream fix merged in) at
-/// `skills/pdf`.
+/// Asserts that `old`, the `tmp/<ts>/old` of a replace of the skill folder
+/// `skill` stopped between its two renames, holds the whole old skill
+/// (`before`) at `<skill>.skiman-prev` and the whole new one (the upstream
+/// fix merged in) at `<skill>`.
 #[cfg(target_os = "macos")]
-fn assert_both_versions(old: &Path, before: &std::collections::BTreeMap<PathBuf, String>) {
+fn assert_both_versions(
+    old: &Path,
+    skill: &str,
+    before: &std::collections::BTreeMap<PathBuf, String>,
+) {
     let mut new = before.clone();
     let reference = new.get_mut(Path::new("reference.md")).unwrap();
     *reference = reference.replace("v1\n", "v2\n");
-    assert_eq!(&tree(old.join("skills/pdf.skiman-prev")), before);
-    assert_eq!(tree(old.join("skills/pdf")), new);
+    assert_eq!(&tree(old.join(format!("{skill}.skiman-prev"))), before);
+    assert_eq!(tree(old.join(skill)), new);
 }
 
 /// Killed between the two renames of a replace without a swapping rename,
@@ -731,7 +745,7 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
     assert_eq!(killed.status.signal(), Some(9));
 
     assert!(!skill.exists());
-    assert_both_versions(&the_only_old(&repo), &before);
+    assert_both_versions(&the_only_old(&repo), "skills/pdf", &before);
     // A dry run writes nothing: the skill stays missing and tmp as it is.
     let dry = sandbox
         .skiman()
@@ -742,7 +756,7 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
     assert_eq!(dry.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("skills/pdf is not a folder"), "{stderr}");
     assert!(!skill.exists());
-    assert_both_versions(&the_only_old(&repo), &before);
+    assert_both_versions(&the_only_old(&repo), "skills/pdf", &before);
     let new = the_only_old(&repo).join("skills/pdf");
     sandbox
         .skiman()
@@ -754,13 +768,58 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
             skill.display(),
             new.display()
         ));
-    assert_updated(&sandbox, &repo);
+    assert_updated(&sandbox, &repo, "skills/pdf");
 }
 
-/// `skills/pdf` holds the fix the update brings, and nothing is left over.
+/// The same in a group folder: killed between the two renames, the old one
+/// is at `old/skills/<group>/<name>.skiman-prev` and the empty group folder
+/// stays; run again, the update puts the new one back in the group folder,
+/// not at `skills/<name>`.
 #[cfg(target_os = "macos")]
-fn assert_updated(sandbox: &Sandbox, repo: &Path) {
-    let skill = repo.join("skills/pdf");
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_update_of_a_grouped_skill_killed_between_the_two_renames_finishes_in_its_group() {
+    let sandbox = Sandbox::new();
+    let rel = "skills/documents/pdf";
+    let Some((_disk, repo)) = pdf_on_a_volume_without_a_swap_at(&sandbox, rel) else {
+        return;
+    };
+    let skill = repo.join(rel);
+    let before = tree(&skill);
+    let killed = sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .env("SKIMAN_TEST_HOOK", format!("update:set-aside:{rel}"))
+        .env("SKIMAN_TEST_HOOK_RUN", "kill -9 $PPID")
+        .output()
+        .unwrap();
+    assert_eq!(killed.status.signal(), Some(9));
+    assert!(!skill.exists() && repo.join("skills/documents").is_dir());
+    assert_both_versions(&the_only_old(&repo), rel, &before);
+
+    let new = the_only_old(&repo).join(rel);
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!(
+            "put {} in place from {}, where a replace stopped part-way left it\n...\n",
+            skill.display(),
+            new.display()
+        ));
+    assert!(!repo.join("skills/pdf").exists());
+    assert_updated(&sandbox, &repo, rel);
+}
+
+/// The skill folder `skill` holds the fix the update brings, and nothing is
+/// left over.
+#[cfg(target_os = "macos")]
+fn assert_updated(sandbox: &Sandbox, repo: &Path, skill: &str) {
+    let skill = repo.join(skill);
     assert_eq!(read_text(&skill.join("reference.md")), "v2\n");
     for n in 0..10 {
         let file = skill.join(format!("refs/{n}.md"));
@@ -812,11 +871,11 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     );
     let stopped = "the command stopped part-way: the lines above list what was done; run the same command again to finish it\n";
     assert!(stderr.contains(&format!("{place}{stopped}")), "{stderr}");
-    assert_both_versions(&old, &before);
+    assert_both_versions(&old, "skills/pdf", &before);
 
     sandbox.skiman().args(["update", "pdf"]).assert().code(0);
     assert!(!new.exists());
-    assert_updated(&sandbox, &repo);
+    assert_updated(&sandbox, &repo, "skills/pdf");
 }
 
 /// An adopt killed while the original moves to a backup on another

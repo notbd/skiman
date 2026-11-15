@@ -54,16 +54,17 @@ fn overview() -> Result<Exit, Failure> {
     let mut groups: BTreeMap<String, Vec<[String; 7]>> = BTreeMap::new();
     let mut ungrouped = Vec::new();
     let mut count = 0;
-    for name in repo.skill_folder_names().map_err(io)? {
-        if tree.kind(&format!("skills/{name}")).map_err(io)? != Some(Kind::Dir) {
+    for placed in repo.layout()?.skills() {
+        let (name, path) = (&placed.name, placed.path());
+        if tree.kind(&path).map_err(io)? != Some(Kind::Dir) {
             continue;
         }
         count += 1;
-        let info = manifest.info(&name);
-        let conflicts = !rules::unresolved_conflicts(&tree, &name)
+        let info = manifest.info(name);
+        let conflicts = !rules::unresolved_conflicts(&tree, name)
             .map_err(io)?
             .is_empty();
-        let (kind, source, modified) = match manifest.source(&name) {
+        let (kind, source, modified) = match manifest.source(name) {
             None => ("own", info.origin.clone(), "-".to_owned()),
             Some(source) => {
                 let text = source_text(&source);
@@ -74,7 +75,7 @@ fn overview() -> Result<Exit, Failure> {
                 (
                     "third-party",
                     Some(text),
-                    modified(&tree, &name).map_err(io)?,
+                    modified(&tree, &path, name).map_err(io)?,
                 )
             }
         };
@@ -86,18 +87,18 @@ fn overview() -> Result<Exit, Failure> {
         let installed = info
             .installed
             .clone()
-            .or_else(|| install_commit_day(repo.root(), &name).map(|day| format!("{day} (git)")));
+            .or_else(|| install_commit_day(repo.root(), &path).map(|day| format!("{day} (git)")));
         let row = [
             name.clone(),
             or_dash(info.summary.clone()),
             kind.to_owned(),
             or_dash(source),
             or_dash(installed),
-            yes_no(enabled.get(&name).is_none_or(|e| e.enabled)),
+            yes_no(enabled.get(name).is_none_or(|e| e.enabled)),
             modified,
         ];
-        match info.group {
-            Some(group) => groups.entry(group).or_default().push(row),
+        match &placed.group {
+            Some(group) => groups.entry(group.clone()).or_default().push(row),
             None => ungrouped.push(row),
         }
     }
@@ -156,12 +157,12 @@ fn elsewhere_row(skill: &OutsideSkill, home: &Path) -> [String; 4] {
     ]
 }
 
-/// The day (`YYYY-MM-DD`) of the latest commit that added
-/// `skills/<name>/SKILL.md`, or created it as a copy of another file (a
+/// The day (`YYYY-MM-DD`) of the latest commit that added the `SKILL.md`
+/// of the skill folder `skill`, or created it as a copy of another file (a
 /// skill removed and installed again counts from its last install),
-/// following renames; `None` when the skill repo is
-/// not in a git repo or the file was never committed.
-fn install_commit_day(root: &Path, name: &str) -> Option<String> {
+/// following renames (a move to another group is one); `None` when the
+/// skill repo is not in a git repo or the file was never committed.
+fn install_commit_day(root: &Path, skill: &str) -> Option<String> {
     let output = git::query_command(root)
         // `--follow` sees a skill adapted from another as a copy (C) of it:
         // that commit is the skill's add. No signature lines before the day.
@@ -173,7 +174,7 @@ fn install_commit_day(root: &Path, name: &str) -> Option<String> {
             "--format=%as",
             "--",
         ])
-        .arg(format!("skills/{name}/SKILL.md"))
+        .arg(format!("{skill}/SKILL.md"))
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

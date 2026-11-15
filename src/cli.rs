@@ -34,6 +34,9 @@ pub enum Command {
         /// What the skill does and when to use it
         #[arg(short = 'd', long)]
         description: Option<String>,
+        /// Group folder to put the skill in: skills/<group>/<name>
+        #[arg(long, value_name = "group")]
+        group: Option<String>,
     },
     /// Install a third-party skill
     Add(AddArgs),
@@ -62,12 +65,20 @@ pub enum Command {
         #[arg(long)]
         yes: bool,
     },
-    /// Rename a skill: folder, `name` field, records, upstream snapshot and secret exemptions
+    /// Rename a skill (folder, `name` field, records, upstream snapshot and secret
+    /// exemptions), or move it to another group folder
+    #[command(group(clap::ArgGroup::new("to").required(true).multiple(true).args(["new", "group", "no_group"])))]
     Mv {
         /// Current name
         old: String,
         /// New name
-        new: String,
+        new: Option<String>,
+        /// Move the skill into this group folder: skills/<group>/<name>
+        #[arg(long, value_name = "group", conflicts_with = "no_group")]
+        group: Option<String>,
+        /// Move the skill out of its group folder: skills/<name>
+        #[arg(long)]
+        no_group: bool,
     },
     /// Bring a foreign skill from an agent tool's tool directory into the skill repo
     Adopt {
@@ -76,6 +87,9 @@ pub enum Command {
         /// Id of the agent tool whose tool directory holds the entry
         #[arg(long, value_name = "tool id", value_parser = parse_tool_id)]
         from: String,
+        /// Group folder to put the skill in: skills/<group>/<name>
+        #[arg(long, value_name = "group")]
+        group: Option<String>,
         /// Adopt without asking for confirmation
         #[arg(long)]
         yes: bool,
@@ -133,6 +147,9 @@ pub struct AddArgs {
     /// Install name, when it must differ from the upstream name (single skill only)
     #[arg(long)]
     pub name: Option<String>,
+    /// Group folder to put the skills in: skills/<group>/<name>
+    #[arg(long, value_name = "group")]
+    pub group: Option<String>,
     /// Branch, tag or full 40-hex commit to install instead of the default branch
     #[arg(long = "ref", value_name = "REF")]
     pub git_ref: Option<String>,
@@ -245,7 +262,11 @@ where
             path,
             session_hooks,
         } => commands::init::run(&path, session_hooks.as_deref()),
-        Command::New { name, description } => commands::new::run(&name, description),
+        Command::New {
+            name,
+            description,
+            group,
+        } => commands::new::run(&name, description, group.as_deref()),
         Command::Add(args) => commands::add::run(args),
         Command::Diff { name } => commands::diff::run(&name),
         Command::Update {
@@ -254,8 +275,25 @@ where
             dry_run,
         } => commands::update::run(names, git_ref, dry_run),
         Command::Remove { name, yes } => commands::remove::run(&name, yes),
-        Command::Mv { old, new } => commands::mv::run(&old, &new),
-        Command::Adopt { name, from, yes } => commands::adopt::run(&name, &from, yes),
+        Command::Mv {
+            old,
+            new,
+            group,
+            no_group,
+        } => {
+            let to = match (group, no_group) {
+                (Some(group), _) => commands::mv::To::Group(group),
+                (None, true) => commands::mv::To::NoGroup,
+                (None, false) => commands::mv::To::Same,
+            };
+            commands::mv::run(&old, new.as_deref(), to)
+        }
+        Command::Adopt {
+            name,
+            from,
+            yes,
+            group,
+        } => commands::adopt::run(&name, &from, yes, group.as_deref()),
         Command::Import { folder, yes, guide } => {
             if guide {
                 commands::import::guide()

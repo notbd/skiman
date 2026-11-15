@@ -25,8 +25,6 @@ pub struct SkillEntry {
 pub struct SkillInfo {
     /// What the skill is for, in one line.
     pub summary: Option<String>,
-    /// The group it belongs to, a free-form label.
-    pub group: Option<String>,
     /// Where it came from before the skill repo held it: for an own skill,
     /// the only record of its source.
     pub origin: Option<String>,
@@ -91,7 +89,6 @@ impl Manifest {
         };
         SkillInfo {
             summary: text("summary"),
-            group: text("group"),
             origin: text("origin"),
             installed: field("installed")
                 .and_then(Item::as_datetime)

@@ -105,8 +105,12 @@ rule of the skills applies to it too.
 [tools]                     # optional; without it the skill repo keeps its own
 enabled = ["claude-code", "codex", "antigravity"]
 
-[skills.notes]              # an own skill needs a table only to disable it
-enabled = false
+[skills.notes]              # optional for an own skill
+enabled = false             # to disable it
+summary = "Keep meeting notes"  # one line each: what it is for,
+group = "writing"           # which skills belong with it,
+origin = "written here"     # and where an own skill came from (a URL, or "written here")
+installed = 2026-01-31      # optional: the day it was installed
 
 [skills.pdf.source]         # a third-party skill
 url = "https://github.com/anthropics/skills.git"  # https or ssh git URL, or a local absolute or ~ path

@@ -37,6 +37,7 @@ cargo install --locked --path .
 | `skiman sync` | Make every tool directory and instruction location match the skill repo (`--hook` from hooks). |
 | `skiman check` | Report every rule violation in the skill repo (`--staged` for the git index). |
 | `skiman list` | Show every skill with its kind, source, version and state. |
+| `skiman overview` | Show every skill on this machine as Markdown: by group with summary, source and install day, then the skills other managers keep (read-only). |
 | `skiman doctor` | Diagnose the setup. |
 | `skiman project add <path>` | Register a project root (`--id`). |
 | `skiman project adopt [paths]` | Copy project items into the mirror under `projects/` (`--dry-run`, `--yes`). |

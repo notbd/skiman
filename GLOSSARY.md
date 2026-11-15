@@ -42,6 +42,18 @@ _Avoid_: common rules, base file
 Global instructions that apply to one agent tool only and are combined with the shared body for that tool.
 _Avoid_: override, tool rules, extension
 
+**Summary** (用途):
+One line in `skiman.toml` saying what a skill is for, written for a person; the frontmatter `description` stays the text an agent tool reads.
+_Avoid_: description, purpose, title
+
+**Group** (组):
+A free-form label in `skiman.toml` that puts skills which belong together in one section of `skiman overview`.
+_Avoid_: category, tag, bundle
+
+**Origin** (来历):
+Where an own skill came from (the setup it was adapted from, or that it was written here); a third-party skill's upstream already says it.
+_Avoid_: source, upstream, provenance
+
 ### Where things live
 
 **Skill repo** (skill 仓库):

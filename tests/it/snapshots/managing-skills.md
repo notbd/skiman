@@ -122,6 +122,26 @@ reports the size limit of the enabled agent tools.
 3. Run `skiman check` until it reports no unresolved conflicts. Until then
    skiman refuses commits and further updates of that skill.
 
+## Describe a skill
+
+A skill's `[skills.<name>]` table in `<SKILL_REPO>/skiman.toml` tells a
+person what the skill is; `skiman overview` shows it. Every value is one line.
+
+```toml
+[skills.notes]
+summary = "Keep meeting notes"   # what it is for
+group = "writing"                # skills that belong together share a group
+origin = "written here"          # own skill: where it came from (a URL, or "written here")
+installed = 2026-01-31           # optional: the day it was installed
+```
+
+- A third-party skill's `source` table already says where it came from; it
+  needs no `origin`.
+- `skiman check` warns about each skill without a `summary`, a `group`, or
+  where it came from. The warning never fails a command.
+- Without `installed`, the overview shows the day of the skill's first
+  commit, marked `(git)`.
+
 ## Remove, rename or disable a skill
 
 - Remove: `skiman remove <name> --yes`. It moves the folders to a backup and
@@ -165,5 +185,8 @@ may hold only skills the import folder holds too, with the same content.
 
 - `skiman list`: every skill with its kind, source, version, local
   modifications, conflicts and whether it is enabled.
+- `skiman overview`: every skill on this machine as Markdown, by group, with
+  its summary, source and install day; then the skills other managers keep
+  (plugins, claude.ai sync, the tools' own), which skiman never changes.
 - `skiman doctor`: locations, hooks, foreign skills, occupied paths, project
   roots and items, and other problems.

@@ -82,7 +82,11 @@ impl Manifest {
     pub fn info(&self, name: &str) -> SkillInfo {
         let skill = self.doc.get("skills").and_then(|skills| skills.get(name));
         let field = |key| skill.and_then(|s| s.get(key));
-        let text = |key| field(key).and_then(Item::as_str).map(str::to_owned);
+        let text = |key| {
+            field(key)
+                .and_then(Item::as_str)
+                .map(|s| s.trim().to_owned())
+        };
         SkillInfo {
             summary: text("summary"),
             group: text("group"),

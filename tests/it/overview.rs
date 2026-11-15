@@ -28,6 +28,7 @@ fn commit_on(sandbox: &Sandbox, day: &str) {
         .command("git")
         .arg("-C")
         .arg(&repo)
+        .args(["-c", "user.name=Test", "-c", "user.email=test@example.test"])
         .args(["commit", "--quiet", "-m", "skills"])
         .env("GIT_AUTHOR_DATE", format!("{day}T12:00:00"))
         .env("GIT_COMMITTER_DATE", format!("{day}T12:00:00"))

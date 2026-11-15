@@ -7,7 +7,7 @@ use std::io;
 
 use super::secrets::{self, Found};
 use super::{LIMITS, Violation, frontmatter, readable, rule};
-use crate::layout::{Layout, skill_path};
+use crate::layout::{Layout, SKILLS};
 use crate::names;
 use crate::tree::{Kind, Tree, basename, is_ignored};
 
@@ -54,21 +54,24 @@ pub fn check_skill(
     Ok(())
 }
 
-/// The rules on a group folder's name.
+/// The rules on the names of the group folders of `group` (`a` or `a/b`).
 fn check_group(layout: &Layout, group: &str, out: &mut BTreeSet<Violation>) {
-    let dir = skill_path(None, group);
-    if !names::is_valid(group) {
-        out.insert(Violation::new(&dir, None, rule::SKILL_FOLDER, format!("`{group}` is not a valid group name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
-    } else if let Some(skill) = layout.find(group) {
-        out.insert(Violation::new(
-            &dir,
-            None,
-            rule::SKILL_FOLDER,
-            format!(
-                "`{group}` names both this group folder and the skill {}; rename one of them",
-                skill.path()
-            ),
-        ));
+    let mut dir = SKILLS.to_owned();
+    for folder in group.split('/') {
+        dir = format!("{dir}/{folder}");
+        if !names::is_valid(folder) {
+            out.insert(Violation::new(&dir, None, rule::SKILL_FOLDER, format!("`{folder}` is not a valid group name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
+        } else if let Some(skill) = layout.find(folder) {
+            out.insert(Violation::new(
+                &dir,
+                None,
+                rule::SKILL_FOLDER,
+                format!(
+                    "`{folder}` names both this group folder and the skill {}; rename one of them",
+                    skill.path()
+                ),
+            ));
+        }
     }
 }
 

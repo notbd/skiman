@@ -47,25 +47,27 @@ pub fn check_new_name(name: &str) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Refuses (exit 1) a group name that breaks the name rule, or that names
-/// the skill `name` going into it or a skill folder in `layout` (a group
-/// folder and a skill never share a name).
+/// Refuses (exit 1) a group (`a` or `a/b`) with a folder name that breaks
+/// the name rule, or that names the skill `name` going into it or a skill
+/// folder in `layout` (a group folder and a skill never share a name).
 pub fn check_group(group: &str, name: &str, layout: &Layout) -> Result<(), Failure> {
-    if !is_valid(group) {
-        return Err(Failure::refused(format!(
-            "`{group}` is not a valid group name: use 1 to {MAX_LEN} lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)"
-        )));
-    }
-    if group == name {
-        return Err(Failure::refused(format!(
-            "`{group}` cannot be the group of a skill named `{name}`: a group and a skill never share a name"
-        )));
-    }
-    if let Some(skill) = layout.find(group) {
-        return Err(Failure::refused(format!(
-            "`{group}` cannot be a group: {} is a skill folder of that name",
-            skill.path()
-        )));
+    for folder in group.split('/') {
+        if !is_valid(folder) {
+            return Err(Failure::refused(format!(
+                "`{group}` is not a valid group: give one or more group folder names joined with `/`, each 1 to {MAX_LEN} lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)"
+            )));
+        }
+        if folder == name {
+            return Err(Failure::refused(format!(
+                "`{group}` cannot be the group of a skill named `{name}`: a group folder and a skill never share a name"
+            )));
+        }
+        if let Some(skill) = layout.find(folder) {
+            return Err(Failure::refused(format!(
+                "`{group}` cannot be a group: {} is a skill folder named `{folder}`",
+                skill.path()
+            )));
+        }
     }
     Ok(())
 }
@@ -94,8 +96,8 @@ pub fn check_not_taken(
         && !ours(Taken::Folder)?
     {
         Some(format!("{} already exists", placed.path()))
-    } else if layout.groups().contains(name) {
-        Some(format!("skills/{name} is a group folder"))
+    } else if let Some(group) = layout.group_named(name) {
+        Some(format!("skills/{group} is a group folder"))
     } else if Manifest::load(repo)?.skills().contains_key(name) && !ours(Taken::Table)? {
         Some(format!("skiman.toml already has a [skills.{name}] table"))
     } else if Lockfile::load(repo)?.skill_names().contains(name) && !ours(Taken::LockEntry)? {

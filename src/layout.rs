@@ -1,13 +1,13 @@
-//! Where skills sit under `skills/` (ADR 0008): `skills/<name>` for a skill
-//! in no group, `skills/<group>/<name>` for one in a group. The folder is
+//! Where skills sit under `skills/` (ADRs 0008, 0009): `skills/<name>` for a
+//! skill in no group, `skills/<group>/<name>` for one in a group, where a
+//! group is a path of one or more group folders (`tools/pdf`). The folder is
 //! the group; nothing else records it. Tool directories stay flat: a link is
 //! named after its skill wherever the skill's folder sits.
 //!
-//! A folder directly under `skills/` is a skill folder when it holds a
-//! `SKILL.md`. One without a `SKILL.md` that holds only folders is a group
-//! folder, and every entry in it is a skill folder; groups do not nest. Any
-//! other entry directly under `skills/` is read as a skill folder, so the
-//! rules report what is wrong with it.
+//! An entry under `skills/` or under a group folder is a group folder when it
+//! is a folder without a `SKILL.md` that holds only folders; groups nest. Any
+//! other entry there is read as a skill folder, so the rules report what is
+//! wrong with it.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -16,7 +16,7 @@ use crate::tree::{self, Kind, Tree};
 
 pub const SKILLS: &str = "skills";
 
-/// `skills/<name>`, or `skills/<group>/<name>`.
+/// `skills/<name>`, or `skills/<group>/<name>` (`group` may be `a/b`).
 pub fn skill_path(group: Option<&str>, name: &str) -> String {
     match group {
         Some(group) => format!("{SKILLS}/{group}/{name}"),
@@ -28,6 +28,7 @@ pub fn skill_path(group: Option<&str>, name: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
     pub name: String,
+    /// The group folders it sits in, joined with `/`.
     pub group: Option<String>,
 }
 
@@ -44,27 +45,34 @@ pub struct Layout {
     /// Every skill folder entry, in path order. A name in two groups is
     /// here twice (a rule violation).
     skills: Vec<Placed>,
+    /// Every group folder as a path below `skills/` (`tools`, `tools/pdf`).
     groups: BTreeSet<String>,
 }
 
 impl Layout {
     pub fn read(tree: &dyn Tree) -> io::Result<Layout> {
         let mut layout = Layout::default();
-        for entry in visible_children(tree, SKILLS)? {
-            let name = tree::basename(&entry.path).to_owned();
-            if !is_group(tree, &entry)? {
-                layout.skills.push(Placed { name, group: None });
-                continue;
-            }
-            for skill in visible_children(tree, &entry.path)? {
-                layout.skills.push(Placed {
-                    name: tree::basename(&skill.path).to_owned(),
-                    group: Some(name.clone()),
+        layout.read_dir(tree, None)?;
+        Ok(layout)
+    }
+
+    /// Reads the entries of `skills/<group>` into the layout.
+    fn read_dir(&mut self, tree: &dyn Tree, group: Option<&str>) -> io::Result<()> {
+        let dir = group.map_or_else(|| SKILLS.to_owned(), |g| format!("{SKILLS}/{g}"));
+        for entry in visible_children(tree, &dir)? {
+            let name = tree::basename(&entry.path);
+            if is_group(tree, &entry)? {
+                let inner = group.map_or_else(|| name.to_owned(), |g| format!("{g}/{name}"));
+                self.read_dir(tree, Some(&inner))?;
+                self.groups.insert(inner);
+            } else {
+                self.skills.push(Placed {
+                    name: name.to_owned(),
+                    group: group.map(str::to_owned),
                 });
             }
-            layout.groups.insert(name);
         }
-        Ok(layout)
+        Ok(())
     }
 
     /// Every skill folder entry, in path order.
@@ -72,9 +80,17 @@ impl Layout {
         &self.skills
     }
 
-    /// The group folder names.
+    /// Every group folder, as a path below `skills/`.
     pub fn groups(&self) -> &BTreeSet<String> {
         &self.groups
+    }
+
+    /// A group folder named `name` (its last part), as a path below `skills/`.
+    pub fn group_named(&self, name: &str) -> Option<&str> {
+        self.groups
+            .iter()
+            .map(String::as_str)
+            .find(|g| g.rsplit('/').next() == Some(name))
     }
 
     /// Where the skill `name` sits (its first entry when it sits in two places).
@@ -104,10 +120,16 @@ impl Layout {
         let Some(rest) = path.strip_prefix("skills/") else {
             return path.to_owned();
         };
-        match rest.split_once('/') {
-            Some((group, inner)) if self.groups.contains(group) && !inner.is_empty() => {
-                format!("{SKILLS}/{inner}")
-            }
+        let group = self
+            .groups
+            .iter()
+            .filter(|g| {
+                rest.strip_prefix(g.as_str())
+                    .is_some_and(|r| r.starts_with('/'))
+            })
+            .max_by_key(|g| g.len());
+        match group.map(|g| &rest[g.len() + 1..]) {
+            Some(inner) if !inner.is_empty() => format!("{SKILLS}/{inner}"),
             _ => path.to_owned(),
         }
     }
@@ -184,6 +206,31 @@ mod tests {
         let layout = layout(&[], &["skills/later"]);
         assert!(layout.skills().is_empty());
         assert!(layout.groups().contains("later"));
+    }
+
+    #[test]
+    fn groups_nest() {
+        let layout = layout(
+            &[
+                "skills/tools/pdf/fill/SKILL.md",
+                "skills/tools/pdf/fill/scripts/run.sh",
+                "skills/tools/ship/SKILL.md",
+            ],
+            &["skills/tools/later/soon"],
+        );
+        let paths: Vec<String> = layout.skills().iter().map(Placed::path).collect();
+        assert_eq!(paths, ["skills/tools/pdf/fill", "skills/tools/ship"]);
+        let groups: Vec<&str> = layout.groups().iter().map(String::as_str).collect();
+        assert_eq!(
+            groups,
+            ["tools", "tools/later", "tools/later/soon", "tools/pdf"]
+        );
+        assert_eq!(layout.group_named("pdf"), Some("tools/pdf"));
+        assert_eq!(layout.group_named("fill"), None);
+        assert_eq!(
+            layout.without_group("skills/tools/pdf/fill/scripts/run.sh"),
+            "skills/fill/scripts/run.sh"
+        );
     }
 
     #[test]

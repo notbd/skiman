@@ -771,10 +771,10 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
     assert_updated(&sandbox, &repo, "skills/pdf");
 }
 
-/// The same in a group folder: killed between the two renames, the old one
-/// is at `old/skills/<group>/<name>.skiman-prev` and the empty group folder
-/// stays; run again, the update puts the new one back in the group folder,
-/// not at `skills/<name>`.
+/// The same in a nested group folder: killed between the two renames, the
+/// old one is at `old/skills/<group>/<name>.skiman-prev` and the empty group
+/// folders stay; run again, the update puts the new one back in the group
+/// folder, not at `skills/<name>`.
 #[cfg(target_os = "macos")]
 #[test]
 #[cfg_attr(
@@ -783,7 +783,7 @@ fn an_update_killed_between_the_two_renames_keeps_both_versions_in_tmp() {
 )]
 fn an_update_of_a_grouped_skill_killed_between_the_two_renames_finishes_in_its_group() {
     let sandbox = Sandbox::new();
-    let rel = "skills/documents/pdf";
+    let rel = "skills/documents/forms/pdf";
     let Some((_disk, repo)) = pdf_on_a_volume_without_a_swap_at(&sandbox, rel) else {
         return;
     };
@@ -797,7 +797,7 @@ fn an_update_of_a_grouped_skill_killed_between_the_two_renames_finishes_in_its_g
         .output()
         .unwrap();
     assert_eq!(killed.status.signal(), Some(9));
-    assert!(!skill.exists() && repo.join("skills/documents").is_dir());
+    assert!(!skill.exists() && repo.join("skills/documents/forms").is_dir());
     assert_both_versions(&the_only_old(&repo), rel, &before);
 
     let new = the_only_old(&repo).join(rel);

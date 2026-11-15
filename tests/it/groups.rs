@@ -55,6 +55,8 @@ fn check_reports_a_name_in_two_groups_a_bad_group_name_and_a_folder_in_a_group_w
         "Bad_Group/pdf",
         "other/writing",
         "writing/memo",
+        "a/Inner_Bad/fill",
+        "b/pdf/form",
     ] {
         let name = Path::new(rel).file_name().unwrap().to_str().unwrap();
         write(skills.join(rel).join("SKILL.md"), skill_md(name));
@@ -63,8 +65,10 @@ fn check_reports_a_name_in_two_groups_a_bad_group_name_and_a_folder_in_a_group_w
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
 skills/Bad_Group: skill-folder: `Bad_Group` is not a valid group name: use 1 to 64 lowercase letters, digits and single hyphens between them
+skills/a/Inner_Bad: skill-folder: `Inner_Bad` is not a valid group name: use 1 to 64 lowercase letters, digits and single hyphens between them
 skills/a/notes: skill-folder: the skill name `notes` is in skills/a/notes and skills/b/notes; a name may be in one place only, whatever its group
 skills/b/notes: skill-folder: the skill name `notes` is in skills/a/notes and skills/b/notes; a name may be in one place only, whatever its group
+skills/b/pdf: skill-folder: `pdf` names both this group folder and the skill skills/Bad_Group/pdf; rename one of them
 skills/writing: skill-folder: `writing` names both this group folder and the skill skills/other/writing; rename one of them
 skills/writing/drafts: skill-md: no SKILL.md at the top of the skill folder
 
@@ -103,27 +107,54 @@ fn new_puts_a_skill_in_a_group_and_refuses_a_bad_or_taken_group() {
     let repo = sandbox.skill_repo();
     assert!(repo.join("skills/writing/notes/SKILL.md").is_file());
     assert_linked(&sandbox, "notes", "writing/notes");
+    skiman(
+        &sandbox,
+        &[
+            "new",
+            "essay",
+            "-d",
+            "Write essays",
+            "--group",
+            "writing/long",
+        ],
+    )
+    .code(0);
+    assert!(repo.join("skills/writing/long/essay/SKILL.md").is_file());
+    assert_linked(&sandbox, "essay", "writing/long/essay");
 
+    const BAD: &str = "give one or more group folder names joined with `/`, each 1 to 64 lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)";
     for (args, error) in [
         (
             ["new", "memo", "-d", "d", "--group", "Bad"],
-            "error: `Bad` is not a valid group name: use 1 to 64 lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)\n",
+            format!("error: `Bad` is not a valid group: {BAD}\n"),
+        ),
+        (
+            ["new", "memo", "-d", "d", "--group", "writing//x"],
+            format!("error: `writing//x` is not a valid group: {BAD}\n"),
         ),
         (
             ["new", "memo", "-d", "d", "--group", "notes"],
-            "error: `notes` cannot be a group: skills/writing/notes is a skill folder of that name\n",
+            "error: `notes` cannot be a group: skills/writing/notes is a skill folder named `notes`\n".to_owned(),
+        ),
+        (
+            ["new", "memo", "-d", "d", "--group", "other/notes"],
+            "error: `other/notes` cannot be a group: skills/writing/notes is a skill folder named `notes`\n".to_owned(),
         ),
         (
             ["new", "notes", "-d", "d", "--group", "other"],
-            "error: the name `notes` is taken: skills/writing/notes already exists\n",
+            "error: the name `notes` is taken: skills/writing/notes already exists\n".to_owned(),
         ),
         (
             ["new", "writing", "-d", "d", "--group", "other"],
-            "error: the name `writing` is taken: skills/writing is a group folder\n",
+            "error: the name `writing` is taken: skills/writing is a group folder\n".to_owned(),
         ),
         (
-            ["new", "memo", "-d", "d", "--group", "memo"],
-            "error: `memo` cannot be the group of a skill named `memo`: a group and a skill never share a name\n",
+            ["new", "long", "-d", "d", "--group", "other"],
+            "error: the name `long` is taken: skills/writing/long is a group folder\n".to_owned(),
+        ),
+        (
+            ["new", "memo", "-d", "d", "--group", "other/memo"],
+            "error: `other/memo` cannot be the group of a skill named `memo`: a group folder and a skill never share a name\n".to_owned(),
         ),
     ] {
         skiman(&sandbox, &args).code(1).stderr_eq(error);
@@ -192,6 +223,53 @@ removed the empty group folder [..]/skill-repo/skills/a
     assert_linked(&sandbox, "memo", "c/memo");
 }
 
+/// Groups nest: a move into `a/b` makes both folders, and a move out takes
+/// each group folder it leaves empty, innermost first, and no other.
+#[test]
+fn mv_moves_a_skill_into_and_out_of_nested_groups() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.skill_repo();
+    for (name, group) in [("notes", "a/b"), ("memo", "a")] {
+        skiman(&sandbox, &["new", name, "-d", "d", "--group", group]).code(0);
+    }
+    assert_linked(&sandbox, "notes", "a/b/notes");
+
+    skiman(&sandbox, &["mv", "notes", "--group", "c/d"])
+        .code(0)
+        .stdout_eq(str![[r#"
+renamed [..]/skill-repo/skills/a/b/notes to [..]/skill-repo/skills/c/d/notes
+removed the empty group folder [..]/skill-repo/skills/a/b
+...
+"#]]);
+    assert!(repo.join("skills/a/memo/SKILL.md").is_file());
+    assert_linked(&sandbox, "notes", "c/d/notes");
+
+    skiman(&sandbox, &["mv", "notes", "--no-group"])
+        .code(0)
+        .stdout_eq(str![[r#"
+renamed [..]/skill-repo/skills/c/d/notes to [..]/skill-repo/skills/notes
+removed the empty group folder [..]/skill-repo/skills/c/d
+removed the empty group folder [..]/skill-repo/skills/c
+...
+"#]]);
+    assert!(!repo.join("skills/c").exists());
+    assert_linked(&sandbox, "notes", "notes");
+
+    // A group folder's name is taken like a skill's, at any depth.
+    skiman(&sandbox, &["mv", "notes", "--group", "a/b"]).code(0);
+    skiman(&sandbox, &["mv", "memo", "b"])
+        .code(1)
+        .stderr_eq("error: the name `b` is taken: skills/a/b is a group folder\n");
+    skiman(&sandbox, &["remove", "b", "--yes"])
+        .code(1)
+        .stderr_eq(
+            "error: skills/a/b is a group folder, not a skill; remove its skills one by one\n",
+        );
+    skiman(&sandbox, &["mv", "memo", "--group", "x/notes"]).code(1);
+    check(&sandbox).code(0);
+}
+
 /// `git log --follow` sees a move to another group as a rename: the install
 /// day stays the day the skill was added.
 #[test]
@@ -244,10 +322,10 @@ fn a_secret_exemption_names_the_skill_without_its_group() {
     let manifest = repo.join("skiman.toml");
     std::fs::write(&manifest, read(&manifest) + &entry).unwrap();
     check(&sandbox).code(0).stdout_eq("");
-    skiman(&sandbox, &["mv", "pdf", "--group", "forms"]).code(0);
+    skiman(&sandbox, &["mv", "pdf", "--group", "forms/fill"]).code(0);
     check(&sandbox).code(0).stdout_eq("");
 
-    let with_group = read(&manifest).replace("skills/pdf/", "skills/forms/pdf/");
+    let with_group = read(&manifest).replace("skills/pdf/", "skills/forms/fill/pdf/");
     std::fs::write(&manifest, with_group).unwrap();
     check(&sandbox).code(0).stdout_eq("");
 }

@@ -13,9 +13,10 @@ instruction files ({{INSTRUCTION_FILES}}) hold links to the skill repo.
 ## Skill repo layout
 
 - `skills/<group>/<name>/` or `skills/<name>/`: every skill. A folder
-  directly under `skills/` without a `SKILL.md` is a group folder, and each
-  folder in it is a skill of that group; groups do not nest. A skill name is
-  unique across groups. An own skill is written by the user; a third-party
+  under `skills/` without a `SKILL.md` that holds only folders is a group
+  folder, and each folder in it is a skill of that group or an inner group
+  folder: groups nest (`<group>` may be `a/b`, and `--group` takes it so).
+  A skill name is unique across groups. An own skill is written by the user; a third-party
   skill has a `[skills.<name>.source]` table in `skiman.toml` and is tracked
   against its upstream. Below, `skills/<name>/` stands for either place.
 - `upstream/<name>/`: the upstream snapshot of a third-party skill. skiman

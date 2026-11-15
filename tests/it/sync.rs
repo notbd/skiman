@@ -439,8 +439,8 @@ fn links_into_group_folders_are_skimans_under_their_name_or_a_temporary_one() {
     let theirs = tool_dir.join(".notes.skiman-tmp-9");
     std::os::unix::fs::symlink(skills.join("docs/other"), &theirs).unwrap();
 
-    std::fs::create_dir(skills.join("writing")).unwrap();
-    let new = skills.join("writing/notes");
+    std::fs::create_dir_all(skills.join("writing/long")).unwrap();
+    let new = skills.join("writing/long/notes");
     std::fs::rename(&old, &new).unwrap();
     sandbox.skiman().arg("sync").assert().code(0);
 
@@ -457,25 +457,33 @@ fn links_into_group_folders_are_skimans_under_their_name_or_a_temporary_one() {
 }
 
 /// A link named after a folder inside a skill, pointing there, is the
-/// user's: `skills/<x>/<name>` is a skill in a group only when `<x>` is no
-/// skill folder.
+/// user's at any depth: `skills/<x>/<name>` is a skill in a group only when
+/// no folder of `<x>` is a skill folder.
 #[test]
 fn a_link_into_a_folder_inside_a_skill_is_not_skimans() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let skills = sandbox.skill_repo().join("skills");
     write_skill(&skills, "pdf");
-    std::fs::create_dir(skills.join("pdf/scripts")).unwrap();
-    let theirs = sandbox.tool_dir(Tool::ClaudeCode).join("scripts");
-    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink(skills.join("pdf/scripts"), &theirs).unwrap();
+    write_skill(&skills.join("docs"), "fill");
+    let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::create_dir_all(&tool_dir).unwrap();
+    let theirs: Vec<_> = ["pdf/scripts", "pdf/scripts/run", "docs/fill/lib/forms"]
+        .into_iter()
+        .map(|inside| {
+            let target = skills.join(inside);
+            std::fs::create_dir_all(&target).unwrap();
+            let link = tool_dir.join(target.file_name().unwrap());
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            (link, target)
+        })
+        .collect();
 
     sandbox.skiman().arg("sync").assert().code(0);
 
-    assert_eq!(
-        std::fs::read_link(&theirs).unwrap(),
-        skills.join("pdf/scripts")
-    );
+    for (link, target) in theirs {
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    }
 }
 
 #[test]

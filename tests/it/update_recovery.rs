@@ -665,7 +665,7 @@ fn an_update_stopped_before_the_lock_does_not_merge_again() {
     assert_eq!(final_state(&moved), final_state(&never));
 }
 
-/// The same for a skill in a group folder: killed at each write, or stopped
+/// The same for a skill in a nested group folder: killed at each write, or stopped
 /// with what it swapped out still in `.skiman/tmp/` (`old/skills/<group>/<name>`),
 /// the update run again finds the old folder and does not merge again.
 #[test]
@@ -674,11 +674,11 @@ fn an_update_stopped_before_the_lock_does_not_merge_again() {
     ignore = "needs the test hook, which only debug builds have"
 )]
 fn an_update_of_a_grouped_skill_stopped_before_the_lock_does_not_merge_again() {
-    let grouped = |sandbox: &Sandbox| pdf_with_repeated_lines_in(sandbox, Some("documents"));
+    let grouped = |sandbox: &Sandbox| pdf_with_repeated_lines_in(sandbox, Some("documents/forms"));
     assert_each_kill_finishes(
         grouped,
         &[
-            "update:write:skills/documents/pdf",
+            "update:write:skills/documents/forms/pdf",
             "update:write:skiman.lock",
             "update:write:upstream/pdf",
         ],
@@ -689,7 +689,7 @@ fn an_update_of_a_grouped_skill_stopped_before_the_lock_does_not_merge_again() {
     never.skiman().args(&args).assert().code(0);
     grouped(&stopped);
     let chmod = "chmod 555 \"$XDG_STATE_HOME\"/skiman/backups/*";
-    let at = "update:write:skills/documents/pdf";
+    let at = "update:write:skills/documents/forms/pdf";
     update_with_hook(&stopped, &["pdf"], at, chmod).code(4);
     stopped.skiman().args(&args).assert().code(0);
     assert_eq!(final_state(&stopped), final_state(&never));

@@ -38,7 +38,7 @@ use std::path::Path;
 
 use crate::Exit;
 use crate::backup::Backups;
-use crate::change::{self, Change, Held, Want};
+use crate::change::{Change, Held, Want};
 use crate::commands::prompts;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -55,7 +55,7 @@ use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, 
 use crate::skill_md::SkillMd;
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
-use crate::staging::{self, Staging};
+use crate::staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tree::WorkingTree;
@@ -71,9 +71,6 @@ struct Context<'a> {
     lock: RepoLock,
     /// One backup folder for the command: tmp leftovers and old folders.
     backups: Backups,
-    /// The command's `tmp/<timestamp>/`, begun before the first skill
-    /// writes, so tmp leftovers move first.
-    staging: Option<Staging>,
 }
 
 fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<Exit, Failure> {
@@ -121,7 +118,6 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
             repo: &repo,
             lock: RepoLock::wait(&paths, &repo)?,
             backups: Backups::new(&paths),
-            staging: None,
         })
     };
     let mut any_done = names.is_empty();
@@ -151,7 +147,6 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
     }
     match context {
         Some(context) if any_done => {
-            drop(context.staging);
             exit = exit.combine(sync::run(&paths, &repo, &context.lock, Output::Normal));
         }
         None if dry_run => out!("dry run: nothing was written"),
@@ -485,20 +480,8 @@ fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
         report(skill, &plan, true, false);
         return Ok(Exit::Success);
     }
-    if context.staging.is_none() {
-        let staging = Staging::begin(repo, &context.lock, &mut context.backups)?;
-        context.staging = Some(staging);
-    }
-    let staging = context.staging.as_ref().expect("just begun");
-    let (done, result) = plan
-        .change
-        .apply(&held, repo.root(), staging, &mut context.backups);
-    if let Err(failure) = result {
-        for line in &done {
-            out!("{line}");
-        }
-        return Err(change::stopped(failure, &done));
-    }
+    plan.change
+        .write(&held, repo, &context.lock, &mut context.backups)?;
     report(skill, &plan, false, false);
     if let (Some(dir), true) = (context.backups.created(), plan.change.backs_up(&held)) {
         out!("saved the old folders of {name} to {}", dir.display());

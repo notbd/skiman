@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use crate::Exit;
 use crate::backup::Backups;
-use crate::change::{self, Change, Want};
+use crate::change::{Change, Want};
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
 use crate::fsutil::read_text;
@@ -24,7 +24,6 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
-use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::{Kind, Overlay, Tree, WorkingTree};
 
@@ -60,15 +59,7 @@ fn mv(old: &str, new: &str) -> Result<Exit, Failure> {
     let plan = Plan::build(&repo, old, new)?;
     plan.validate(&repo)?;
     let change = plan.change();
-    let held = change.held(repo.root())?;
-    let mut backups = Backups::new(&paths);
-    let staging = Staging::begin(&repo, &lock, &mut backups)?;
-    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
-    for line in &done {
-        out!("{line}");
-    }
-    result.map_err(|failure| change::stopped(failure, &done))?;
-    drop(staging);
+    change.apply(&repo, &lock, &mut Backups::new(&paths))?;
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 

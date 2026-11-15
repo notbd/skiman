@@ -203,30 +203,24 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     let mut backups = Backups::new(&paths);
     let mut moved = false;
-    let staging = Staging::begin(&repo, &lock, &mut backups)?;
     let done = match &writes {
-        Some((_, change, todo)) => {
-            let (lines, result) = change.apply(todo, repo.root(), &staging, &mut backups);
+        Some((_, change, todo)) => change.write(todo, &repo, &lock, &mut backups).map(|lines| {
             for line in lines {
                 out!("{line}");
             }
-            result
-        }
-        None => Ok(()),
+        }),
+        // tmp leftovers move all the same.
+        None => Staging::begin(&repo, &lock, &mut backups).map(drop),
     }
-    .and_then(|()| take_over(&plan, &mut backups, &mut moved));
-    drop(staging);
+    .and_then(|()| take_over(&plan, &mut backups, &mut moved).map_err(change::stopped));
     let originals = match backups.created().filter(|_| moved) {
         None => "this run moved no original".to_owned(),
         Some(dir) => format!("the originals this run moved are in {}", dir.display()),
     };
     if let Err(failure) = done {
         return Err(Failure {
-            exit: failure.exit,
-            message: format!(
-                "{}\nthe import stopped part-way: the lines above list what was done; {originals}; run the same command again to finish it (it keeps what is already in place)",
-                failure.message,
-            ),
+            message: format!("{}\n{originals}", failure.message),
+            ..failure
         });
     }
     let exit = sync::run(&paths, &repo, &lock, Output::Normal);

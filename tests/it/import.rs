@@ -856,7 +856,7 @@ fn a_failure_during_takeover_stops_the_import_and_the_same_command_finishes_it()
         )),
         "{stderr}"
     );
-    assert!(stderr.contains("the import stopped part-way"), "{stderr}");
+    assert!(stderr.contains("stopped part-way"), "{stderr}");
     // No original moved; the run's backup holds only the repo files it
     // replaced, which the lines above list.
     let [first] = backup_dirs(&sandbox).try_into().unwrap();

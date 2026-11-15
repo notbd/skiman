@@ -778,7 +778,8 @@ fn a_failed_second_rename_says_where_both_versions_are() {
         new.display(),
         skill = skill.display(),
     );
-    assert!(stderr.contains(&place), "{stderr}");
+    let stopped = "the command stopped part-way: the lines above list what was done; run the same command again to finish it\n";
+    assert!(stderr.contains(&format!("{place}{stopped}")), "{stderr}");
     assert_both_versions(&old, &before);
 
     std::fs::rename(&new, &skill).unwrap();

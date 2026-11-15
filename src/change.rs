@@ -10,8 +10,8 @@
 //! without that rename, is renamed out of the way just before (the path is
 //! empty only between the two renames); a file is replaced in one rename,
 //! keeping its mode. What a piece replaces or removes goes to the backup.
-//! Nothing is printed while writing: [`Change::apply`] returns the lines for
-//! the command to print.
+//! Nothing is printed while writing: [`Change::write`] returns a line for
+//! each step, and prints them itself only when the write stops.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -20,6 +20,8 @@ use std::path::Path;
 use crate::backup::Backups;
 use crate::failure::Failure;
 use crate::fsutil;
+use crate::repo::SkillRepo;
+use crate::repo_lock::RepoLock;
 use crate::snapshot::SnapshotFile;
 use crate::staging::Staging;
 use crate::test_hook;
@@ -109,44 +111,77 @@ impl Change {
         })
     }
 
-    /// Writes, in order, each piece that `held` (read under the repo lock)
-    /// does not show as wanted; refuses one that is [`Held::WrongType`].
-    /// A piece that changed since `held` saw it stops the write before it is
-    /// touched. Returns a line for each step done, and the error that
-    /// stopped the write: the pieces written before it stay.
+    /// [`Change::write`] over what the skill repo holds now (read under the
+    /// repo lock), printing each line; whether anything went to the backup.
     pub fn apply(
         &self,
-        held: &[Held],
-        root: &Path,
-        staging: &Staging,
+        repo: &SkillRepo,
+        lock: &RepoLock,
         backups: &mut Backups,
-    ) -> (Vec<String>, Result<(), Failure>) {
-        let mut done = Vec::new();
+    ) -> Result<bool, Failure> {
+        let held = self.held(repo.root())?;
+        for line in self.write(&held, repo, lock, backups)? {
+            out!("{line}");
+        }
+        Ok(self.backs_up(&held))
+    }
+
+    /// Writes, in order, each piece that `held` (read under the repo lock)
+    /// does not show as wanted, staged in a folder of its own below
+    /// `.skiman/tmp/` (tmp leftovers go to `backups` first); refuses, before
+    /// anything is written, a piece that is [`Held::WrongType`]. A piece that
+    /// changed since `held` saw it stops the write before it is touched.
+    /// Returns a line for each step done. On an error the pieces written
+    /// before it stay: their lines are printed, and its message says to run
+    /// the same command again.
+    pub fn write(
+        &self,
+        held: &[Held],
+        repo: &SkillRepo,
+        lock: &RepoLock,
+        backups: &mut Backups,
+    ) -> Result<Vec<String>, Failure> {
+        // A piece of the wrong kind stops the write before anything is written.
+        let mut pieces = self.pieces.iter().zip(held);
+        if let Some(((rel, _), _)) = pieces.find(|(_, seen)| **seen == Held::WrongType) {
+            return Err(Failure::operational(format!(
+                "{} is in the way: it is not of the kind skiman writes there; nothing was changed",
+                repo.root().join(rel).display()
+            )));
+        }
         // The backup folder first, so one that cannot be made stops the write before it starts.
-        let backs_up = self.pieces.iter().zip(held).any(|((_, want), seen)| {
-            matches!(seen, Held::Other(_)) && (self.save_files || !matches!(want, Want::File(_)))
-        });
-        let mut result = match backs_up {
-            true => backups
-                .dir()
-                .map(drop)
-                .map_err(|e| Failure::operational(format!("{e}; nothing was changed"))),
-            false => Ok(()),
-        };
+        if self.backs_up(held) {
+            let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
+            backups.dir().map_err(nothing)?;
+        }
+        let staging = Staging::begin(repo, lock, backups)?;
+        let mut done = Vec::new();
         for ((rel, want), seen) in self.pieces.iter().zip(held) {
-            if result.is_err() {
-                break;
+            if *seen == Held::Same {
+                continue;
             }
-            if *seen != Held::Same {
-                test_hook::at(self.command, &format!("write:{rel}"));
-                result = self.write(root, rel, want, seen, staging, backups, &mut done);
+            test_hook::at(self.command, &format!("write:{rel}"));
+            // A piece that fails its checks is untouched; one that fails
+            // while it is written may be part-way.
+            let failed = match ready(repo.root(), rel, want, seen) {
+                Err(failure) if done.is_empty() => Some(failure),
+                Err(failure) => Some(stopped(failure)),
+                Ok(()) => (self.put(repo.root(), rel, want, seen, &staging, backups, &mut done))
+                    .err()
+                    .map(stopped),
+            };
+            if let Some(failure) = failed {
+                for line in &done {
+                    out!("{line}");
+                }
+                return Err(failure);
             }
         }
-        (done, result)
+        Ok(done)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn write(
+    fn put(
         &self,
         root: &Path,
         rel: &str,
@@ -159,19 +194,6 @@ impl Change {
         let target = root.join(rel);
         let shown = target.display();
         let fail = |what: String| move |e: io::Error| Failure::operational(format!("{what}: {e}"));
-        if let Some(why) = fsutil::broken_chain(root, &target) {
-            return Err(Failure::operational(format!("cannot write {shown}: {why}")));
-        }
-        let now = held(root, rel, want)?;
-        if *seen == Held::WrongType || now != *seen {
-            let what = match now {
-                Held::WrongType => "is in the way: it is not of the kind skiman writes there",
-                _ => "changed while skiman was writing",
-            };
-            return Err(Failure::operational(format!(
-                "{shown} {what}; nothing was put in its place"
-            )));
-        }
         let saved = Path::new("repo").join(rel);
         // The line to print once `from` is in the backup.
         let move_in = |from: &Path, backups: &mut Backups| {
@@ -267,6 +289,29 @@ impl Change {
     }
 }
 
+/// Refuses a piece whose path passes through a link, that is not of the
+/// kind `want` is, or that changed since `seen` was read: a folder or file
+/// by its content, an absent piece by whether it is there, a renamed one by
+/// which of its two paths are there.
+fn ready(root: &Path, rel: &str, want: &Want, seen: &Held) -> Result<(), Failure> {
+    let target = root.join(rel);
+    let shown = target.display();
+    if let Some(why) = fsutil::broken_chain(root, &target) {
+        return Err(Failure::operational(format!("cannot write {shown}: {why}")));
+    }
+    let now = held(root, rel, want)?;
+    if now != *seen {
+        let what = match now {
+            Held::WrongType => "is in the way: it is not of the kind skiman writes there",
+            _ => "changed while skiman was writing",
+        };
+        return Err(Failure::operational(format!(
+            "{shown} {what}; nothing was put in its place"
+        )));
+    }
+    Ok(())
+}
+
 /// What `root` holds at `rel` against `want`: a folder compares by tree
 /// hash, a file by its bytes.
 pub fn held(root: &Path, rel: &str, want: &Want) -> Result<Held, Failure> {
@@ -316,15 +361,12 @@ pub fn held(root: &Path, rel: &str, want: &Want) -> Result<Held, Failure> {
     })
 }
 
-/// `failure` of a write that stopped part-way, after its lines were printed:
-/// running the same command again finishes it.
-pub fn stopped(failure: Failure, done: &[String]) -> Failure {
-    if done.is_empty() {
-        return failure;
-    }
+/// `failure` of a command that stopped part-way, after its lines were
+/// printed: running the same command again finishes it.
+pub fn stopped(failure: Failure) -> Failure {
     Failure {
         message: format!(
-            "{}\nthe write stopped part-way: the lines above list what was done; run the same command again to finish it",
+            "{}\nthe command stopped part-way: the lines above list what was done; run the same command again to finish it",
             failure.message
         ),
         ..failure

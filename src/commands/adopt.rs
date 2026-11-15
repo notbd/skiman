@@ -27,7 +27,6 @@ use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
-use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
@@ -81,29 +80,20 @@ fn adopt(name: &str, from: &str, yes: bool) -> Result<Exit, Failure> {
         )));
     }
     validate(&repo, name, &change)?;
-    let held = change.held(repo.root())?;
     let mut backups = Backups::new(&paths);
     let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
     backups.dir().map_err(nothing)?;
-    let staging = Staging::begin(&repo, &lock, &mut backups)?;
-    let (mut done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
-    let rel = Path::new(tool.id).join(name);
-    let moved = result.and_then(|()| {
-        test_hook::at("adopt", "placed");
-        let moved = backups.move_in(&entry, &rel).map_err(|e| {
-            Failure::operational(format!(
+    change.apply(&repo, &lock, &mut backups)?;
+    test_hook::at("adopt", "placed");
+    let moved = backups
+        .move_in(&entry, &Path::new(tool.id).join(name))
+        .map_err(|e| {
+            change::stopped(Failure::operational(format!(
                 "cannot move {} to the backup: {e}; skills/{name} is in place",
                 entry.display()
-            ))
+            )))
         })?;
-        done.push(format!("moved {} to {}", entry.display(), moved.display()));
-        Ok(())
-    });
-    for line in &done {
-        out!("{line}");
-    }
-    moved.map_err(|failure| change::stopped(failure, &done))?;
-    drop(staging);
+    out!("moved {} to {}", entry.display(), moved.display());
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 

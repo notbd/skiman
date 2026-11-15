@@ -28,7 +28,6 @@ use crate::rules::{self, LIMITS, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
 use crate::source::{Source, SourceKind};
-use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::WorkingTree;
 use crate::upstream::{Upstream, print_not_installed, run_flags};
@@ -131,15 +130,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     check_install_names(&repo, &installs, &upstream)?;
     let change = change(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &change)?;
-    let held = change.held(repo.root())?;
-    let mut backups = Backups::new(&paths);
-    let staging = Staging::begin(&repo, &lock, &mut backups)?;
-    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
-    for line in &done {
-        out!("{line}");
-    }
-    result.map_err(|failure| change::stopped(failure, &done))?;
-    drop(staging);
+    change.apply(&repo, &lock, &mut Backups::new(&paths))?;
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 

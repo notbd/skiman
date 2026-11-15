@@ -13,7 +13,6 @@ use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::SnapshotFile;
-use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::WorkingTree;
 
@@ -58,7 +57,6 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
     // A `new` stopped after the folder was in place finishes when run again.
     let ours = |taken| Ok(taken == Taken::Folder && change.in_place(repo.root())?);
     names::check_not_taken(&repo, name, ours)?;
-    let held = change.held(repo.root())?;
     // The whole skill folder is new content.
     let scope = Scope {
         skills: BTreeSet::from([name.to_owned()]),
@@ -66,14 +64,7 @@ fn new(name: &str, description: Option<String>) -> Result<Exit, Failure> {
         ..Scope::default()
     };
     rules::validate_write(&change.overlay(&WorkingTree::new(repo.root())), &scope)?;
-    let mut backups = Backups::new(&paths);
-    let staging = Staging::begin(&repo, &lock, &mut backups)?;
-    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
-    for line in &done {
-        out!("{line}");
-    }
-    result?;
-    drop(staging);
+    change.apply(&repo, &lock, &mut Backups::new(&paths))?;
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 

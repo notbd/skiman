@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use crate::Exit;
 use crate::backup::Backups;
-use crate::change::{self, Change, Want};
+use crate::change::{Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::read_text;
@@ -19,7 +19,6 @@ use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
-use crate::staging::Staging;
 use crate::sync::{self, Output};
 use crate::tree::WorkingTree;
 
@@ -46,15 +45,9 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
     Found::read(&repo, name)?;
     let change = change(&repo, name)?;
     validate(&repo, name, &change)?;
-    let held = change.held(repo.root())?;
     let mut backups = Backups::new(&paths);
-    let staging = Staging::begin(&repo, &lock, &mut backups)?;
-    let (done, result) = change.apply(&held, repo.root(), &staging, &mut backups);
-    for line in &done {
-        out!("{line}");
-    }
-    result.map_err(|failure| change::stopped(failure, &done))?;
-    match backups.created().filter(|_| change.backs_up(&held)) {
+    let backed_up = change.apply(&repo, &lock, &mut backups)?;
+    match backups.created().filter(|_| backed_up) {
         Some(dir) => out!("removed skill {name}; its folders are in {}", dir.display()),
         None => out!("removed the records of skill {name}"),
     }

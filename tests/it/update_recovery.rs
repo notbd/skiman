@@ -378,6 +378,36 @@ fn a_failed_lock_write_stops_the_update_and_running_it_again_finishes_it() {
     }
 }
 
+/// A piece of the wrong kind (`upstream/<name>` a file) stops the update
+/// before anything is written: exit 4, the skill and its records as they
+/// were.
+#[test]
+fn a_piece_of_the_wrong_kind_stops_the_update_before_anything_is_written() {
+    let sandbox = Sandbox::new();
+    pdf_with_an_update(&sandbox);
+    let repo = sandbox.skill_repo();
+    std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
+    write(repo.join("upstream/pdf"), "not a folder\n");
+    let before = [tree(repo.join("skills")), tree(repo.join("upstream"))];
+    let lock = read(repo.join("skiman.lock"));
+
+    let update = sandbox.skiman().args(["update", "pdf"]).assert().code(4);
+
+    let stderr = stderr_of(&update);
+    assert!(
+        stderr.contains(
+            "is in the way: it is not of the kind skiman writes there; nothing was changed"
+        ),
+        "{stderr}"
+    );
+    assert_eq!(stdout_of(&update), "");
+    assert_eq!(
+        [tree(repo.join("skills")), tree(repo.join("upstream"))],
+        before
+    );
+    assert_eq!(read(repo.join("skiman.lock")), lock);
+}
+
 /// The new `skills/<name>` is in place, but the old one cannot go to the
 /// backup: exit 4, the old one stays in `.skiman/tmp/` as a tmp leftover,
 /// and the same command finishes the update, moving it to a backup first.

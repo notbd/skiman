@@ -121,6 +121,10 @@ fn new_puts_a_skill_in_a_group_and_refuses_a_bad_or_taken_group() {
             ["new", "writing", "-d", "d", "--group", "other"],
             "error: the name `writing` is taken: skills/writing is a group folder\n",
         ),
+        (
+            ["new", "memo", "-d", "d", "--group", "memo"],
+            "error: `memo` cannot be the group of a skill named `memo`: a group and a skill never share a name\n",
+        ),
     ] {
         skiman(&sandbox, &args).code(1).stderr_eq(error);
     }
@@ -176,6 +180,14 @@ removed the empty group folder [..]/skill-repo/skills/a
 
     skiman(&sandbox, &["mv", "memo", "--group", "No"]).code(1);
     skiman(&sandbox, &["mv", "memo", "--group", "memo"]).code(1);
+    skiman(&sandbox, &["mv", "memo", "note", "--group", "note"]).code(1);
+    // A group is not a skill: remove refuses it and keeps what is in it.
+    skiman(&sandbox, &["remove", "c", "--yes"])
+        .code(1)
+        .stderr_eq(
+            "error: skills/c is a group folder, not a skill; remove its skills one by one\n",
+        );
+    assert!(repo.join("skills/c/memo/SKILL.md").is_file());
     skiman(&sandbox, &["mv", "memo"]).code(2);
     assert_linked(&sandbox, "memo", "c/memo");
 }

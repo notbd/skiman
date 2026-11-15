@@ -77,7 +77,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     let group = match &to_arg {
         To::Same => from.group.clone(),
         To::Group(group) => {
-            names::check_group(group, &layout)?;
+            names::check_group(group, new, &layout)?;
             Some(group.clone())
         }
         To::NoGroup => None,

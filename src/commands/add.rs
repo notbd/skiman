@@ -75,9 +75,6 @@ fn add(args: Args) -> Result<Exit, Failure> {
     if let Some(name) = &args.name {
         names::check_new_name(name)?;
     }
-    if let Some(group) = &args.group {
-        names::check_group(group, &repo.layout()?)?;
-    }
     let prompts = prompts();
     let (source, upstream) = fetch(&paths, source, args.git_ref.as_deref(), prompts)?;
     let candidates = discover(&source, &upstream)?;
@@ -115,6 +112,12 @@ fn add(args: Args) -> Result<Exit, Failure> {
         let source = source.clone().with_path(candidate.path.clone());
         let group = args.group.as_deref();
         installs.push(inspect(source, snapshot, candidate, name.clone(), group)?);
+    }
+    if let Some(group) = &args.group {
+        let layout = repo.layout()?;
+        for install in &installs {
+            names::check_group(group, &install.name, &layout)?;
+        }
     }
     check_install_names(&repo, &installs, &upstream)?;
 

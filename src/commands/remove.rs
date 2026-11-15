@@ -75,9 +75,16 @@ struct Found {
 }
 
 impl Found {
-    /// Refuses (exit 1) a name with neither a folder nor any record.
+    /// Refuses (exit 1) a name with neither a folder nor any record, and
+    /// the name of a group folder.
     fn read(repo: &SkillRepo, name: &str) -> Result<Found, Failure> {
-        let skill = repo.layout()?.path(name);
+        let layout = repo.layout()?;
+        if layout.find(name).is_none() && layout.groups().contains(name) {
+            return Err(Failure::refused(format!(
+                "skills/{name} is a group folder, not a skill; remove its skills one by one"
+            )));
+        }
+        let skill = layout.path(name);
         let folders: Vec<(PathBuf, String)> = [
             (repo.root().join(&skill), skill),
             (repo.upstream_dir(name), format!("upstream/{name}")),

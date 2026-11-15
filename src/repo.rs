@@ -55,18 +55,19 @@ impl SkillRepo {
         Ok(self.root.join(self.layout()?.path(name)))
     }
 
-    /// Removes the group folder of the skill folder `skill` (relative to the
-    /// skill repo) when nothing is left in it, printing a line; a skill in
-    /// no group has none.
+    /// Removes the group folders of the skill folder `skill` (relative to
+    /// the skill repo) that nothing is left in, innermost first, printing a
+    /// line for each; a skill in no group has none.
     pub fn remove_empty_group(&self, skill: &str) {
-        let Some(group) = Path::new(skill)
-            .parent()
-            .filter(|g| *g != Path::new("skills"))
-        else {
-            return;
-        };
-        let group = self.root.join(group);
-        if std::fs::remove_dir(&group).is_ok() {
+        let groups = Path::new(skill)
+            .ancestors()
+            .skip(1)
+            .take_while(|g| *g != Path::new("skills") && *g != Path::new(""));
+        for group in groups {
+            let group = self.root.join(group);
+            if std::fs::remove_dir(&group).is_err() {
+                return;
+            }
             out!("removed the empty group folder {}", group.display());
         }
     }

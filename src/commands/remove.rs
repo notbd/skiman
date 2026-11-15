@@ -79,9 +79,11 @@ impl Found {
     /// the name of a group folder.
     fn read(repo: &SkillRepo, name: &str) -> Result<Found, Failure> {
         let layout = repo.layout()?;
-        if layout.find(name).is_none() && layout.groups().contains(name) {
+        if layout.find(name).is_none()
+            && let Some(group) = layout.group_named(name)
+        {
             return Err(Failure::refused(format!(
-                "skills/{name} is a group folder, not a skill; remove its skills one by one"
+                "skills/{group} is a group folder, not a skill; remove its skills one by one"
             )));
         }
         let skill = layout.path(name);

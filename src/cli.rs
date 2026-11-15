@@ -34,7 +34,7 @@ pub enum Command {
         /// What the skill does and when to use it
         #[arg(short = 'd', long)]
         description: Option<String>,
-        /// Group folder to put the skill in: skills/<group>/<name>
+        /// Group to put the skill in, nested folders joined with `/`: skills/<group>/<name>
         #[arg(long, value_name = "group")]
         group: Option<String>,
     },
@@ -73,7 +73,7 @@ pub enum Command {
         old: String,
         /// New name
         new: Option<String>,
-        /// Move the skill into this group folder: skills/<group>/<name>
+        /// Move the skill into this group, nested folders joined with `/`: skills/<group>/<name>
         #[arg(long, value_name = "group", conflicts_with = "no_group")]
         group: Option<String>,
         /// Move the skill out of its group folder: skills/<name>
@@ -87,7 +87,7 @@ pub enum Command {
         /// Id of the agent tool whose tool directory holds the entry
         #[arg(long, value_name = "tool id", value_parser = parse_tool_id)]
         from: String,
-        /// Group folder to put the skill in: skills/<group>/<name>
+        /// Group to put the skill in, nested folders joined with `/`: skills/<group>/<name>
         #[arg(long, value_name = "group")]
         group: Option<String>,
         /// Adopt without asking for confirmation
@@ -147,7 +147,7 @@ pub struct AddArgs {
     /// Install name, when it must differ from the upstream name (single skill only)
     #[arg(long)]
     pub name: Option<String>,
-    /// Group folder to put the skills in: skills/<group>/<name>
+    /// Group to put the skills in, nested folders joined with `/`: skills/<group>/<name>
     #[arg(long, value_name = "group")]
     pub group: Option<String>,
     /// Branch, tag or full 40-hex commit to install instead of the default branch

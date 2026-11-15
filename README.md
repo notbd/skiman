@@ -23,8 +23,8 @@ cargo install --locked --path .
 
 Install a new version on every machine that uses the skill repo before you
 commit what it adds: keys of `skiman.toml` (such as `summary`), which older
-versions report as unknown keys, or group folders under `skills/`, which
-older versions read as skill folders without a `SKILL.md`. The pre-commit
+versions report as unknown keys, or group folders under `skills/` (nested
+ones too), which older versions read as skill folders without a `SKILL.md`. The pre-commit
 hook then refuses the commit.
 
 ## Usage
@@ -52,14 +52,18 @@ hook then refuses the commit.
 
 ### Groups
 
-A folder under `skills/` without a `SKILL.md` is a group folder: every
-folder in it is a skill in that group (`skills/<group>/<name>`), so the
-folder tree shows how the skills are grouped. A skill directly under
+A folder under `skills/` without a `SKILL.md` that holds only folders is a
+group folder: every folder in it is a skill in that group
+(`skills/<group>/<name>`), or an inner group folder, so the folder tree shows
+how the skills are grouped. Groups nest to any depth
+(`skills/third-party/tstack/<name>`, `--group third-party/tstack`). A group
+folder's name follows the skill-name rule and is no skill's name. A skill
+directly under
 `skills/` is in no group, and `skiman check` reminds you of it. Tool
 directories stay flat: each skill is linked under its own name, wherever its
 folder sits, so skill names are unique across groups. Moving a skill to
 another group (`skiman mv <name> --group <group>`, or by hand followed by
-`skiman sync`) changes no record. Why: [docs/adr/0008-groups-are-folders.md](docs/adr/0008-groups-are-folders.md).
+`skiman sync`) changes no record. Why: [docs/adr/0008-groups-are-folders.md](docs/adr/0008-groups-are-folders.md), [docs/adr/0009-groups-nest.md](docs/adr/0009-groups-nest.md).
 
 ### Project instruction files and project skills
 

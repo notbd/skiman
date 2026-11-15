@@ -73,8 +73,9 @@ One folder per skill, holding the files as the user should have them after the
 import, including the user's local modifications to third-party skills. A
 folder directly under `skills/` without a `SKILL.md` is a group folder: every
 folder in it is a skill of that group (`skills/<group>/<name>/`), and the skill
-repo gets the same layout. Groups do not nest; a group name follows the skill
-name rule and is no skill's name. Put skills in groups only as the user
+repo gets the same layout. Groups nest: a folder in a group folder that holds
+only folders and no `SKILL.md` is a group folder too. Each group folder's name
+follows the skill name rule and is no skill's name. Put skills in groups only as the user
 wants them grouped. Every skill passes the everyday rules:
 
 - `SKILL.md` sits at the top of the folder. Its YAML frontmatter starts on

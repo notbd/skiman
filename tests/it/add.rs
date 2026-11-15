@@ -2,7 +2,7 @@
 //! upstream (reached through the sandbox's `insteadOf` rule, no network).
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use snapbox::str;
 
@@ -546,12 +546,208 @@ fn an_unwritable_backups_folder_stops_add_with_exit_4_and_keeps_the_tmp_leftover
     let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
 
     assert!(
+        stderr.starts_with(&format!(
+            "error: cannot move the tmp leftover {} to a backup: cannot create a backup folder in ",
+            leftover.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
         stderr.ends_with("; fix that, then run the command again\n"),
         "{stderr}"
     );
     assert!(leftover.join("old/skills/pdf/SKILL.md").is_file());
     assert!(!sandbox.skill_repo().join("skills/pdf").exists());
     assert!(!sandbox.skill_repo().join("upstream/pdf").exists());
+}
+
+/// What a move of `entry` into a backup on another filesystem leaves when it
+/// is cut short: `entry`, its complete copy in an older backup, and the note
+/// that ties them. Returns the copy.
+fn plant_cut_short_move(sandbox: &Sandbox, entry: &Path) -> PathBuf {
+    use std::os::unix::fs::MetadataExt;
+    let rel = entry.strip_prefix(sandbox.skill_repo()).unwrap();
+    let copy = backups(sandbox).join("20240101T000000Z/repo").join(rel);
+    for at in [entry, copy.as_path()] {
+        std::fs::create_dir_all(at).unwrap();
+        std::fs::write(at.join("f"), "moved\n").unwrap();
+    }
+    let folder = std::fs::metadata(entry.parent().unwrap()).unwrap();
+    let name: String = rel
+        .file_name()
+        .unwrap()
+        .as_encoded_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let note = backups(sandbox).with_file_name("moves").join(format!(
+        "{}-{}-{name}",
+        folder.dev(),
+        folder.ino()
+    ));
+    let me = std::fs::metadata(entry).unwrap();
+    std::fs::create_dir_all(note.parent().unwrap()).unwrap();
+    std::fs::write(
+        &note,
+        format!("{} {}\n{}", me.dev(), me.ino(), copy.display()),
+    )
+    .unwrap();
+    copy
+}
+
+fn said_finished(entry: &Path, copy: &Path) -> String {
+    format!(
+        "deleted what was left of {}, cut short on its way to {}\n",
+        entry.display(),
+        copy.display()
+    )
+}
+
+/// A move into a backup cut short inside a tmp leftover is finished, and
+/// said, even when the backup folder for another leftover cannot be made.
+#[test]
+fn a_finished_cut_short_move_is_said_when_another_tmp_leftover_cannot_move() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let leftover = sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z");
+    let (cut, kept) = (leftover.join("old/skills/x"), leftover.join("old/skills/y"));
+    let copy = plant_cut_short_move(&sandbox, &cut);
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::write(kept.join("f"), "an edit worth keeping\n").unwrap();
+    let backups = backups(&sandbox);
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let assert = sandbox.skiman().args(["add", "acme/pdf", "--yes"]).assert();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stdout = String::from_utf8(assert.code(4).get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains(&said_finished(&cut, &copy)), "{stdout}");
+    assert!(!cut.exists());
+    assert_eq!(read(copy.join("f")), "moved\n");
+    assert_eq!(read(kept.join("f")), "an edit worth keeping\n");
+}
+
+/// A tmp leftover that moved is said even when a later one cannot move.
+#[test]
+fn a_moved_tmp_leftover_is_said_when_a_later_one_cannot_move() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let tmp = sandbox.skill_repo().join(".skiman/tmp");
+    let (first, stuck) = (tmp.join("20250101T000000Z"), tmp.join("20250102T000000Z"));
+    for leftover in [&first, &stuck] {
+        std::fs::create_dir_all(leftover.join("old/skills/x")).unwrap();
+        std::fs::write(leftover.join("old/skills/x/f"), "an edit\n").unwrap();
+    }
+    // A folder that cannot be written cannot be renamed into another one.
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let assert = sandbox.skiman().args(["add", "acme/pdf", "--yes"]).assert();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stdout = String::from_utf8(assert.code(4).get_output().stdout.clone()).unwrap();
+    let backup = std::fs::read_dir(backups(&sandbox))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let said = format!(
+        "moved tmp leftovers to {}\n",
+        backup.join("repo/.skiman/tmp").display()
+    );
+    assert!(stdout.contains(&said), "{stdout}");
+    assert_eq!(
+        read(backup.join("repo/.skiman/tmp/20250101T000000Z/old/skills/x/f")),
+        "an edit\n"
+    );
+    assert_eq!(read(stuck.join("old/skills/x/f")), "an edit\n");
+}
+
+/// With `backups/` and `moves/` read-only, a move cut short that is finished
+/// is said even though its note cannot be deleted.
+#[test]
+fn a_finished_cut_short_move_is_said_when_its_note_cannot_be_deleted() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let cut = sandbox
+        .skill_repo()
+        .join(".skiman/tmp/20250101T000000Z/old/skills/x");
+    let copy = plant_cut_short_move(&sandbox, &cut);
+    let backups = backups(&sandbox);
+    let moves = backups.with_file_name("moves");
+    let mode = |mode| {
+        for folder in [&backups, &moves] {
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode)).unwrap();
+        }
+    };
+    mode(0o555);
+
+    let assert = sandbox.skiman().args(["add", "acme/pdf", "--yes"]).assert();
+    mode(0o755);
+
+    let stdout = String::from_utf8(assert.code(4).get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains(&said_finished(&cut, &copy)), "{stdout}");
+    assert_eq!(read(copy.join("f")), "moved\n");
+}
+
+/// Of two moves cut short in one tmp leftover, the one finished is said
+/// even when the other cannot be.
+#[test]
+fn a_finished_cut_short_move_is_said_when_the_next_one_cannot_be_finished() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let leftover = sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z");
+    // One level deeper, so it is reached after `first` (`fsutil::entries`
+    // goes level by level).
+    let (first, stuck) = (
+        leftover.join("old/skills/x"),
+        leftover.join("old/skills/deeper/y"),
+    );
+    let copy = plant_cut_short_move(&sandbox, &first);
+    let stuck_copy = plant_cut_short_move(&sandbox, &stuck);
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let assert = sandbox.skiman().args(["add", "acme/pdf", "--yes"]).assert();
+    std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stdout = String::from_utf8(assert.code(4).get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains(&said_finished(&first, &copy)), "{stdout}");
+    assert!(
+        !stdout.contains(&said_finished(&stuck, &stuck_copy)),
+        "{stdout}"
+    );
+    assert!(!first.exists());
+    assert_eq!(read(copy.join("f")), "moved\n");
+    assert_eq!(read(stuck.join("f")), "moved\n");
+    // Only the note of the move not finished is left.
+    let notes = std::fs::read_dir(backups(&sandbox).with_file_name("moves")).unwrap();
+    assert_eq!(notes.count(), 1);
+}
+
+#[test]
+fn a_tmp_leftover_that_holds_nothing_is_dropped_without_a_backup_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    single_skill(&sandbox, "pdf", PDF_SKILL_MD);
+    let leftover = sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z");
+    std::fs::create_dir_all(leftover.join("old/skills")).unwrap();
+    std::fs::write(leftover.join(".gitignore"), "*\n").unwrap();
+    let backups = backups(&sandbox);
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let assert = sandbox.skiman().args(["add", "acme/pdf", "--yes"]).assert();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let stdout =
+        String::from_utf8(assert.code(0).stderr_eq("").get_output().stdout.clone()).unwrap();
+    assert!(!stdout.contains("moved tmp leftovers"), "{stdout}");
+    assert!(!leftover.exists());
+    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
 }
 
 /// `date -u` for `secs` since the epoch, as `YYYYMMDDTHHMMSSZ`.

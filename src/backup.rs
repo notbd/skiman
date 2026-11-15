@@ -182,19 +182,23 @@ impl Backups {
     /// Finishes each move to another filesystem that was cut short at or
     /// below `dir` (an entry with a [`moved_copy`]): deletes what is left of
     /// it, then its note. Its complete copy stays where that move made it.
-    /// Returns each entry with its copy.
-    pub fn finish_cut_short(&self, dir: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
-        let mut finished = Vec::new();
+    /// Gives `done` each entry with its copy as soon as what is left of it
+    /// is deleted.
+    pub fn finish_cut_short(
+        &self,
+        dir: &Path,
+        mut done: impl FnMut(&Path, &Path),
+    ) -> io::Result<()> {
         for (entry, _) in entries(dir)? {
             // Gone when it was in one finished before it.
             let Some(copy) = moved_copy(&entry, &self.parent) else {
                 continue;
             };
             delete(&entry).map_err(|e| kept(e, &copy))?;
+            done(&entry, &copy);
             std::fs::remove_file(note_of(&entry, &self.parent)?).map_err(|e| kept(e, &copy))?;
-            finished.push((entry, copy));
         }
-        Ok(finished)
+        Ok(())
     }
 
     /// Copies `from` next to `to` (`.<name>.skiman-partial`, which must not

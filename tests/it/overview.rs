@@ -87,9 +87,12 @@ fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
         plugin.join("skills/eng/unlisted/SKILL.md"),
         skill_md("unlisted"),
     );
+    write(plugin.join("skills/base/SKILL.md"), skill_md("base"));
+    write(home.join("outside/escape/SKILL.md"), skill_md("escape"));
+    symlink(home.join("outside/escape"), plugin.join("extra")).unwrap();
     write(
         plugin.join(".claude-plugin/plugin.json"),
-        r#"{"name": "kit", "skills": ["./skills/eng/tdd", "../outside"]}"#,
+        r#"{"name": "kit", "skills": ["./skills/eng/tdd", "../outside", "./extra"]}"#,
     );
     write(
         home.join(".claude/plugins/installed_plugins.json"),
@@ -146,12 +149,13 @@ fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
 | --- | --- | --- | --- | --- | --- | --- |
 | managing-skills | How to change skills and global instructions with skiman | built-in | skiman [..] | - | yes | - |
 
-## Managed elsewhere (5)
+## Managed elsewhere (6)
 
 skiman only lists these; it never changes them.
 
 | Skill | Managed by | Location | Read by |
 | --- | --- | --- | --- |
+| base | Claude Code plugin kit@market 1.0 | ~/.claude/plugins/cache/market/kit/1.0/skills/base | claude-code |
 | tdd | Claude Code plugin kit@market 1.0 | ~/.claude/plugins/cache/market/kit/1.0/skills/eng/tdd | claude-code, codex |
 | imagegen | Codex, built in | ~/.codex/skills/.system/imagegen | codex |
 | docx | claude.ai sync | ~/.claude/skills/synced/account-1/docx | claude-code |
@@ -160,8 +164,10 @@ skiman only lists these; it never changes them.
 
 ## Notes
 
-- An installed day marked (git) is the day of the first commit that added the skill's SKILL.md to the skill repo, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
-- `claude-code` also has built-in skills that are not stored on disk, so they are not listed.
+- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the skill repo, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
+- Claude Code plugin kit@market 1.0: the skills path `./extra` leads outside the plugin.
+- `claude-code` also reads built-in skills that are not stored on disk; they are not listed.
+- `codex` also reads the skills of its plugins in `~/.codex/plugins`; they are not listed.
 
 "#]])
         .stderr_eq("");
@@ -172,17 +178,36 @@ skiman only lists these; it never changes them.
 fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write(
-        sandbox
-            .home()
-            .join(".claude/plugins/installed_plugins.json"),
-        "[1, 2]",
-    );
-
-    let output = sandbox.skiman().arg("overview").assert().code(0);
-    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    let registry = sandbox
+        .home()
+        .join(".claude/plugins/installed_plugins.json");
+    let overview = || {
+        let output = sandbox.skiman().arg("overview").assert().code(0);
+        String::from_utf8(output.get_output().stdout.clone()).unwrap()
+    };
+    write(&registry, "[1, 2]");
+    let stdout = overview();
     assert!(
         stdout.contains("installed_plugins.json is not in a format skiman reads; its plugins' skills are not listed."),
+        "{stdout}"
+    );
+
+    // An unreadable entry is named; the others are still listed.
+    let plugin = sandbox.home().join("kit");
+    write(plugin.join("skills/tdd/SKILL.md"), skill_md("tdd"));
+    write(
+        &registry,
+        format!(
+            r#"{{"plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}]}}}}"#,
+            plugin.display()
+        ),
+    );
+    let stdout = overview();
+    assert!(
+        stdout.contains("The entry of plugin bad@market in ")
+            && stdout.contains(
+                "| tdd | Claude Code plugin kit@market (project scope) | ~/kit/skills/tdd | claude-code |"
+            ),
         "{stdout}"
     );
 }

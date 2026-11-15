@@ -266,9 +266,12 @@ impl Records {
             .unwrap_or_default()
     }
 
-    /// The string `key` of `[skills.<name>]`, when it is one.
-    pub fn skill_str(&self, name: &str, key: &str) -> Option<&str> {
-        self.manifest.skill(name)?.get(key)?.as_str()
+    /// Whether `[skills.<name>]` holds `key`, whatever its value.
+    pub fn skill_has(&self, name: &str, key: &str) -> bool {
+        self.manifest
+            .skill(name)
+            .and_then(|skill| skill.get(key))
+            .is_some()
     }
 
     /// The `[skills.<name>.source]` table, when there is one.

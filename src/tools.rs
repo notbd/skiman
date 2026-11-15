@@ -50,9 +50,9 @@ pub struct AgentTool {
     pub managed_elsewhere: &'static [ManagedElsewhere],
     /// Where other managers keep skills this tool reads (`skiman overview`).
     pub skills_elsewhere: &'static [SkillsElsewhere],
-    /// The tool also has built-in skills that are not stored on disk, so no
-    /// listing can show them.
-    pub builtin_skills_off_disk: bool,
+    /// Skills this tool reads that `skiman overview` cannot list, each said
+    /// as what follows "`<tool id>` also reads".
+    pub skills_not_listed: &'static [&'static str],
     /// Skill names this tool reserves (on top of [`crate::names::RESERVED`]).
     pub reserved_names: &'static [&'static str],
     /// Settings file that holds the tool's session-start hooks; `None` when the tool has none.
@@ -108,7 +108,7 @@ pub const TOOLS: &[AgentTool] = &[
                 registry: ".claude/plugins/installed_plugins.json",
             },
         ],
-        builtin_skills_off_disk: true,
+        skills_not_listed: &["built-in skills that are not stored on disk"],
         reserved_names: &["synced"],
         session_hook_file: Some(".claude/settings.json"),
         session_hook_unavailable: None,
@@ -140,7 +140,9 @@ pub const TOOLS: &[AgentTool] = &[
             depth: 1,
             owner: "Codex, built in",
         }],
-        builtin_skills_off_disk: false,
+        // Which plugin versions Codex enables is in its own config, a format
+        // skiman does not read.
+        skills_not_listed: &["the skills of its plugins in `~/.codex/plugins`"],
         reserved_names: &[],
         session_hook_file: Some(".codex/hooks.json"),
         // Phase 1 could not confirm that a trusted entry runs on startup and
@@ -163,7 +165,7 @@ pub const TOOLS: &[AgentTool] = &[
         instruction_size_limit: Some(24000),
         managed_elsewhere: &[],
         skills_elsewhere: &[],
-        builtin_skills_off_disk: false,
+        skills_not_listed: &[],
         reserved_names: &[],
         session_hook_file: None,
         session_hook_unavailable: None,

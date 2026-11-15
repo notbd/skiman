@@ -65,9 +65,9 @@ pub fn find(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) -> Found {
                 }
             }
         }
-        if tool.builtin_skills_off_disk {
+        for what in tool.skills_not_listed {
             found.notes.push(format!(
-                "`{}` also has built-in skills that are not stored on disk, so they are not listed.",
+                "`{}` also reads {what}; they are not listed.",
                 tool.id
             ));
         }
@@ -183,7 +183,7 @@ fn sorted_children(dir: &Path) -> Vec<PathBuf> {
 
 /// `(owner, skill folder)` for every skill of every plugin in Claude Code's
 /// plugin registry (`installed_plugins.json`, version 2). A missing registry
-/// lists nothing; one that cannot be read adds a note.
+/// lists nothing; what cannot be read adds a note, and the rest is listed.
 fn plugin_skills(registry: &Path, notes: &mut Vec<String>) -> Vec<(String, PathBuf)> {
     let text = match std::fs::read(registry) {
         Ok(text) => text,
@@ -208,69 +208,98 @@ fn plugin_skills(registry: &Path, notes: &mut Vec<String>) -> Vec<(String, PathB
     };
     let mut skills = Vec::new();
     for (plugin, installs) in &plugins {
-        for install in installs.as_array().into_iter().flatten() {
+        let unreadable = || {
+            format!(
+                "The entry of plugin {plugin} in {} is not in a format skiman reads; its skills are not listed.",
+                registry.display()
+            )
+        };
+        let Some(installs) = installs.as_array() else {
+            notes.push(unreadable());
+            continue;
+        };
+        for install in installs {
             let Some(dir) = install.get("installPath").and_then(Value::as_str) else {
+                notes.push(unreadable());
                 continue;
             };
-            let owner = match install.get("version").and_then(Value::as_str) {
-                Some(version) => format!("Claude Code plugin {plugin} {version}"),
-                None => format!("Claude Code plugin {plugin}"),
-            };
-            match plugin_skill_folders(Path::new(dir)) {
-                Ok(folders) => skills.extend(folders.into_iter().map(|f| (owner.clone(), f))),
-                Err(problem) => {
-                    notes.push(format!("{owner}: {problem}; its skills are not listed."))
-                }
+            let mut owner = format!("Claude Code plugin {plugin}");
+            if let Some(version) = install.get("version").and_then(Value::as_str) {
+                owner.push_str(&format!(" {version}"));
             }
+            if let Some(scope) = install.get("scope").and_then(Value::as_str)
+                && scope != "user"
+            {
+                owner.push_str(&format!(" ({scope} scope)"));
+            }
+            let (folders, problems) = plugin_skill_folders(Path::new(dir));
+            skills.extend(folders.into_iter().map(|f| (owner.clone(), f)));
+            notes.extend(problems.into_iter().map(|p| format!("{owner}: {p}.")));
         }
     }
     skills
 }
 
-/// The skill folders of the plugin installed at `dir`: each path its
-/// `.claude-plugin/plugin.json` lists under `skills` (a skill folder, or a
-/// folder of skill folders), or the `skills` folder when it lists none.
-fn plugin_skill_folders(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let manifest = dir.join(".claude-plugin/plugin.json");
-    let listed: Vec<String> = match std::fs::read(&manifest) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec!["skills".to_owned()],
-        Err(e) => return Err(format!("cannot read {}: {e}", manifest.display())),
-        Ok(text) => {
-            let value: Value = serde_json::from_slice(&text)
-                .map_err(|e| format!("{} is not valid JSON: {e}", manifest.display()))?;
-            match value.get("skills") {
-                None => vec!["skills".to_owned()],
-                Some(Value::String(path)) => vec![path.clone()],
-                Some(Value::Array(paths)) => paths
-                    .iter()
-                    .filter_map(|p| p.as_str().map(str::to_owned))
-                    .collect(),
-                Some(_) => {
-                    return Err(format!(
-                        "`skills` in {} is neither a path nor a list of paths",
-                        manifest.display()
-                    ));
+/// The skill folders of the plugin installed at `dir`, as Claude Code loads
+/// them: its `skills` folder, plus each path its `.claude-plugin/plugin.json`
+/// lists under `skills` (a skill folder, or a folder of skill folders). A
+/// path that resolves outside the plugin is left out, as Claude Code leaves
+/// it out. Returns the folders and what could not be read.
+fn plugin_skill_folders(dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
+    let mut problems = Vec::new();
+    let Ok(root) = dir.canonicalize() else {
+        problems.push(format!("its folder {} is missing", dir.display()));
+        return (Vec::new(), problems);
+    };
+    let manifest = root.join(".claude-plugin/plugin.json");
+    let mut listed = vec!["skills".to_owned()];
+    match std::fs::read(&manifest) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => problems.push(format!("cannot read {}: {e}", manifest.display())),
+        Ok(text) => match serde_json::from_slice::<Value>(&text) {
+            Err(e) => problems.push(format!("{} is not valid JSON: {e}", manifest.display())),
+            Ok(value) => match value.get("skills") {
+                None => {}
+                Some(Value::String(path)) => listed.push(path.clone()),
+                Some(Value::Array(paths)) => {
+                    listed.extend(paths.iter().filter_map(|p| p.as_str().map(str::to_owned)))
                 }
-            }
-        }
+                Some(_) => problems.push(format!(
+                    "`skills` in {} is neither a path nor a list of paths",
+                    manifest.display()
+                )),
+            },
+        },
+    }
+    let inside = |path: &Path| {
+        path.canonicalize()
+            .ok()
+            .filter(|real| real.starts_with(&root))
     };
     let mut folders = Vec::new();
     for rel in listed {
-        let rel = Path::new(&rel);
-        // Only paths inside the plugin: a plugin cannot point this listing elsewhere.
-        if rel.is_absolute()
-            || rel
-                .components()
-                .any(|c| c == std::path::Component::ParentDir)
-        {
+        let path = root.join(&rel);
+        let Some(real) = inside(&path) else {
+            if path.symlink_metadata().is_ok() {
+                problems.push(format!("the skills path `{rel}` leads outside the plugin"));
+            }
             continue;
-        }
-        let path = dir.join(rel);
-        if path.join("SKILL.md").is_file() {
-            folders.push(path);
+        };
+        let candidates = if real.join("SKILL.md").is_file() {
+            vec![real]
         } else {
-            folders.extend(skill_folders(&path, 1));
+            skill_folders(&real, 1)
+        };
+        for folder in candidates {
+            match inside(&folder) {
+                Some(real) if !folders.contains(&real) => folders.push(real),
+                Some(_) => {}
+                None => problems.push(format!(
+                    "the skill folder {} leads outside the plugin",
+                    folder.display()
+                )),
+            }
         }
     }
-    Ok(folders)
+    (folders, problems)
 }

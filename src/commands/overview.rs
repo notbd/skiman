@@ -35,7 +35,7 @@ const ELSEWHERE_HEADER: [&str; 4] = ["Skill", "Managed by", "Location", "Read by
 /// The summary of the skill skiman brings, which has no `[skills.<name>]` table.
 const MANAGING_SKILLS_SUMMARY: &str = "How to change skills and global instructions with skiman";
 /// What a day marked `(git)` means.
-const GIT_DAY_NOTE: &str = "An installed day marked (git) is the day of the first commit that added \
+const GIT_DAY_NOTE: &str = "An installed day marked (git) is the day of the latest commit that added \
      the skill's SKILL.md to the skill repo, which can be later than the real install; \
      `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.";
 
@@ -156,9 +156,10 @@ fn elsewhere_row(skill: &OutsideSkill, home: &Path) -> [String; 4] {
     ]
 }
 
-/// The day (`YYYY-MM-DD`) of the first commit that added
-/// `skills/<name>/SKILL.md`, following renames; `None` when the skill repo
-/// is not in a git repo or the file was never committed.
+/// The day (`YYYY-MM-DD`) of the latest commit that added
+/// `skills/<name>/SKILL.md` (a skill removed and installed again counts
+/// from its last install), following renames; `None` when the skill repo is
+/// not in a git repo or the file was never committed.
 fn first_commit_day(root: &Path, name: &str) -> Option<String> {
     let output = git::query_command(root)
         .args(["log", "--follow", "--diff-filter=A", "--format=%as", "--"])
@@ -171,7 +172,7 @@ fn first_commit_day(root: &Path, name: &str) -> Option<String> {
         return None;
     }
     let days = String::from_utf8(output.stdout).ok()?;
-    days.lines().last().map(str::to_owned)
+    days.lines().next().map(str::to_owned)
 }
 
 fn or_dash(value: Option<String>) -> String {

@@ -18,7 +18,8 @@ pub fn gaps(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
         if tree.kind(&format!("skills/{name}"))? != Some(Kind::Dir) {
             continue;
         }
-        let has = |key| records.skill_str(&name, key).is_some();
+        // A value of the wrong type is a `toml-value` violation already.
+        let has = |key| records.skill_has(&name, key);
         let mut missing: Vec<&str> = ["summary", "group"]
             .into_iter()
             .filter(|key| !has(key))

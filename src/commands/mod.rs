@@ -11,6 +11,7 @@ pub mod init;
 pub mod list;
 pub mod mv;
 pub mod new;
+pub mod overview;
 pub mod project;
 pub mod remove;
 pub mod sync;

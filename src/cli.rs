@@ -106,6 +106,9 @@ pub enum Command {
     },
     /// Show every skill: kind, source, version, local modifications, conflicts, enabled
     List,
+    /// Show every skill on this machine as Markdown: by group with summary, source and
+    /// install day, then the skills other managers keep
+    Overview,
     /// Diagnose the setup: skill repo, hooks, agent tools, entries skiman does not own, leftovers
     Doctor,
     /// Manage project instruction files and project skills under registered project roots
@@ -263,6 +266,7 @@ where
         Command::Sync { hook } => commands::sync::run(hook),
         Command::Check { staged } => commands::check::run(staged),
         Command::List => commands::list::run(),
+        Command::Overview => commands::overview::run(),
         Command::Doctor => commands::doctor::run(),
         Command::Project { command } => match command {
             ProjectCommand::Add { path, id } => commands::project::add(&path, id),

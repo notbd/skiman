@@ -62,12 +62,12 @@ fn list() -> Result<Exit, Failure> {
     Ok(Exit::Success)
 }
 
-fn yes_no(value: bool) -> String {
+pub(crate) fn yes_no(value: bool) -> String {
     if value { "yes" } else { "no" }.to_owned()
 }
 
 /// The URL, and the folder inside the upstream when it is not the root.
-fn source_text(source: &SourceRecord) -> String {
+pub(crate) fn source_text(source: &SourceRecord) -> String {
     if source.path.is_empty() {
         source.url.clone()
     } else {
@@ -99,7 +99,7 @@ fn short(commit: &str) -> &str {
 }
 
 /// Whether `skills/<name>` differs from its upstream snapshot (tree hash).
-fn modified(tree: &dyn Tree, name: &str) -> std::io::Result<String> {
+pub(crate) fn modified(tree: &dyn Tree, name: &str) -> std::io::Result<String> {
     let upstream = format!("upstream/{name}");
     if tree.kind(&upstream)? != Some(Kind::Dir) {
         return Ok("unknown".to_owned());

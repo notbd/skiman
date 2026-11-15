@@ -1,6 +1,7 @@
 //! `skiman check [--staged]`: report every rule violation in the working tree
 //! of the skill repo, or in its staged snapshot, on stdout, and warnings on
-//! stderr. When the staged snapshot breaks a rule that the working tree
+//! stderr; on the working tree, also each skill that lacks a summary, group
+//! or origin (a warning). When the staged snapshot breaks a rule that the working tree
 //! passes, a hint says so and prints a line that stages the working tree.
 //! Read-only; takes no lock.
 
@@ -51,6 +52,13 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     }
     for warning in rules::warnings_all(tree.as_ref()).map_err(io)? {
         err!("warning: {warning}");
+    }
+    // Not on the staged snapshot: the pre-commit hook would print one line
+    // per skill on every commit.
+    if !staged {
+        for gap in rules::missing_info(tree.as_ref()).map_err(io)? {
+            err!("warning: {gap}");
+        }
     }
     if staged
         && !report.violations.is_empty()

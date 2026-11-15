@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use snapbox::str;
 
-use crate::support::{Sandbox, hex, init, skill_md, tree_hash};
+use crate::support::{Sandbox, hex, init, read, skill_md, tree_hash};
 
 /// Writes `contents` at `rel` in the skill repo, creating folders, as a user editing by hand.
 fn write(sandbox: &Sandbox, rel: &str, contents: impl AsRef<[u8]>) -> PathBuf {
@@ -79,8 +79,89 @@ fn a_clean_skill_repo_passes_check_with_no_output() {
         .assert()
         .code(0);
     third_party(&sandbox, "docx");
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\ngroup = \"documents\"\norigin = \"written here\"\n\
+         \n[skills.docx]\nsummary = \"Edit Word files\"\ngroup = \"documents\"\n",
+    );
 
     check(&sandbox).code(0).stdout_eq("").stderr_eq("");
+}
+
+#[test]
+fn a_skill_without_summary_group_or_origin_is_a_warning_of_check_only() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    sandbox
+        .skiman()
+        .args(["new", "pdf", "-d", "Fill PDF forms"])
+        .assert()
+        .code(0)
+        .stderr_eq("");
+    sandbox
+        .skiman()
+        .args(["new", "notes", "-d", "Take notes"])
+        .assert()
+        .code(0)
+        .stderr_eq("");
+    third_party(&sandbox, "docx");
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.notes]\nsummary = \"Keep notes\"\ngroup = \"writing\"\norigin = \"written here\"\n\
+         \n[skills.docx]\ngroup = \"documents\"\n",
+    );
+
+    check(&sandbox).code(0).stdout_eq("").stderr_eq(str![[r#"
+warning: skills/docx: skill-info: [skills.docx] in skiman.toml has no `summary`
+warning: skills/pdf: skill-info: [skills.pdf] in skiman.toml has no `summary`, `group`, `origin`
+
+"#]]);
+
+    // Neither the pre-commit hook's check nor the hooks' sync report it.
+    let repo = sandbox.skill_repo();
+    sandbox.git(&repo, ["add", "--all"]);
+    sandbox
+        .skiman()
+        .args(["check", "--staged"])
+        .assert()
+        .code(0)
+        .stdout_eq("")
+        .stderr_eq("");
+    sandbox
+        .skiman()
+        .args(["sync", "--hook"])
+        .assert()
+        .code(0)
+        .stdout_eq("")
+        .stderr_eq("");
+}
+
+#[test]
+fn summary_group_origin_and_installed_must_have_their_type() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.pdf]\nsummary = \"Fill\\nforms\"\ngroup = 3\norigin = \" \"\ninstalled = \"2026-01-31\"\n",
+    );
+
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:5: toml-value: `summary` in [skills.pdf] must be a non-empty string on one line
+skiman.toml:6: toml-value: `group` in [skills.pdf] must be a non-empty string on one line
+skiman.toml:7: toml-value: `origin` in [skills.pdf] must be a non-empty string on one line
+skiman.toml:8: toml-value: `installed` in [skills.pdf] must be a date without a time, such as 2026-01-31
+
+"#]]);
+
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let text = read(&manifest).replace("installed = \"2026-01-31\"", "installed = 2026-01-31");
+    std::fs::write(&manifest, text).unwrap();
+    let out = check(&sandbox).code(1).get_output().stdout.clone();
+    assert!(!String::from_utf8(out).unwrap().contains("installed"));
 }
 
 #[test]
@@ -343,7 +424,7 @@ fn unknown_keys_in_skiman_toml_are_reported_with_their_line() {
     check(&sandbox).code(1).stdout_eq(str![[r#"
 skiman.toml:7: unknown-key: unknown key `branch` in [skills.pdf.source] (allowed: url, path, ref, ref_kind, upstream_name)
 skiman.toml:10: toml-value: `enabled` in [skills.pdf] must be true or false
-skiman.toml:11: unknown-key: unknown key `pinned` in [skills.pdf] (allowed: enabled, source)
+skiman.toml:11: unknown-key: unknown key `pinned` in [skills.pdf] (allowed: enabled, summary, group, origin, installed, source)
 skiman.toml:13: unknown-key: unknown key `colors` in skiman.toml (allowed: tools, skills, secrets, projects)
 
 "#]]);
@@ -581,4 +662,20 @@ warning: skills/docx/SKILL.md:1: frontmatter: the frontmatter must start on line
 
 "#]]);
     assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+}
+
+#[test]
+fn a_skiman_toml_that_does_not_parse_gives_no_skill_info_warning() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.pdf\nsummary = \"Fill PDF forms\"\n",
+    );
+
+    let output = check(&sandbox).code(1);
+    let stderr = String::from_utf8(output.get_output().stderr.clone()).unwrap();
+    assert!(!stderr.contains("skill-info"), "{stderr}");
 }

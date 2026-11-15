@@ -15,6 +15,10 @@ pub const LOCKFILE: &str = "skiman.lock";
 
 const REF_KINDS: &[&str] = &["branch", "tag", "commit"];
 
+/// The one-line text keys of `[skills.<name>]` that describe a skill to a
+/// person (`skiman overview`); `skiman check` reminds of missing ones.
+pub const INFO_KEYS: [&str; 3] = ["summary", "group", "origin"];
+
 /// One parsed config file. `doc` is `None` when the file is missing or does not parse.
 pub struct ConfigFile {
     path: &'static str,
@@ -193,6 +197,18 @@ fn is_string(item: &Item) -> bool {
     item.as_str().is_some()
 }
 
+/// A non-empty string without a line break.
+fn is_line(item: &Item) -> bool {
+    item.as_str()
+        .is_some_and(|s| !s.trim().is_empty() && !s.contains(['\n', '\r']))
+}
+
+/// A TOML local date: `2026-01-31`, without a time or offset.
+fn is_date(item: &Item) -> bool {
+    item.as_datetime()
+        .is_some_and(|d| d.date.is_some() && d.time.is_none() && d.offset.is_none())
+}
+
 fn is_strings(item: &Item) -> bool {
     item.as_array()
         .is_some_and(|a| a.iter().all(|v| v.as_str().is_some()))
@@ -210,6 +226,11 @@ impl Records {
             manifest: ConfigFile::read(tree, MANIFEST, true)?,
             lock: ConfigFile::read(tree, LOCKFILE, false)?,
         })
+    }
+
+    /// Whether `skiman.toml` parsed.
+    pub fn manifest_parsed(&self) -> bool {
+        self.manifest.doc.is_some()
     }
 
     /// Whether both files parsed, so Consistency can be decided.
@@ -248,6 +269,14 @@ impl Records {
             .as_ref()
             .map(|d| crate::manifest::project_entries(d.as_table()))
             .unwrap_or_default()
+    }
+
+    /// Whether `[skills.<name>]` holds `key`, whatever its value.
+    pub fn skill_has(&self, name: &str, key: &str) -> bool {
+        self.manifest
+            .skill(name)
+            .and_then(|skill| skill.get(key))
+            .is_some()
     }
 
     /// The `[skills.<name>.source]` table, when there is one.
@@ -475,12 +504,26 @@ impl Records {
             return;
         };
         let skill = m.section(table, format!("[skills.{name}]"), line);
-        skill.unknown_keys(&["enabled", "source"], out);
+        let [summary, group, origin] = INFO_KEYS;
+        skill.unknown_keys(
+            &["enabled", summary, group, origin, "installed", "source"],
+            out,
+        );
         skill.value(
             "enabled",
             false,
             "true or false",
             |i| i.as_bool().is_some(),
+            out,
+        );
+        for key in INFO_KEYS {
+            skill.value(key, false, "a non-empty string on one line", is_line, out);
+        }
+        skill.value(
+            "installed",
+            false,
+            "a date without a time, such as 2026-01-31",
+            is_date,
             out,
         );
         let Some(source) = table.get("source") else {

@@ -25,6 +25,7 @@ mod list;
 mod managing_skills;
 mod mv;
 mod new;
+mod overview;
 mod ownership;
 mod project_add;
 mod project_adopt;

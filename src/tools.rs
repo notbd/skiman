@@ -13,6 +13,26 @@ pub enum ManagedElsewhere {
     RealpathUnder(&'static str),
 }
 
+/// A place another manager keeps skills that an agent tool reads; `skiman
+/// overview` lists the skills there and never changes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillsElsewhere {
+    /// Skill folders exactly `depth` levels below `dir` (relative to `HOME`),
+    /// kept by `owner`.
+    Folders {
+        dir: &'static str,
+        depth: u8,
+        owner: &'static str,
+    },
+    /// The skills of every plugin in this Claude Code plugin registry
+    /// (`installed_plugins.json`, relative to `HOME`); `settings` is the
+    /// settings file whose `enabledPlugins` says which ones are turned off.
+    ClaudePlugins {
+        registry: &'static str,
+        settings: &'static str,
+    },
+}
+
 /// Any folder that contains this file is managed elsewhere (a plugin), in every tool.
 pub const PLUGIN_MARKER: &str = ".claude-plugin/plugin.json";
 
@@ -32,6 +52,11 @@ pub struct AgentTool {
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
     pub managed_elsewhere: &'static [ManagedElsewhere],
+    /// Where other managers keep skills this tool reads (`skiman overview`).
+    pub skills_elsewhere: &'static [SkillsElsewhere],
+    /// Skills this tool reads that `skiman overview` cannot list, each said
+    /// as what follows "`<tool id>` also reads".
+    pub skills_not_listed: &'static [&'static str],
     /// Skill names this tool reserves (on top of [`crate::names::RESERVED`]).
     pub reserved_names: &'static [&'static str],
     /// Settings file that holds the tool's session-start hooks; `None` when the tool has none.
@@ -76,6 +101,19 @@ pub const TOOLS: &[AgentTool] = &[
             ManagedElsewhere::Path(".claude/skills/.trash"),
             ManagedElsewhere::RealpathUnder(".claude/plugins"),
         ],
+        // One folder per claude.ai account under `synced`.
+        skills_elsewhere: &[
+            SkillsElsewhere::Folders {
+                dir: ".claude/skills/synced",
+                depth: 2,
+                owner: "claude.ai sync",
+            },
+            SkillsElsewhere::ClaudePlugins {
+                registry: ".claude/plugins/installed_plugins.json",
+                settings: ".claude/settings.json",
+            },
+        ],
+        skills_not_listed: &["built-in skills that are not stored on disk"],
         reserved_names: &["synced"],
         session_hook_file: Some(".claude/settings.json"),
         session_hook_unavailable: None,
@@ -102,6 +140,14 @@ pub const TOOLS: &[AgentTool] = &[
             ManagedElsewhere::RealpathUnder(".codex/plugins"),
             ManagedElsewhere::Path(".codex/skills/.system"),
         ],
+        skills_elsewhere: &[SkillsElsewhere::Folders {
+            dir: ".codex/skills/.system",
+            depth: 1,
+            owner: "Codex, built in",
+        }],
+        // Which plugin versions Codex enables is in its own config, a format
+        // skiman does not read.
+        skills_not_listed: &["the skills of its plugins in `~/.codex/plugins`"],
         reserved_names: &[],
         session_hook_file: Some(".codex/hooks.json"),
         // Phase 1 could not confirm that a trusted entry runs on startup and
@@ -123,6 +169,8 @@ pub const TOOLS: &[AgentTool] = &[
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
         managed_elsewhere: &[],
+        skills_elsewhere: &[],
+        skills_not_listed: &[],
         reserved_names: &[],
         session_hook_file: None,
         session_hook_unavailable: None,
@@ -130,3 +178,29 @@ pub const TOOLS: &[AgentTool] = &[
         project_skill_dirs: &[".agent/skills", ".agents/skills"],
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `sync` decides what to leave alone from `managed_elsewhere`; a place
+    /// the overview lists must be one of them, or the two lists drift apart.
+    #[test]
+    fn every_folder_of_skills_elsewhere_is_managed_elsewhere() {
+        for tool in TOOLS {
+            for place in tool.skills_elsewhere {
+                if let SkillsElsewhere::Folders { dir, .. } = place {
+                    assert!(
+                        tool.managed_elsewhere.iter().any(|m| matches!(
+                            m,
+                            ManagedElsewhere::Path(p) | ManagedElsewhere::RealpathUnder(p)
+                                if dir.starts_with(p)
+                        )),
+                        "{} lists {dir} but does not leave it to another manager",
+                        tool.id
+                    );
+                }
+            }
+        }
+    }
+}

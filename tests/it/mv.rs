@@ -414,3 +414,30 @@ fn a_skill_md_naming_another_skill_is_no_mv_stopped_part_way() {
         );
     assert_eq!(world(&sandbox), before);
 }
+
+#[test]
+fn the_summary_group_origin_and_installed_date_move_with_the_skill() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    sandbox
+        .skiman()
+        .args(["new", "notes", "-d", "Take notes"])
+        .assert()
+        .code(0);
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let info = "summary = \"Keep notes\"\ngroup = \"writing\"\norigin = \"written here\"\ninstalled = 2026-01-31\n";
+    append(&manifest, &format!("\n[skills.notes]\n{info}"));
+
+    sandbox
+        .skiman()
+        .args(["mv", "notes", "journal"])
+        .assert()
+        .code(0);
+
+    let text = read(&manifest);
+    assert!(
+        text.contains(&format!("[skills.journal]\n{info}")),
+        "{text}"
+    );
+    assert!(!text.contains("[skills.notes]"), "{text}");
+}

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use snapbox::cmd::Command;
 use snapbox::str;
 
-use crate::support::{Sandbox, backups, exists, init, read, skill_md, tree, write};
+use crate::support::{Sandbox, backups, exists, init, killed_at, read, skill_md, tree, write};
 
 const AGENTS: &str = "# a\n\nUse pnpm.\n";
 
@@ -353,22 +353,240 @@ fn restore_moves_a_leftover_swap_folder_in_the_anchor_to_a_backup() {
         .code(0)
         .stdout_eq(str![[r#"
 ...
-moved the previous version of [..]/home/work/a/AGENTS.md, left by an interrupted write in [..]/home/work/a/.skiman-swap-20200101T000000Z, to [..]/home/.local/state/skiman/backups/[..]/swap-leftovers/[..]
+moved tmp leftovers to [..]/home/.local/state/skiman/backups/[..]/projects/work/a
 ...
 "#]]);
 
     assert!(!exists(&leftover));
-    // Each leftover gets a fresh folder of its own under `swap-leftovers/`.
-    let kept: Vec<String> = tree(backups(&sandbox))
+    // Moved as it was, next to where the backups of the anchor's items go.
+    let kept: Vec<(String, String)> = tree(backups(&sandbox))
         .into_iter()
         .filter(|(path, entry)| {
-            path.to_string_lossy().contains("swap-leftovers/") && entry.starts_with("file")
+            path.to_string_lossy().contains("/old/") && entry.starts_with("file")
         })
-        .map(|(_, entry)| entry)
+        .map(|(path, entry)| (path.to_string_lossy().into_owned(), entry))
         .collect();
-    assert_eq!(kept, ["file 644 only copy\n"]);
+    let [(path, entry)] = &kept[..] else {
+        panic!("{kept:?}");
+    };
+    assert!(
+        path.ends_with("/projects/work/a/.skiman-swap-20200101T000000Z/old/AGENTS.md"),
+        "{path}"
+    );
+    assert_eq!(entry, "file 644 only copy\n");
     assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), "from the mirror\n");
     assert_eq!(swap_folders(&disk(&sandbox, "a")), Vec::<PathBuf>::new());
+}
+
+/// A restore whose replaced version cannot go to the backup keeps it in the
+/// anchor's staging folder, out of the project's git, and says so; the next
+/// restore there moves it to a backup.
+#[test]
+fn a_previous_version_the_backup_refuses_stays_out_of_the_project_git_and_moves_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = adopted(&[("g/AGENTS.md", AGENTS)]);
+    let repo = disk(&sandbox, "g");
+    sandbox.git(&repo, ["init", "-q", "-b", "main"]);
+    write(mirror(&sandbox, "g/AGENTS.md"), "from the mirror\n");
+    let backups = backups(&sandbox);
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let failed = restore(&sandbox, &[repo.join("AGENTS.md")])
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(failed.status.code(), Some(4));
+    assert_eq!(read(repo.join("AGENTS.md")), "from the mirror\n");
+    let [leftover] = &swap_folders(&repo)[..] else {
+        panic!("{:?}", swap_folders(&repo));
+    };
+    let kept = leftover.join("old/AGENTS.md");
+    let stderr = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        stderr.contains("is restored, but its previous version cannot be moved to the backup (")
+            && stderr.contains(&format!("); it is kept at {}\n", kept.display())),
+        "{stderr}"
+    );
+    assert_eq!(read(&kept), AGENTS);
+    assert_eq!(
+        sandbox.git(&repo, ["status", "--porcelain", "--untracked-files=all"]),
+        "?? AGENTS.md"
+    );
+
+    write(mirror(&sandbox, "g/AGENTS.md"), "from the mirror again\n");
+    restore(&sandbox, &[repo.join("AGENTS.md")])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+write the mirror's version over [..]/home/work/g/AGENTS.md
+moved tmp leftovers to [..]/home/.local/state/skiman/backups/[..]/projects/work/g
+...
+"#]]);
+    assert_eq!(swap_folders(&repo), Vec::<PathBuf>::new());
+    let name = leftover.file_name().unwrap().to_string_lossy();
+    let moved = backed_up(&sandbox, &format!("projects/work/g/{name}/old/AGENTS.md"));
+    assert_eq!(read(moved), AGENTS);
+}
+
+/// A tmp leftover in the anchor that cannot be moved to the backup stays
+/// where it is, says so, and the restore writes the item all the same.
+#[test]
+fn a_tmp_leftover_that_cannot_be_moved_does_not_stop_restore() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    write(mirror(&sandbox, "a/AGENTS.md"), "from the mirror\n");
+    let leftover = disk(&sandbox, "a/.skiman-swap-20200101T000000Z");
+    write(leftover.join("old/AGENTS.md"), "only copy\n");
+    // Neither the folder nor what is in `old/` can be moved out.
+    let mode = |m| {
+        for dir in [leftover.join("old"), leftover.clone()] {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(m)).unwrap();
+        }
+    };
+    mode(0o555);
+    let out = restore(&sandbox, &[disk(&sandbox, "a/AGENTS.md")])
+        .output()
+        .unwrap();
+    mode(0o755);
+
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), "from the mirror\n");
+    let said = String::from_utf8_lossy(&out.stdout);
+    let named = format!(
+        "cannot move the tmp leftover {} to a backup: ",
+        leftover.display()
+    );
+    assert!(said.contains(&named), "{said}");
+    assert_eq!(read(leftover.join("old/AGENTS.md")), "only copy\n");
+}
+
+/// An anchor where no staging folder can be made fails its item only: the
+/// restore writes the item under the next anchor, saves the synced record
+/// and says where the replaced versions are.
+#[test]
+fn an_anchor_that_cannot_hold_a_staging_folder_fails_its_item_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS), ("b/AGENTS.md", AGENTS)]);
+    write(mirror(&sandbox, "a/AGENTS.md"), "a from the mirror\n");
+    write(mirror(&sandbox, "b/AGENTS.md"), "b from the mirror\n");
+    let before = synced_text(&sandbox);
+    let mode =
+        |m| std::fs::set_permissions(disk(&sandbox, "a"), std::fs::Permissions::from_mode(m));
+    mode(0o555).unwrap();
+    let items = [disk(&sandbox, "a/AGENTS.md"), disk(&sandbox, "b/AGENTS.md")];
+    let out = restore(&sandbox, &items).output().unwrap();
+    mode(0o755).unwrap();
+
+    let (said, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(out.status.code(), Some(4), "{said}{stderr}");
+    assert!(stderr.contains("cannot create a folder in"), "{stderr}");
+    assert_eq!(read(disk(&sandbox, "a/AGENTS.md")), AGENTS);
+    assert_eq!(read(disk(&sandbox, "b/AGENTS.md")), "b from the mirror\n");
+    assert!(said.contains("replaced versions are in "), "{said}");
+    assert_ne!(
+        synced_text(&sandbox),
+        before,
+        "the synced record of b/AGENTS.md is saved"
+    );
+}
+
+/// Only a real folder named like a staging folder is a tmp leftover: a
+/// link of the user's with such a name stays where it is, and so does what
+/// it points to.
+#[test]
+fn a_link_named_like_a_staging_folder_is_not_a_tmp_leftover() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    write(mirror(&sandbox, "a/AGENTS.md"), "from the mirror\n");
+    let theirs = sandbox.root().join("theirs");
+    write(theirs.join("notes.md"), "the user's\n");
+    let link = disk(&sandbox, "a/.skiman-swap-x");
+    std::os::unix::fs::symlink(&theirs, &link).unwrap();
+
+    let out = restore(&sandbox, &[disk(&sandbox, "a/AGENTS.md")])
+        .output()
+        .unwrap();
+
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{said}");
+    assert!(!said.contains("moved tmp leftovers"), "{said}");
+    assert_eq!(std::fs::read_link(&link).unwrap(), theirs);
+    assert_eq!(read(theirs.join("notes.md")), "the user's\n");
+}
+
+/// A restore killed before its write leaves a staging folder that holds
+/// only its `.gitignore`: no content, so the run again deletes it instead of
+/// moving it to a backup.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_staging_folder_with_only_its_gitignore_is_deleted_not_backed_up() {
+    let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
+    write(mirror(&sandbox, "a/AGENTS.md"), "from the mirror\n");
+    let item = disk(&sandbox, "a/AGENTS.md");
+    let args = ["project", "restore", "--yes", &item.to_string_lossy()].map(String::from);
+    killed_at(&sandbox, &args, "project:write:a/AGENTS.md");
+    let [left] = &swap_folders(&disk(&sandbox, "a"))[..] else {
+        panic!("{:?}", swap_folders(&disk(&sandbox, "a")));
+    };
+    assert_eq!(
+        tree(left).into_keys().collect::<Vec<_>>(),
+        [PathBuf::from(".gitignore")]
+    );
+
+    let again = restore(&sandbox, std::slice::from_ref(&item))
+        .output()
+        .unwrap();
+
+    let said = String::from_utf8_lossy(&again.stdout);
+    assert_eq!(again.status.code(), Some(0), "{said}");
+    assert!(!said.contains("moved tmp leftovers"), "{said}");
+    assert_eq!(read(&item), "from the mirror\n");
+    assert_eq!(swap_folders(&disk(&sandbox, "a")), Vec::<PathBuf>::new());
+}
+
+/// An item under an anchor that takes most of `PATH_MAX` is restored: the
+/// staging folder beside the item holds it by its name, so the anchor is in
+/// the staged path once, as in the item's own.
+#[test]
+fn an_item_under_a_deep_anchor_is_restored() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    // Two thirds of the room left: the anchor twice would not fit.
+    let path_max = if cfg!(target_os = "macos") {
+        1024
+    } else {
+        4096
+    };
+    let room = path_max - root(&sandbox).as_os_str().len();
+    let anchor: PathBuf = (0..room * 2 / 3 / 101).map(|_| "d".repeat(100)).collect();
+    let rel = anchor.join("AGENTS.md");
+    let rel = rel.to_str().unwrap();
+    write(disk(&sandbox, rel), AGENTS);
+    let skiman = |args: &[&str]| {
+        sandbox
+            .skiman()
+            .args(args)
+            .arg(root(&sandbox))
+            .assert()
+            .code(0)
+    };
+    skiman(&["project", "add"]);
+    skiman(&["project", "adopt", "--yes"]);
+    write(mirror(&sandbox, rel), "from the mirror\n");
+
+    restore(&sandbox, &[disk(&sandbox, rel)]).assert().code(0);
+
+    assert_eq!(read(disk(&sandbox, rel)), "from the mirror\n");
+    assert_eq!(
+        swap_folders(&disk(&sandbox, anchor.to_str().unwrap())),
+        Vec::<PathBuf>::new()
+    );
 }
 
 #[test]

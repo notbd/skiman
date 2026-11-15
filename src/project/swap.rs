@@ -1,50 +1,26 @@
-//! The one protocol for every replace of a project item side (plan
-//! "Writing"). Every temporary entry lives in a swap folder, one per
-//! replaced item, on the destination's filesystem: `<repo>/.skiman/swap/<ts>/`
-//! for the mirror, `<anchor>/.skiman-swap-<ts>/` for the project. Inside it,
-//! `new/` holds the snapshot, `old/` the set-aside copy of what was there,
-//! and `target` the destination path.
+//! The replace of a project item side (`docs/project-scope.md`, "Writing"),
+//! staged in a [`Staging`] on the destination's filesystem: `.skiman/swap/`
+//! for the mirror, `<anchor>/.skiman-swap-<ts>/` for the project. The new
+//! content and the replaced version swap places ([`Staging::swap`]), so a
+//! set-aside copy keeps its inode and a late write through a handle opened
+//! before the swap lands in it; only its move to a backup on another
+//! filesystem copies it, verifies the copy and deletes it. Nothing replaced
+//! is lost; an error never deletes the only copy.
 //!
-//! A set-aside copy is renamed, so it keeps its inode and a late write
-//! through a handle opened before the swap lands in it; only its move to a
-//! backup on another filesystem copies it, verifies the copy and deletes it.
-//! Nothing replaced is lost; an error never deletes the only copy.
-//!
-//! Everything is put in place with [`fsutil::place_new_or_rename`]. A file
-//! replaces an item that is there, so it is placed only where that never
-//! replaces anything ([`fsutil::place_new`]): where it cannot be (exFAT has
-//! neither a rename that never replaces nor hard links), a probe in the swap
-//! folder fails first, and the destination is never touched.
+//! A file replaces an item that is there, so it is placed only where that
+//! never replaces anything ([`fsutil::place_new`]): where it cannot be
+//! (exFAT has neither a rename that never replaces nor hard links), a probe
+//! in the staging folder fails first, and the destination is never touched.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use super::content::{self, Content};
 use super::pattern::Kind;
-use crate::backup::{Backups, fresh_dir, fresh_named_dir};
+use crate::backup::{self, Backups};
 use crate::fsutil;
-
-/// Prefix of a project-side swap folder; discovery never enters one.
-pub const PROJECT_PREFIX: &str = ".skiman-swap-";
-
-/// Which side a replace writes, and so where its swap folder lives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Place<'a> {
-    /// In `swap_dir` (`<repo>/.skiman/swap`).
-    Mirror { swap_dir: &'a Path },
-    /// In the item's anchor, named `.skiman-swap-<ts>`, with a `.gitignore`
-    /// holding `*` so a project repo never picks it up.
-    Project { anchor: &'a Path },
-}
-
-impl Place<'_> {
-    fn parent(&self) -> &Path {
-        match self {
-            Place::Mirror { swap_dir } => swap_dir,
-            Place::Project { anchor } => anchor,
-        }
-    }
-}
+use crate::staging::{Staging, Swap};
+use crate::test_hook;
 
 /// What the plan saw at the destination of a replace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,9 +50,9 @@ pub enum Previous {
     None,
     /// In the backup, at this path.
     At(PathBuf),
-    /// It could not be moved to the backup and stays at `at`, in its swap
-    /// folder. Exit 4; never deleted.
-    LeftInSwap { at: PathBuf, error: String },
+    /// It could not be moved to the backup (exit 4; never deleted): why,
+    /// and where it is.
+    Kept(String),
 }
 
 /// How a replace ended.
@@ -91,8 +67,8 @@ pub enum Outcome {
     },
     /// The destination was not what the plan saw; nothing was replaced.
     Conflict(String),
-    /// The new content is not in place; whatever was there is where it was,
-    /// or the message says where it is kept. Exit 4.
+    /// The new content is not in place, or its folder cannot be flushed;
+    /// the message says where what was there is. Exit 4.
     Failed(String),
 }
 
@@ -102,171 +78,131 @@ pub struct Replace<'a> {
     pub kind: Kind,
     pub expected: &'a Expect,
     pub new: &'a Content,
-    pub place: Place<'a>,
-    /// Every folder from here down to `dest`'s parent must be a real folder
-    /// (no symlink on the way), so a write never leaves the root or repo.
-    pub inside: &'a Path,
     /// Where the replaced version goes, relative to the backup folder.
     pub backup_rel: &'a Path,
 }
 
 impl Replace<'_> {
-    pub fn run(&self, backups: &mut Backups) -> io::Result<Outcome> {
-        if let Some(why) = fsutil::broken_chain(self.inside, self.dest) {
+    /// Writes the new content at `dest`, below the root of `staging`; every
+    /// folder on the way must be a real folder (no symlink), so a write
+    /// never leaves the root or repo. The test hook `project:write:<path>`
+    /// (relative to that root) runs first.
+    pub fn run(&self, staging: &Staging, backups: &mut Backups) -> io::Result<Outcome> {
+        let dest = self.dest;
+        if let Some(why) = fsutil::broken_chain(staging.root(), dest) {
             return Ok(Outcome::Conflict(why));
         }
-        let name = self
-            .dest
-            .file_name()
-            .expect("item path has a name")
-            .to_owned();
-        let swap = create(self.place, self.dest)?;
-        let staged = swap.join("new").join(&name);
-        let old = swap.join("old").join(&name);
+        let rel = dest.strip_prefix(staging.root()).expect("below the root");
+        // One replace a staging, so the name alone tells the staged entry.
+        let name = dest.file_name().expect("named").to_string_lossy();
+        let rel = rel.to_string_lossy();
+        test_hook::at("project", &format!("write:{rel}"));
+        // Compared with the plan before anything is written; checked again
+        // as it comes out of the swap.
+        let now = content::hash_of(dest, self.kind).ok().flatten();
+        let present = match std::fs::symlink_metadata(dest) {
+            Ok(_) => true,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+        let shown = dest.display();
+        let conflict = match (present, self.expected) {
+            (false, Expect::Absent) | (true, Expect::Present) => None,
+            (false, _) => Some("disappeared"),
+            (true, Expect::Absent) => Some("appeared"),
+            (true, Expect::Hash(hash)) => (now.as_ref() != Some(hash)).then_some("changed"),
+        };
+        if let Some(how) = conflict {
+            let why = format!("{shown} {how} since the plan was made");
+            return Ok(Outcome::Conflict(why));
+        }
+        let staged = staging.old_dir().join(&*name);
+        let discard = |outcome: Outcome| {
+            fsutil::remove_entry(&staged);
+            Ok(outcome)
+        };
         if let Err(e) = write(&staged, self.new) {
-            remove_swap(&swap);
+            fsutil::remove_entry(&staged);
             return Err(e);
         }
         if self.kind == Kind::File {
             // Any error counts: exFAT answers ENOTSUP, which has no ErrorKind.
-            let probe = swap.join("probe");
+            let probe = staging.dir().join("probe");
             let probed = fsutil::place_new(&staged, &probe)
                 .and_then(|()| fsutil::place_new(&probe, &staged));
             if let Err(e) = probed {
-                remove_swap(&swap);
-                return Ok(Outcome::Failed(format!(
+                return discard(Outcome::Failed(format!(
                     "cannot write {dest}: this volume cannot put a file in place without replacing what is there ({e}), so {dest} is unchanged",
-                    dest = self.dest.display()
+                    dest = dest.display()
                 )));
             }
         }
-
-        let present = match std::fs::symlink_metadata(self.dest) {
-            Ok(_) => true,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
-            Err(e) => {
-                remove_swap(&swap);
-                return Err(e);
+        if !present {
+            return match staging.place(&staged, dest) {
+                Ok(()) => Ok(Outcome::Replaced {
+                    previous: Previous::None,
+                    late_write: false,
+                }),
+                Err(failure) => discard(Outcome::Failed(failure.message)),
+            };
+        }
+        // The baseline for the late-write check is taken as the replaced
+        // version comes out, before anything else can happen to it; one that
+        // cannot be read as an item counts as changed.
+        let mut baseline = None;
+        let swapped = staging.swap(&name, dest, "project", |old| {
+            baseline = fingerprint(old).ok();
+            let seen = content::hash_of(old, self.kind).ok().flatten();
+            !matches!(self.expected, Expect::Hash(hash) if seen.as_ref() != Some(hash))
+        });
+        let (old, flushed) = match swapped {
+            Ok(Swap::Done { old, flushed }) => (old, flushed),
+            Ok(Swap::Changed(new)) => {
+                let at = new.display();
+                let why =
+                    format!("{shown} changed since the plan was made (what came out is at {at})");
+                return Ok(Outcome::Conflict(why));
             }
+            Err(failure) => return Ok(Outcome::Failed(failure.message)),
         };
-        let mut set_aside = None;
-        match (present, self.expected) {
-            (false, Expect::Absent) => {}
-            (false, _) => {
-                remove_swap(&swap);
-                return Ok(Outcome::Conflict(format!(
-                    "{} disappeared since the plan was made",
-                    self.dest.display()
-                )));
-            }
-            (true, Expect::Absent) => {
-                remove_swap(&swap);
-                return Ok(Outcome::Conflict(format!(
-                    "{} appeared since the plan was made",
-                    self.dest.display()
-                )));
-            }
-            (true, expected) => {
-                if let Err(e) = fsutil::publish(self.dest, &old) {
-                    remove_swap(&swap);
-                    return Err(match e.kind() {
-                        io::ErrorKind::CrossesDevices => {
-                            io::Error::new(e.kind(), fsutil::crossing(self.dest, &old))
-                        }
-                        _ => e,
-                    });
-                }
-                // The baseline for the late-write check is taken right after
-                // the set-aside, before anything else can happen to it.
-                let baseline = fingerprint(&old).ok();
-                // A set-aside copy that cannot be read counts as changed.
-                let seen = content::hash_of(&old, self.kind).ok().flatten();
-                let matches = match expected {
-                    Expect::Hash(hash) => seen.as_deref() == Some(hash.as_str()),
-                    _ => true,
-                };
-                if !matches {
-                    return Ok(self.put_back(&old, &swap, |dest| {
-                        Outcome::Conflict(format!("{dest} changed since the plan was made"))
-                    }));
-                }
-                set_aside = Some(baseline);
-            }
-        }
-
-        let placed = match self.dest.parent() {
-            Some(dir) => std::fs::create_dir_all(dir),
-            None => Ok(()),
-        }
-        .and_then(|()| fsutil::publish(&staged, self.dest));
-        if let Err(e) = placed {
-            if set_aside.is_none() {
-                remove_swap(&swap);
-                return Ok(Outcome::Failed(format!(
-                    "cannot put {} in place: {e}",
-                    self.dest.display()
-                )));
-            }
-            return Ok(self.put_back(&old, &swap, |dest| {
-                Outcome::Failed(format!(
-                    "cannot put the new {dest} in place ({e}); the previous one is back where it was"
-                ))
-            }));
-        }
-
-        let Some(baseline) = set_aside else {
-            remove_swap(&swap);
-            return Ok(Outcome::Replaced {
-                previous: Previous::None,
-                late_write: false,
-            });
-        };
-        let outcome = match backups.move_in(&old, self.backup_rel) {
+        let (previous, late_write, at) = match backups.move_in(&old, self.backup_rel) {
+            // Only when both fingerprints are known and differ: an
+            // unreadable set-aside copy (a blocked side) is no late write.
             Ok(to) => {
-                // Reported only when both fingerprints are known and differ:
-                // an unreadable set-aside copy (a blocked side) is no late write.
-                let late_write = matches!(
-                    (&baseline, fingerprint(&to).ok()),
-                    (Some(before), Some(after)) if *before != after
-                );
-                remove_swap(&swap);
-                Outcome::Replaced {
-                    previous: Previous::At(to),
-                    late_write,
-                }
+                let now = fingerprint(&to).ok();
+                let late_write =
+                    matches!((&baseline, now), (Some(before), Some(after)) if *before != after);
+                let at = format!("the previous version is at {}", to.display());
+                (Previous::At(to), late_write, at)
             }
-            Err(e) => Outcome::Replaced {
-                previous: Previous::LeftInSwap {
-                    at: old,
-                    error: e.to_string(),
-                },
-                late_write: false,
-            },
+            Err(e) => (Previous::Kept(kept(&e, &old)), false, kept(&e, &old)),
         };
-        Ok(outcome)
-    }
-
-    /// Puts the set-aside copy back at `dest` without replacing anything,
-    /// and answers with `outcome`. When that fails, the copy stays in `old/`
-    /// and the answer says where, and whether something took its place.
-    fn put_back(&self, old: &Path, swap: &Path, outcome: impl Fn(String) -> Outcome) -> Outcome {
-        let dest = self.dest.display().to_string();
-        match fsutil::publish(old, self.dest) {
-            Ok(()) => {
-                remove_swap(swap);
-                outcome(dest)
-            }
-            // Told apart by looking, not by the error: a file in the way is
-            // `AlreadyExists`, a folder `DirectoryNotEmpty` or `NotADirectory`.
-            Err(e) if std::fs::symlink_metadata(self.dest).is_ok() => Outcome::Failed(format!(
-                "{dest} could not be put back ({e}): something took its place; both are kept: {dest} and {}",
-                old.display()
-            )),
-            Err(e) => Outcome::Failed(format!(
-                "{dest} could not be put back ({e}); the previous version is kept at {}",
-                old.display()
-            )),
+        if let Err(e) = flushed {
+            return Ok(Outcome::Failed(format!(
+                "the new {shown} is in place, but its folder cannot be flushed ({e}); {at}"
+            )));
         }
+        Ok(Outcome::Replaced {
+            previous,
+            late_write,
+        })
+    }
+}
+
+/// Why the replaced version at `old` is not (all) in the backup (`e`), and
+/// where it is.
+fn kept(e: &io::Error, old: &Path) -> String {
+    match (backup::is_kept(e), old.exists()) {
+        // The backup holds all of it: what may be left is a part.
+        (true, true) => format!(
+            "moving its previous version to the backup did not finish ({e}); delete what is left of it at {}",
+            old.display()
+        ),
+        (true, false) => format!("moving its previous version to the backup did not finish ({e})"),
+        (false, _) => format!(
+            "its previous version cannot be moved to the backup ({e}); it is kept at {}",
+            old.display()
+        ),
     }
 }
 
@@ -284,30 +220,6 @@ fn fingerprint(path: &Path) -> io::Result<String> {
     }
 }
 
-/// Creates a fresh swap folder for `dest`.
-fn create(place: Place, dest: &Path) -> io::Result<PathBuf> {
-    let prefix = match place {
-        Place::Mirror { .. } => "",
-        Place::Project { .. } => PROJECT_PREFIX,
-    };
-    let dir = fresh_named_dir(place.parent(), prefix, 0o777)?;
-    let filled = (|| {
-        if let Place::Project { .. } = place {
-            std::fs::write(dir.join(".gitignore"), "*\n")?;
-        }
-        std::fs::write(dir.join("target"), dest.display().to_string())?;
-        std::fs::create_dir(dir.join("new"))?;
-        std::fs::create_dir(dir.join("old"))?;
-        // On the disk before the original moves: it says where the original went.
-        fsutil::flush_tree(&dir)
-    })();
-    if let Err(e) = filled {
-        let _ = std::fs::remove_dir_all(&dir);
-        return Err(e);
-    }
-    Ok(dir)
-}
-
 fn write(path: &Path, content: &Content) -> io::Result<()> {
     let failure = |f: crate::failure::Failure| io::Error::other(f.message);
     match content {
@@ -316,100 +228,12 @@ fn write(path: &Path, content: &Content) -> io::Result<()> {
     }
 }
 
-/// Removes a swap folder whose `old/` is empty: `new/` is a copy of a
-/// source that still exists, or a second link to an entry already in place.
-fn remove_swap(swap: &Path) {
-    if std::fs::read_dir(swap.join("old")).is_ok_and(|mut d| d.next().is_some()) {
-        return;
-    }
-    let _ = std::fs::remove_dir_all(swap);
-}
-
-/// A swap folder an earlier command left behind.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Leftover {
-    pub dir: PathBuf,
-    /// The destination it served, from its `target` file.
-    pub target: Option<String>,
-    /// Whether it still holds a set-aside copy (`old/` is not empty).
-    pub holds_original: bool,
-}
-
-/// The swap folders of `place`: every folder in the mirror's swap folder,
-/// the `.skiman-swap-*` folders of a project anchor.
-pub fn leftovers(place: Place) -> Vec<Leftover> {
-    let Ok(entries) = std::fs::read_dir(place.parent()) else {
-        return Vec::new();
-    };
-    let mut out: Vec<Leftover> = entries
-        .flatten()
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter(|e| match place {
-            Place::Mirror { .. } => true,
-            Place::Project { .. } => e.file_name().to_string_lossy().starts_with(PROJECT_PREFIX),
-        })
-        .map(|e| {
-            let dir = e.path();
-            Leftover {
-                target: std::fs::read_to_string(dir.join("target")).ok(),
-                holds_original: std::fs::read_dir(dir.join("old"))
-                    .is_ok_and(|mut d| d.next().is_some()),
-                dir,
-            }
-        })
-        .collect();
-    out.sort_by(|a, b| a.dir.cmp(&b.dir));
-    out
-}
-
-/// Moves what the swap folders of `place` hold in `old/` into the backup,
-/// each into a fresh folder of its own under `swap-leftovers/` (never one
-/// that exists), then removes the folders. Returns one message per folder;
-/// a copy that cannot be moved stays, and its message says where.
-pub fn recover(place: Place, backups: &mut Backups) -> Vec<String> {
-    let mut messages = Vec::new();
-    for leftover in leftovers(place) {
-        let target = leftover
-            .target
-            .clone()
-            .unwrap_or_else(|| "an item".to_owned());
-        if !leftover.holds_original {
-            remove_swap(&leftover.dir);
-            continue;
-        }
-        let moved = (|| -> io::Result<PathBuf> {
-            let dir = backups.dir()?;
-            let to = fresh_dir(&dir.join("swap-leftovers"))?;
-            let rel = to.strip_prefix(&dir).expect("inside the backup folder");
-            for entry in std::fs::read_dir(leftover.dir.join("old"))? {
-                let entry = entry?;
-                backups.move_in(&entry.path(), &rel.join(entry.file_name()))?;
-            }
-            Ok(to)
-        })();
-        match moved {
-            Ok(to) => {
-                remove_swap(&leftover.dir);
-                messages.push(format!(
-                    "moved the previous version of {target}, left by an interrupted write in {}, to {}",
-                    leftover.dir.display(),
-                    to.display()
-                ));
-            }
-            Err(e) => messages.push(format!(
-                "{} holds the previous version of {target} from an interrupted write and cannot be moved to the backup ({e}); move it by hand",
-                leftover.dir.display()
-            )),
-        }
-    }
-    messages
-}
-
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     use super::*;
+    use crate::staging::PROJECT_PREFIX;
 
     struct World {
         _temp: tempfile::TempDir,
@@ -432,26 +256,31 @@ mod tests {
             Backups::under(self.root.join("backups"))
         }
 
+        /// The staging of the `project` folder, as `project restore` opens it.
+        fn staging(&self, backups: &mut Backups) -> Staging {
+            let (anchor, saved) = (self.root.join("project"), Path::new("projects/w"));
+            Staging::open(&anchor, PROJECT_PREFIX, &self.root, backups, saved, drop).unwrap()
+        }
+
         fn replace(&self, expected: &Expect, backups: &mut Backups) -> Outcome {
-            let dest = self.dest();
-            let anchor = self.root.join("project");
+            let staging = self.staging(backups);
             Replace {
-                dest: &dest,
+                dest: &self.dest(),
                 kind: Kind::File,
                 expected,
                 new: &Content::File(b"new\n".to_vec()),
-                place: Place::Project { anchor: &anchor },
-                inside: &self.root,
                 backup_rel: Path::new("projects/w/AGENTS.md"),
             }
-            .run(backups)
+            .run(&staging, backups)
             .unwrap()
         }
 
-        fn swap_folders(&self) -> Vec<Leftover> {
-            leftovers(Place::Project {
-                anchor: &self.root.join("project"),
-            })
+        fn swap_folders(&self) -> Vec<PathBuf> {
+            let all = crate::staging::list(&self.root.join("project")).unwrap();
+            let name = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
+            all.into_iter()
+                .filter(|p| name(p).starts_with(PROJECT_PREFIX))
+                .collect()
         }
     }
 
@@ -498,10 +327,11 @@ mod tests {
             std::fs::read_to_string(world.dest()).unwrap(),
             "someone's\n"
         );
+        assert!(world.swap_folders().is_empty());
     }
 
     #[test]
-    fn a_backup_that_cannot_be_written_leaves_the_old_version_in_the_swap_folder() {
+    fn a_backup_that_cannot_be_written_leaves_the_old_version_in_the_staging_folder() {
         let world = World::new();
         std::fs::write(world.dest(), "old\n").unwrap();
         let backups_dir = world.root.join("backups");
@@ -510,7 +340,7 @@ mod tests {
         let outcome = world.replace(&hash("old\n"), &mut world.backups());
         std::fs::set_permissions(&backups_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         let Outcome::Replaced {
-            previous: Previous::LeftInSwap { at, .. },
+            previous: Previous::Kept(why),
             ..
         } = outcome
         else {
@@ -518,48 +348,28 @@ mod tests {
         };
         // The new content is in place, so the caller records its hash.
         assert_eq!(std::fs::read_to_string(world.dest()).unwrap(), "new\n");
-        assert_eq!(std::fs::read_to_string(at).unwrap(), "old\n");
-        assert_eq!(world.swap_folders().len(), 1);
-    }
-
-    /// macOS only: the folder that lets the old version out but not back in
-    /// is made with a macOS ACL (`chmod +a`), which other systems lack.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn a_previous_version_that_cannot_be_put_back_says_where_it_is_kept() {
-        let world = World::new();
-        std::fs::write(world.dest(), "old\n").unwrap();
-        let project = world.root.join("project");
-        // An ACL that denies adding a file to the project folder, but not
-        // taking one out or adding a folder: the set-aside works, and both
-        // placing the new version and putting the old one back fail.
-        let chmod = |args: &[&str]| {
-            let status = std::process::Command::new("/bin/chmod")
-                .args(args)
-                .arg(&project)
-                .status()
-                .unwrap();
-            assert!(status.success());
-        };
-        chmod(&["+a", "everyone deny add_file"]);
-        let outcome = world.replace(&hash("old\n"), &mut world.backups());
-        chmod(&["-N"]);
-        let old = world.swap_folders()[0].dir.join("old/AGENTS.md");
-        assert_eq!(
-            outcome,
-            Outcome::Failed(format!(
-                "{} could not be put back (Permission denied (os error 13)); the previous version is kept at {}",
-                world.dest().display(),
-                old.display()
-            ))
+        let folders = world.swap_folders();
+        let old = folders[0].join("old/AGENTS.md");
+        assert!(
+            why.ends_with(&format!("it is kept at {}", old.display())),
+            "{why}"
         );
         assert_eq!(std::fs::read_to_string(old).unwrap(), "old\n");
+        // The staging folder stays out of the project's git while it holds it.
+        assert_eq!(
+            std::fs::read_to_string(folders[0].join(".gitignore")).unwrap(),
+            "*\n"
+        );
     }
 
     #[test]
     fn a_new_entry_that_cannot_be_placed_fails_and_leaves_nothing_behind() {
         let world = World::new();
         let project = world.root.join("project");
+        let mut backups = world.backups();
+        let swap = world.root.join("swap");
+        let staging =
+            Staging::open(&swap, "", &world.root, &mut backups, Path::new("x"), drop).unwrap();
         std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o500)).unwrap();
         let dest = project.join("AGENTS.md");
         let outcome = Replace {
@@ -567,23 +377,15 @@ mod tests {
             kind: Kind::File,
             expected: &Expect::Absent,
             new: &Content::File(b"x".to_vec()),
-            place: Place::Mirror {
-                swap_dir: &world.root.join("swap"),
-            },
-            inside: &world.root,
             backup_rel: Path::new("x"),
         }
-        .run(&mut world.backups())
+        .run(&staging, &mut backups)
         .unwrap();
+        drop(staging);
         std::fs::set_permissions(&project, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
         assert!(!dest.exists());
-        assert!(
-            leftovers(Place::Mirror {
-                swap_dir: &world.root.join("swap")
-            })
-            .is_empty()
-        );
+        assert!(crate::staging::list(&swap).unwrap().is_empty());
     }
 
     #[test]
@@ -592,18 +394,16 @@ mod tests {
         let outside = world.root.join("outside");
         std::fs::create_dir(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, world.root.join("project/linked")).unwrap();
-        let dest = world.root.join("project/linked/AGENTS.md");
-        let anchor = world.root.join("project");
+        let mut backups = world.backups();
+        let staging = world.staging(&mut backups);
         let outcome = Replace {
-            dest: &dest,
+            dest: &world.root.join("project/linked/AGENTS.md"),
             kind: Kind::File,
             expected: &Expect::Absent,
             new: &Content::File(b"x".to_vec()),
-            place: Place::Project { anchor: &anchor },
-            inside: &world.root,
             backup_rel: Path::new("x"),
         }
-        .run(&mut world.backups())
+        .run(&staging, &mut backups)
         .unwrap();
         assert!(matches!(outcome, Outcome::Conflict(_)), "{outcome:?}");
         assert!(!outside.join("AGENTS.md").exists());
@@ -613,17 +413,25 @@ mod tests {
     fn leftovers_of_two_projects_never_share_a_backup_path() {
         let world = World::new();
         let mut backups = world.backups();
-        let mut moved = Vec::new();
         for (project, text) in [("a", "only a\n"), ("b", "only b\n")] {
             let anchor = world.root.join(project);
             let old = anchor.join(".skiman-swap-20200101T000000Z/old");
             std::fs::create_dir_all(&old).unwrap();
             std::fs::write(old.join("AGENTS.md"), text).unwrap();
-            for message in recover(Place::Project { anchor: &anchor }, &mut backups) {
-                moved.push(message);
-            }
+            let saved = Path::new("projects").join(project);
+            let mut moved = Vec::new();
+            let say = |l| moved.push(l);
+            Staging::open(
+                &anchor,
+                PROJECT_PREFIX,
+                &world.root,
+                &mut backups,
+                &saved,
+                say,
+            )
+            .unwrap();
+            assert!(!moved.is_empty());
         }
-        assert_eq!(moved.len(), 2);
         let mut texts: Vec<String> = walk(backups.created().unwrap())
             .into_iter()
             .map(|p| std::fs::read_to_string(p).unwrap())

@@ -19,12 +19,13 @@ use crate::project::git::{ignored, operation_in_progress, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
 use crate::project::state::{Evaluated, State, check_rules, classify};
-use crate::project::swap::{self, Expect, Outcome, Place, Previous, Replace};
+use crate::project::swap::{Expect, Outcome, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
+use crate::staging::{PROJECT_PREFIX, Staging};
 use crate::sync::{self, Output};
 use crate::tree::{Overlay, WorkingTree, is_ignored};
 
@@ -481,12 +482,8 @@ fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) ->
                     );
                     (true, Exit::NeedsAttention)
                 }
-                Previous::LeftInSwap { at, error } => {
-                    err!(
-                        "error: the previous version of {} cannot be moved to the backup ({error}); it is kept at {}",
-                        disk.display(),
-                        at.display()
-                    );
+                Previous::Kept(why) => {
+                    err!("error: {} is {}, but {why}", disk.display(), verb.done());
                     (true, Exit::OperationalError)
                 }
                 _ => (true, Exit::Success),
@@ -533,7 +530,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                 }
                 for leftover in found.swap_leftovers {
                     err!(
-                        "warning: {} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
+                        "warning: {} is left from an earlier `skiman project restore`; the next restore there moves it to a backup",
                         leftover.display()
                     );
                 }
@@ -611,36 +608,28 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         });
     }
     let mut backups = ctx.backups();
-    let swap_dir = swap_parent(&ctx.repo);
-    for message in swap::recover(
-        Place::Mirror {
-            swap_dir: &swap_dir,
-        },
-        &mut backups,
-    ) {
-        out!("{message}");
-    }
     let mut exit = own;
     let mut written = Vec::new();
     let mut failed = Vec::new();
+    let (swap, saved) = swap_parent(&ctx.repo);
     for p in &plan.writes {
         let content = p
             .new
             .as_ref()
             .expect("drop_breaking keeps only readable writes");
-        let dest = ctx.repo.root().join(p.item.mirror_rel());
-        let outcome = Replace {
+        let (rel, say) = (p.item.mirror_rel(), |l| out!("{l}"));
+        let dest = ctx.repo.root().join(&rel);
+        // One staging per replace, so a command killed between two leaves none.
+        let staging = Staging::open(&swap, "", ctx.repo.root(), &mut backups, saved, say);
+        let replace = Replace {
             dest: &dest,
             kind: p.item.kind,
             expected: &Expect::from_hash(p.eval.mirror_hash.as_deref()),
             new: content,
-            place: Place::Mirror {
-                swap_dir: &swap_dir,
-            },
-            inside: ctx.repo.root(),
-            backup_rel: &Path::new("repo").join(p.item.mirror_rel()),
-        }
-        .run(&mut backups);
+            backup_rel: &Path::new("repo").join(&rel),
+        };
+        // A staging that cannot be opened fails this item only.
+        let outcome = staging.and_then(|staging| replace.run(&staging, &mut backups));
         let (placed, more) = report_outcome(outcome, Verb::Adopt, &p.item.disk(p.root));
         exit = exit.combine(more);
         if more == Exit::OperationalError {
@@ -648,7 +637,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         }
         if placed {
             synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
-            written.push(p.item.mirror_rel());
+            written.push(rel);
         }
     }
     for (path, rule) in ignored(ctx.repo.root(), &written) {
@@ -751,16 +740,14 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     }
     let mut backups = ctx.backups();
     let mut exit = own;
-    let mut recovered = BTreeSet::new();
     let mut failed = Vec::new();
     for p in &plan.writes {
         let disk = p.item.disk(p.root);
+        // Its tmp leftovers go where the anchor's items go in the backup.
+        let saved = Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.anchor);
         let anchor = p.item.anchor_dir(p.root);
-        if recovered.insert(anchor.clone()) {
-            for message in swap::recover(Place::Project { anchor: &anchor }, &mut backups) {
-                out!("{message}");
-            }
-        }
+        let (root, say) = (p.root.dir.as_path(), |l| out!("{l}"));
+        let staging = Staging::open(&anchor, PROJECT_PREFIX, root, &mut backups, &saved, say);
         let content = p
             .new
             .as_ref()
@@ -769,16 +756,14 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             (State::Blocked(_), None) => Expect::Present,
             (_, hash) => Expect::from_hash(hash.as_deref()),
         };
-        let outcome = Replace {
+        let replace = Replace {
             dest: &disk,
             kind: p.item.kind,
             expected: &expected,
             new: content,
-            place: Place::Project { anchor: &anchor },
-            inside: &p.root.dir,
             backup_rel: &Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.rel),
-        }
-        .run(&mut backups);
+        };
+        let outcome = staging.and_then(|staging| replace.run(&staging, &mut backups));
         let (placed, more) = report_outcome(outcome, Verb::Restore, &disk);
         exit = exit.combine(more);
         if more == Exit::OperationalError {

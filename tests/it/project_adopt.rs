@@ -688,6 +688,52 @@ fn exact_adopt_of_a_conflict_keeps_the_project_version_and_backs_up_the_mirror()
     );
 }
 
+/// A mirror staging folder that cannot be made fails its item only: adopt
+/// writes the items before it, saves the synced record and says where the
+/// replaced versions are.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_staging_folder_that_cannot_be_made_fails_its_item_only() {
+    let sandbox = setup("");
+    let files = [("a/AGENTS.md", "v1\n"), ("b/AGENTS.md", "v1\n")];
+    adopted_files(&sandbox, &files);
+    for (rel, _) in files {
+        write(root(&sandbox).join(rel), "project edit\n");
+        write(mirror(&sandbox, rel), "mirror edit\n");
+    }
+    let swap = sandbox.skill_repo().join(".skiman/swap");
+    // Once the first item is staged, no other staging folder can be made.
+    let chmod = format!("chmod 555 '{}'", swap.display());
+    let items = files.map(|(rel, _)| root(&sandbox).join(rel));
+    let out = adopt(&sandbox, &items)
+        .arg("--yes")
+        .env(
+            "SKIMAN_TEST_HOOK",
+            "project:write:projects/work/a/AGENTS.md",
+        )
+        .env("SKIMAN_TEST_HOOK_RUN", chmod)
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&swap, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let (said, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(out.status.code(), Some(4), "{said}{stderr}");
+    assert!(stderr.contains("cannot create a folder in"), "{stderr}");
+    assert_eq!(read(mirror(&sandbox, "a/AGENTS.md")), "project edit\n");
+    assert_eq!(read(mirror(&sandbox, "b/AGENTS.md")), "mirror edit\n");
+    assert!(said.contains("replaced versions are in "), "{said}");
+    assert!(
+        read(synced_file(&sandbox)).contains(&sha256(b"project edit\n")),
+        "the synced record of a/AGENTS.md is saved"
+    );
+}
+
 #[test]
 fn exact_adopt_of_a_changed_skill_mirror_keeps_the_project_version_and_backs_up_the_mirror() {
     let sandbox = setup("");

@@ -7,7 +7,7 @@
 //! ([`Backups::move_in`]); the next move of what such a move left when it
 //! was cut short deletes the rest and renames that copy to its own new path.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -77,14 +77,17 @@ pub fn fresh_named_dir(parent: &Path, prefix: &str, mode: u32) -> io::Result<Pat
     unreachable!("the suffixes never run out")
 }
 
-/// One command's backup folder, `backups/<timestamp>/`, created when the
-/// first thing goes in, so a command that backs nothing up leaves no folder.
+/// One command's write context: its backup folder, `backups/<timestamp>/`,
+/// created when the first thing goes in, so a command that backs nothing up
+/// leaves no folder.
 #[derive(Debug)]
 pub struct Backups {
     parent: PathBuf,
     dir: Option<PathBuf>,
     /// Whether anything went in.
     used: bool,
+    /// The places whose tmp leftovers this command moved (`Staging::open`).
+    pub swept: BTreeSet<PathBuf>,
 }
 
 impl Backups {
@@ -98,6 +101,7 @@ impl Backups {
             parent,
             dir: None,
             used: false,
+            swept: BTreeSet::new(),
         }
     }
 
@@ -175,6 +179,24 @@ impl Backups {
         Ok(dest)
     }
 
+    /// Finishes each move to another filesystem that was cut short at or
+    /// below `dir` (an entry with a [`moved_copy`]): deletes what is left of
+    /// it, then its note. Its complete copy stays where that move made it.
+    /// Returns each entry with its copy.
+    pub fn finish_cut_short(&self, dir: &Path) -> io::Result<Vec<(PathBuf, PathBuf)>> {
+        let mut finished = Vec::new();
+        for (entry, _) in entries(dir)? {
+            // Gone when it was in one finished before it.
+            let Some(copy) = moved_copy(&entry, &self.parent) else {
+                continue;
+            };
+            delete(&entry).map_err(|e| kept(e, &copy))?;
+            std::fs::remove_file(note_of(&entry, &self.parent)?).map_err(|e| kept(e, &copy))?;
+            finished.push((entry, copy));
+        }
+        Ok(finished)
+    }
+
     /// Copies `from` next to `to` (`.<name>.skiman-partial`, which must not
     /// exist), flushes the copy, compares it with `from` entry by entry
     /// ([`inventory`]), renames it to `to` and drains it to the disk; then
@@ -242,10 +264,29 @@ impl Drop for Backups {
     }
 }
 
-/// `e`, saying that the complete copy is at `copy`.
+/// `e`, saying that the complete copy is at `copy`: the move made a
+/// complete copy, and what is left of the original, if anything, is a part
+/// ([`is_kept`] tells such an error apart).
 fn kept(e: io::Error, copy: &Path) -> io::Error {
     let message = format!("{e}; the complete copy is at {}", copy.display());
-    io::Error::new(e.kind(), message)
+    io::Error::new(e.kind(), Kept(message))
+}
+
+/// The message of a [`kept`] error.
+#[derive(Debug)]
+struct Kept(String);
+
+impl std::fmt::Display for Kept {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Kept {}
+
+/// Whether `e`, from [`Backups::move_in`], says the backup holds a complete copy.
+pub fn is_kept(e: &io::Error) -> bool {
+    e.get_ref().is_some_and(|inner| inner.is::<Kept>())
 }
 
 /// Where a move across filesystems notes the complete copy it made of

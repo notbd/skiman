@@ -394,11 +394,11 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
 
 /// The project scope: every root, every item that is not in step with
 /// its fix, managed items a project repo now tracks, candidates not adopted
-/// yet, items only the mirror holds, swap folders left by an interrupted
+/// yet, items only the mirror holds, staging folders left by an earlier
 /// write, mirror paths git ignores, and uncommitted mirror changes.
 fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
     use crate::project::state::{State, classify};
-    use crate::project::{command, discover, git as pgit, item, root, swap, synced::Synced};
+    use crate::project::{command, discover, git as pgit, item, root, synced::Synced};
     if manifest.projects().is_empty() {
         return;
     }
@@ -487,19 +487,16 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
         }
         for leftover in found.swap_leftovers {
             out!(
-                "{} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
+                "{} is left from an earlier `skiman project restore`; the next restore there moves it to a backup",
                 leftover.display()
             );
         }
     }
-    let swap_dir = crate::project::sync::swap_parent(repo);
-    for leftover in swap::leftovers(swap::Place::Mirror {
-        swap_dir: &swap_dir,
-    }) {
+    let (swap_dir, _) = crate::project::sync::swap_parent(repo);
+    for leftover in crate::staging::list(&swap_dir).unwrap_or_default() {
         out!(
-            "{} is left from an interrupted mirror write ({}); the next mirror write moves what it holds to a backup",
-            leftover.dir.display(),
-            leftover.target.as_deref().unwrap_or("unknown item")
+            "{} is left from an earlier mirror write; the next mirror write moves it to a backup",
+            leftover.display()
         );
     }
     for (path, rule) in pgit::ignored(repo.root(), &mirror_paths) {

@@ -288,6 +288,8 @@ fn new_writes_nothing_through_a_linked_tmp_or_skills_folder() {
     let repo = sandbox.skill_repo();
     let elsewhere = sandbox.root().join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
+    // What a link leads to is not skiman's to move either: no tmp leftover.
+    std::fs::write(elsewhere.join("theirs.md"), "the user's\n").unwrap();
     for (linked, name) in [(".skiman/tmp", "foo"), ("skills", "bar")] {
         let path = repo.join(linked);
         if path.exists() {
@@ -309,10 +311,10 @@ fn new_writes_nothing_through_a_linked_tmp_or_skills_folder() {
             stderr.contains("is not a real folder"),
             "{linked}: {stderr}"
         );
-        assert!(
-            tree(&elsewhere).is_empty(),
-            "{linked}: {:?}",
-            tree(&elsewhere)
+        assert_eq!(
+            tree(&elsewhere).into_keys().collect::<Vec<_>>(),
+            [std::path::PathBuf::from("theirs.md")],
+            "{linked}"
         );
     }
 }

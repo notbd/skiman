@@ -360,7 +360,7 @@ fn doctor_lists_a_swap_folder_left_in_a_project_and_does_not_count_what_it_holds
     assert_has(
         &stdout,
         &format!(
-            "{} is left from an interrupted `skiman project restore`; the next restore there moves what it holds to a backup",
+            "{} is left from an earlier `skiman project restore`; the next restore there moves it to a backup",
             leftover.display()
         ),
     );

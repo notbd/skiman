@@ -549,16 +549,19 @@ fn a_move_cut_short_in_a_swap_folder_tmp_or_an_instruction_location_is_finished_
         assert!(empty.is_empty(), "{place} {point}: {empty:?}");
         // After `deleted` the old version is only in the backup: nothing to say.
         if point != "deleted" {
+            // A cut-short move in a staging folder leaves its copy where it is.
+            let said_line = match place {
+                "instructions" => "moved",
+                _ => "deleted what was left of",
+            };
             let line = said
                 .lines()
-                .find(|l| l.contains("moved") && (place != "instructions" || l.contains(name)))
+                .find(|l| l.contains(said_line) && (place != "instructions" || l.contains(name)))
                 .unwrap_or_else(|| panic!("{place} {point}: {said}"));
             let at = line.rsplit(" to ").next().unwrap();
             let held = match place {
-                "tmp" => Path::new(at)
-                    .join("20200101T000000Z/old/skills/keep")
-                    .join(name),
-                "swap" => Path::new(at).join("foo").join(name),
+                "tmp" => Path::new(at).join("old/skills/keep").join(name),
+                "swap" => Path::new(at).join(name),
                 _ => PathBuf::from(at),
             };
             assert!(read_text(&held).contains(text), "{place} {point}: {line}");
@@ -690,20 +693,20 @@ fn the_only_old(repo: &Path) -> PathBuf {
 
 /// Asserts that `old`, the `tmp/<ts>/old` of a replace of `skills/pdf`
 /// stopped between its two renames, holds the whole old skill (`before`) at
-/// `prev/skills/pdf` and the whole new one (the upstream fix merged in) at
+/// `skills/pdf.skiman-prev` and the whole new one (the upstream fix merged in) at
 /// `skills/pdf`.
 #[cfg(target_os = "macos")]
 fn assert_both_versions(old: &Path, before: &std::collections::BTreeMap<PathBuf, String>) {
     let mut new = before.clone();
     let reference = new.get_mut(Path::new("reference.md")).unwrap();
     *reference = reference.replace("v1\n", "v2\n");
-    assert_eq!(&tree(old.join("prev/skills/pdf")), before);
+    assert_eq!(&tree(old.join("skills/pdf.skiman-prev")), before);
     assert_eq!(tree(old.join("skills/pdf")), new);
 }
 
 /// Killed between the two renames of a replace without a swapping rename,
 /// `skills/<name>` is missing and both versions are in `.skiman/tmp/`: the
-/// old one at `old/prev/skills/<name>`, the new one at `old/skills/<name>`.
+/// old one at `old/skills/<name>.skiman-prev`, the new one at `old/skills/<name>`.
 /// Running the update again is refused (ADR 0005: one of the cases not
 /// finished that way).
 #[cfg(target_os = "macos")]
@@ -771,7 +774,7 @@ fn a_failed_second_rename_says_where_both_versions_are() {
     assert_eq!(output.status.code(), Some(4), "{stderr}");
 
     let old = the_only_old(&repo);
-    let (prev, new) = (old.join("prev/skills/pdf"), old.join("skills/pdf"));
+    let (prev, new) = (old.join("skills/pdf.skiman-prev"), old.join("skills/pdf"));
     let place = format!(
         "; the old {skill} is at {} and the new one at {}; rename the new one to {skill} before running the command again\n",
         prev.display(),

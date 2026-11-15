@@ -12,12 +12,13 @@ use super::git::operation_in_progress;
 use super::item::{Item, MIRROR_DIR, managed};
 use super::root::{self, Root};
 use super::state::{State, classify};
-use super::swap::{self, Expect, Outcome, Place, Previous, Replace};
+use super::swap::{Expect, Outcome, Previous, Replace};
 use super::synced::Synced;
 use crate::backup::Backups;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
+use crate::staging::Staging;
 use crate::sync::{Change, Item as Report, ItemKind, Report as SyncReport};
 use crate::tree::WorkingTree;
 
@@ -45,7 +46,7 @@ pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &
     let mut writer = Writer {
         repo,
         backups: Backups::new(paths),
-        recovered: false,
+        blocked: false,
     };
     for resolved in root::resolve(paths.home(), repo, manifest) {
         match resolved {
@@ -225,8 +226,9 @@ fn reconcile_root(root: &Root, synced: &mut Synced, writer: &mut Writer, report:
 struct Writer<'a> {
     repo: &'a SkillRepo,
     backups: Backups,
-    /// Whether the mirror's swap leftovers were handled this run.
-    recovered: bool,
+    /// A staging for the mirror could not be opened: that is reported
+    /// once, and nothing more is mirrored this run.
+    blocked: bool,
 }
 
 impl Writer<'_> {
@@ -239,35 +241,31 @@ impl Writer<'_> {
         synced: &mut Synced,
         report: &mut SyncReport,
     ) {
-        let scope = root.dir.display().to_string();
-        let swap_dir = swap_parent(self.repo);
-        if !self.recovered {
-            for message in swap::recover(
-                Place::Mirror {
-                    swap_dir: &swap_dir,
-                },
-                &mut self.backups,
-            ) {
-                report
-                    .items
-                    .push(note(&scope, swap_dir.clone(), "swap", message, false));
-            }
-            self.recovered = true;
+        if self.blocked {
+            return;
         }
+        let scope = root.dir.display().to_string();
         let disk = item.disk(root);
+        let (swap_dir, saved) = swap_parent(self.repo);
+        let notes = &mut report.items;
+        let say = |l| notes.push(note(&scope, swap_dir.clone(), "swap", l, false));
+        let (repo, backups) = (self.repo.root(), &mut self.backups);
+        let staging = match Staging::open(&swap_dir, "", repo, backups, saved, say) {
+            Ok(staging) => staging,
+            Err(e) => {
+                self.blocked = true;
+                return report.errors.push(e.to_string());
+            }
+        };
         let dest = self.repo.root().join(item.mirror_rel());
         let outcome = Replace {
             dest: &dest,
             kind: item.kind,
             expected: &Expect::from_hash(expected),
             new: content,
-            place: Place::Mirror {
-                swap_dir: &swap_dir,
-            },
-            inside: self.repo.root(),
             backup_rel: &Path::new("repo").join(item.mirror_rel()),
         }
-        .run(&mut self.backups);
+        .run(&staging, &mut self.backups);
         match outcome {
             Ok(Outcome::Replaced {
                 previous,
@@ -287,11 +285,9 @@ impl Writer<'_> {
                         ),
                         true,
                     )),
-                    Previous::LeftInSwap { at, error } => report.errors.push(format!(
-                        "{} is mirrored, but its previous mirror cannot be moved to the backup ({error}); it is kept at {}",
-                        disk.display(),
-                        at.display()
-                    )),
+                    Previous::Kept(why) => report
+                        .errors
+                        .push(format!("{} is mirrored, but {why}", disk.display())),
                     _ => {}
                 }
             }
@@ -310,9 +306,9 @@ impl Writer<'_> {
     }
 }
 
-/// `<repo>/.skiman/swap`: where mirror-side swap folders go.
-pub fn swap_parent(repo: &SkillRepo) -> PathBuf {
-    repo.local_dir().join("swap")
+/// `<repo>/.skiman/swap` (mirror staging folders) and its path in a backup.
+pub fn swap_parent(repo: &SkillRepo) -> (PathBuf, &'static Path) {
+    (repo.local_dir().join("swap"), "repo/.skiman/swap".as_ref())
 }
 
 fn note(

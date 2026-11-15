@@ -255,6 +255,11 @@ pub fn remove_empty_dirs(dir: &Path) {
     }
 }
 
+/// Removes the entry at `path`, a folder with all it holds, a link as a link.
+pub fn remove_entry(path: &Path) {
+    let _ = std::fs::remove_dir_all(path).or_else(|_| std::fs::remove_file(path));
+}
+
 /// Every entry at or below `path`, parents before what they hold, never
 /// following symlinks.
 pub fn entries(path: &Path) -> io::Result<Vec<(PathBuf, std::fs::Metadata)>> {

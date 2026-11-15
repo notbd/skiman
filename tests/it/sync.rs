@@ -456,6 +456,28 @@ fn links_into_group_folders_are_skimans_under_their_name_or_a_temporary_one() {
     );
 }
 
+/// A link named after a folder inside a skill, pointing there, is the
+/// user's: `skills/<x>/<name>` is a skill in a group only when `<x>` is no
+/// skill folder.
+#[test]
+fn a_link_into_a_folder_inside_a_skill_is_not_skimans() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let skills = sandbox.skill_repo().join("skills");
+    write_skill(&skills, "pdf");
+    std::fs::create_dir(skills.join("pdf/scripts")).unwrap();
+    let theirs = sandbox.tool_dir(Tool::ClaudeCode).join("scripts");
+    std::fs::create_dir_all(theirs.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(skills.join("pdf/scripts"), &theirs).unwrap();
+
+    sandbox.skiman().arg("sync").assert().code(0);
+
+    assert_eq!(
+        std::fs::read_link(&theirs).unwrap(),
+        skills.join("pdf/scripts")
+    );
+}
+
 #[test]
 fn while_another_process_holds_the_lock_sync_hook_exits_0_silently_and_new_fails_after_10_seconds()
 {

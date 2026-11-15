@@ -143,14 +143,18 @@ impl Ownership {
         (target == self.shared_body || self.is_under_previous_repo(&target)).then_some(target)
     }
 
-    /// A link to `skills/<name>` or `skills/<group>/<name>`, whatever the
-    /// group (a skill that changed group keeps its link until sync retargets
-    /// it). A link under a temporary name is owned as its name: a sync killed
-    /// while it removed or retargeted it left it there.
+    /// A link to `skills/<name>`, or to `skills/<x>/<name>` when `skills/<x>`
+    /// is no skill folder (a group, whichever: a skill that changed group
+    /// keeps its link until sync retargets it; a folder inside a skill is
+    /// not one). A link under a temporary name is owned as its name: a sync
+    /// killed while it removed or retargeted it left it there.
     fn is_owned_target(&self, name: &OsStr, target: &Path) -> bool {
         let name = crate::fsutil::temporary_of(name).unwrap_or(name);
-        let in_skills =
-            |dir: &Path| dir == self.skills_dir || dir.parent() == Some(self.skills_dir.as_path());
+        let in_skills = |dir: &Path| {
+            dir == self.skills_dir
+                || (dir.parent() == Some(self.skills_dir.as_path())
+                    && std::fs::symlink_metadata(dir.join("SKILL.md")).is_err())
+        };
         (target.file_name() == Some(name) && target.parent().is_some_and(in_skills))
             || *target == self.managing_skills_dir
             || self.is_under_previous_repo(target)

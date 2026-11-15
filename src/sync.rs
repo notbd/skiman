@@ -162,7 +162,7 @@ pub fn run_with(
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let mut report = reconcile(paths, repo, &manifest, previous_repo);
+            let mut report = reconcile(paths, repo, &manifest, previous_repo, output);
             crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
             report
         }
@@ -229,6 +229,7 @@ pub fn reconcile(
     repo: &SkillRepo,
     manifest: &Manifest,
     previous_repo: Option<PathBuf>,
+    output: Output,
 ) -> Report {
     let home = paths.home();
     let mut report = Report::default();
@@ -287,7 +288,8 @@ pub fn reconcile(
             reconciled.push(real);
         }
     }
-    reconcile_instruction_locations(home, repo, manifest, &ownership, &mut report);
+    let sweep = output == Output::Normal;
+    reconcile_instruction_locations(home, repo, manifest, &ownership, sweep, &mut report);
     report
 }
 
@@ -301,6 +303,7 @@ fn reconcile_instruction_locations(
     repo: &SkillRepo,
     manifest: &Manifest,
     ownership: &Ownership,
+    sweep: bool,
     report: &mut Report,
 ) {
     let target = repo.shared_body();
@@ -344,12 +347,16 @@ fn reconcile_instruction_locations(
                 .push(format!("cannot inspect {}: {e}", path.display())),
             Ok(meta) => match ownership.owned_instruction(&location, &meta) {
                 Some(current) if current == target => {}
-                Some(_) => match fsutil::retarget_symlink(&target, &location) {
-                    Ok(()) => report.changes.push((Change::Retargeted, path)),
-                    Err(e) => report
-                        .errors
-                        .push(format!("cannot retarget {}: {e}", path.display())),
-                },
+                Some(current) => {
+                    let real = location.parent().expect("named");
+                    match fsutil::relink(&location, real, &current, Some(&target)) {
+                        Ok(true) => report.changes.push((Change::Retargeted, path)),
+                        Ok(false) => report.items.push(refused(path)),
+                        Err(e) => report
+                            .errors
+                            .push(format!("cannot retarget {}: {e}", path.display())),
+                    }
+                }
                 None => report.items.push(refused(path)),
             },
         }
@@ -368,16 +375,28 @@ fn reconcile_instruction_locations(
             continue;
         }
         if let Ok(meta) = std::fs::symlink_metadata(&location)
-            && ownership.owned_instruction(&location, &meta).is_some()
+            && let Some(current) = ownership.owned_instruction(&location, &meta)
         {
-            match std::fs::remove_file(&location) {
-                Ok(()) => report.changes.push((Change::Removed, path)),
-                Err(e) => report
-                    .errors
-                    .push(format!("cannot remove {}: {e}", path.display())),
-            }
+            let real = location.parent().expect("named");
+            remove(&location, real, &current, path, report);
         }
         reconciled.push(location);
+    }
+    // A sync killed while it took one of these links aside left it under a
+    // temporary name; only a sync that may read more than it changes looks.
+    for location in reconciled.iter().filter(|_| sweep) {
+        let dir = location.parent().expect("named");
+        let name = location.file_name().expect("named");
+        // Names only: the folder is the tool's own, and its files come and go.
+        for aside in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = aside.path();
+            if fsutil::temporary_of(&aside.file_name()) == Some(name)
+                && let Ok(meta) = std::fs::symlink_metadata(&path)
+                && let Some(current) = ownership.owned_instruction(&path, &meta)
+            {
+                remove(&path, dir, &current, path.clone(), report);
+            }
+        }
     }
 }
 
@@ -504,15 +523,16 @@ fn reconcile_tool_dir(
             (Entry::Owned(current), Some((name, target))) => {
                 handled.insert(*name);
                 if current != *target {
-                    match fsutil::retarget_symlink(target, &path) {
-                        Ok(()) => report.changes.push((Change::Retargeted, path)),
+                    match fsutil::relink(&path, real, &current, Some(target)) {
+                        Ok(true) => report.changes.push((Change::Retargeted, path)),
+                        Ok(false) => report.items.push(occupied(name, path)),
                         Err(e) => report
                             .errors
                             .push(format!("cannot retarget {}: {e}", path.display())),
                     }
                 }
             }
-            (Entry::Owned(_), None) => remove(path, report),
+            (Entry::Owned(current), None) => remove(&path, real, &current, path.clone(), report),
             (Entry::Foreign, None) => report.items.push(Item {
                 scope: scope.clone(),
                 path,
@@ -560,15 +580,21 @@ fn reconcile_tool_dir(
 /// Removes every owned entry of a tool directory nothing is distributed to.
 fn remove_owned_entries(dir: &Path, real: &Path, ownership: &Ownership, report: &mut Report) {
     for (name, meta) in read_entries(dir, report) {
-        if meta.is_symlink() && matches!(ownership.classify(real, &name, &meta), Entry::Owned(_)) {
-            remove(dir.join(name), report);
+        if let (true, Entry::Owned(current)) =
+            (meta.is_symlink(), ownership.classify(real, &name, &meta))
+        {
+            let path = dir.join(name);
+            remove(&path, real, &current, path.clone(), report);
         }
     }
 }
 
-fn remove(path: PathBuf, report: &mut Report) {
-    match std::fs::remove_file(&path) {
-        Ok(()) => report.changes.push((Change::Removed, path)),
+/// Removes skiman's own link at `link` (in `real_dir`, pointing at
+/// `current`), reported as `path`; one that became something else stays.
+fn remove(link: &Path, real_dir: &Path, current: &Path, path: PathBuf, report: &mut Report) {
+    match fsutil::relink(link, real_dir, current, None) {
+        Ok(true) => report.changes.push((Change::Removed, path)),
+        Ok(false) => {}
         Err(e) => report
             .errors
             .push(format!("cannot remove {}: {e}", path.display())),

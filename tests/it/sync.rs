@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use snapbox::str;
 
 use crate::support::{
-    Sandbox, Tool, ToolSetup, assert_symlink, exists, init, moved_note, tree, write,
+    Sandbox, Tool, ToolSetup, assert_each_kill_finishes, assert_symlink, exists, init, killed_at,
+    moved_note, tree, write,
 };
 
 fn write_skill(dir: &std::path::Path, name: &str) {
@@ -258,6 +259,156 @@ fn a_file_that_appears_where_sync_is_about_to_link_the_shared_body_is_kept_and_r
 warning: instruction file [..]/home/.claude/CLAUDE.md is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`
 
 "#]]);
+}
+
+/// A skill repo whose next sync removes two of skiman's own links: the
+/// skill `notes` is gone, and Antigravity is no longer enabled.
+fn two_links_to_remove(sandbox: &Sandbox) {
+    init(sandbox);
+    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    sandbox.skiman().arg("sync").assert().code(0);
+    std::fs::remove_dir_all(sandbox.skill_repo().join("skills/notes")).unwrap();
+    std::fs::write(
+        sandbox.skill_repo().join("skiman.toml"),
+        "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
+    )
+    .unwrap();
+}
+
+/// A regular file of the user's that takes the place of skiman's own link
+/// at `path` right before sync removes it is kept, never removed.
+#[test]
+fn a_file_that_replaces_a_link_sync_is_about_to_remove_is_kept() {
+    let paths = [
+        |sandbox: &Sandbox| sandbox.tool_dir(Tool::ClaudeCode).join("notes"),
+        |sandbox: &Sandbox| sandbox.instruction_file(Tool::Antigravity),
+    ];
+    for path in paths {
+        let sandbox = Sandbox::new();
+        two_links_to_remove(&sandbox);
+        let path = path(&sandbox);
+        let swap_in = format!("rm '{0}' && printf mine > '{0}'", path.display());
+        let synced = sandbox
+            .skiman()
+            .arg("sync")
+            .env("SKIMAN_TEST_HOOK", format!("link:take:{}", path.display()))
+            .env("SKIMAN_TEST_HOOK_RUN", swap_in)
+            .output()
+            .unwrap();
+        assert_eq!(synced.status.code(), Some(0), "{synced:?}");
+        assert_kept(&path);
+        let siblings = std::fs::read_dir(path.parent().unwrap()).unwrap();
+        let names: Vec<_> = siblings.map(|e| e.unwrap().file_name()).collect();
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.to_string_lossy().contains("skiman-tmp")),
+            "{names:?}"
+        );
+    }
+}
+
+/// Killed with a link moved aside to its temporary name, sync leaves it
+/// there; the next sync removes it as skiman's own.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_sync_killed_while_it_removes_a_link_finishes_when_run_again() {
+    assert_each_kill_finishes(
+        |sandbox| {
+            two_links_to_remove(sandbox);
+            vec!["sync".to_owned()]
+        },
+        &[
+            "link:aside:<root>/home/.claude/skills/notes",
+            "link:aside:<root>/home/.gemini/GEMINI.md",
+        ],
+    );
+}
+
+/// An instruction link left under its temporary name stays through
+/// `sync --hook`, which reads no folder around an instruction location, and
+/// goes with the next `skiman sync`.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_instruction_link_left_aside_goes_with_the_next_sync_not_the_hook() {
+    let sandbox = Sandbox::new();
+    two_links_to_remove(&sandbox);
+    let gemini = sandbox.instruction_file(Tool::Antigravity);
+    let hook = format!("link:aside:{}", gemini.display());
+    killed_at(&sandbox, &["sync".to_owned()], &hook);
+    let left = || {
+        let dir = std::fs::read_dir(gemini.parent().unwrap()).unwrap();
+        let names = dir.map(|e| e.unwrap().file_name().to_string_lossy().into_owned());
+        names.filter(|n| n.contains(".skiman-tmp-")).count()
+    };
+    assert_eq!(left(), 1);
+    sandbox.skiman().args(["sync", "--hook"]).assert().code(0);
+    assert_eq!(left(), 1);
+    sandbox.skiman().arg("sync").assert().code(0);
+    assert_eq!(left(), 0);
+}
+
+/// A sync killed again while it took a left link aside leaves it under a
+/// temporary name of a temporary name: the next `skiman sync` removes it as
+/// skiman's own, in a tool directory and beside an instruction file.
+#[test]
+fn a_link_left_aside_twice_goes_with_the_next_sync() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    sandbox.skiman().arg("sync").assert().code(0);
+    let skill = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+    let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
+    let mut left = Vec::new();
+    for (link, name) in [(&skill, "notes"), (&claude_md, "CLAUDE.md")] {
+        let twice = link.with_file_name(format!("..{name}.skiman-tmp-7.skiman-tmp-8-1"));
+        std::os::unix::fs::symlink(std::fs::read_link(link).unwrap(), &twice).unwrap();
+        left.push(twice);
+    }
+
+    sandbox.skiman().arg("sync").assert().code(0);
+
+    for twice in &left {
+        assert!(!twice.is_symlink(), "{} is still there", twice.display());
+    }
+    assert!(skill.is_symlink() && claude_md.is_symlink());
+}
+
+/// A link named like one sync took aside is skiman's only while it points
+/// where skiman's own link of that name does: one that points anywhere
+/// else, another skill included, is the user's, and sync leaves it.
+#[test]
+fn a_link_under_a_temporary_name_that_points_elsewhere_is_not_skimans() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let skills = sandbox.skill_repo().join("skills");
+    write_skill(&skills, "notes");
+    write_skill(&skills, "other");
+    sandbox.skiman().arg("sync").assert().code(0);
+    let theirs = sandbox.root().join("theirs");
+    std::fs::create_dir(&theirs).unwrap();
+    let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
+    let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
+    let links = [
+        (tool_dir.join(".notes.skiman-tmp-7"), theirs.clone()),
+        (tool_dir.join(".notes.skiman-tmp-8"), skills.join("other")),
+        (claude_md.with_file_name(".CLAUDE.md.skiman-tmp-7"), theirs),
+    ];
+    for (link, target) in &links {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    sandbox.skiman().arg("sync").assert().code(0);
+
+    for (link, target) in &links {
+        assert_eq!(std::fs::read_link(link).ok().as_ref(), Some(target));
+    }
 }
 
 #[test]

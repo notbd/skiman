@@ -143,7 +143,10 @@ impl Ownership {
         (target == self.shared_body || self.is_under_previous_repo(&target)).then_some(target)
     }
 
+    /// A link under a temporary name is owned as its name: a sync killed
+    /// while it removed or retargeted it left it there.
     fn is_owned_target(&self, name: &OsStr, target: &Path) -> bool {
+        let name = crate::fsutil::temporary_of(name).unwrap_or(name);
         *target == self.skills_dir.join(name)
             || *target == self.managing_skills_dir
             || self.is_under_previous_repo(target)

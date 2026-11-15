@@ -25,8 +25,12 @@ pub enum SkillsElsewhere {
         owner: &'static str,
     },
     /// The skills of every plugin in this Claude Code plugin registry
-    /// (`installed_plugins.json`, relative to `HOME`).
-    ClaudePlugins { registry: &'static str },
+    /// (`installed_plugins.json`, relative to `HOME`); `settings` is the
+    /// settings file whose `enabledPlugins` says which ones are turned off.
+    ClaudePlugins {
+        registry: &'static str,
+        settings: &'static str,
+    },
 }
 
 /// Any folder that contains this file is managed elsewhere (a plugin), in every tool.
@@ -106,6 +110,7 @@ pub const TOOLS: &[AgentTool] = &[
             },
             SkillsElsewhere::ClaudePlugins {
                 registry: ".claude/plugins/installed_plugins.json",
+                settings: ".claude/settings.json",
             },
         ],
         skills_not_listed: &["built-in skills that are not stored on disk"],
@@ -173,3 +178,29 @@ pub const TOOLS: &[AgentTool] = &[
         project_skill_dirs: &[".agent/skills", ".agents/skills"],
     },
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `sync` decides what to leave alone from `managed_elsewhere`; a place
+    /// the overview lists must be one of them, or the two lists drift apart.
+    #[test]
+    fn every_folder_of_skills_elsewhere_is_managed_elsewhere() {
+        for tool in TOOLS {
+            for place in tool.skills_elsewhere {
+                if let SkillsElsewhere::Folders { dir, .. } = place {
+                    assert!(
+                        tool.managed_elsewhere.iter().any(|m| matches!(
+                            m,
+                            ManagedElsewhere::Path(p) | ManagedElsewhere::RealpathUnder(p)
+                                if dir.starts_with(p)
+                        )),
+                        "{} lists {dir} but does not leave it to another manager",
+                        tool.id
+                    );
+                }
+            }
+        }
+    }
+}

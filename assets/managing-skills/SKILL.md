@@ -139,6 +139,9 @@ installed = 2026-01-31           # optional: the day it was installed
   needs no `origin`.
 - `skiman check` warns about each skill without a `summary`, a `group`, or
   where it came from. The warning never fails a command.
+- Fill these keys only with what the user tells you or the skill's own
+  files show. Leave a key out rather than guess: a guessed `origin` hides
+  that nobody knows where the skill came from.
 - Without `installed`, the overview shows the day of the latest commit that
   added the skill, marked `(git)`.
 

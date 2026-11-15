@@ -198,15 +198,19 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     write(
         &registry,
         format!(
-            r#"{{"plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}]}}}}"#,
+            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}]}}}}"#,
             plugin.display()
         ),
+    );
+    write(
+        sandbox.home().join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"kit@market": false}}"#,
     );
     let stdout = overview();
     assert!(
         stdout.contains("The entry of plugin bad@market in ")
             && stdout.contains(
-                "| tdd | Claude Code plugin kit@market (project scope) | ~/kit/skills/tdd | claude-code |"
+                "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/kit/skills/tdd | claude-code |"
             ),
         "{stdout}"
     );

@@ -6,7 +6,7 @@
 
 use std::io;
 
-use super::config::Records;
+use super::config::{INFO_KEYS, Records};
 use super::{Violation, folder_names, rule};
 use crate::tree::{Kind, Tree};
 
@@ -20,12 +20,13 @@ pub fn gaps(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
         }
         // A value of the wrong type is a `toml-value` violation already.
         let has = |key| records.skill_has(&name, key);
-        let mut missing: Vec<&str> = ["summary", "group"]
+        let [summary, group, origin] = INFO_KEYS;
+        let mut missing: Vec<&str> = [summary, group]
             .into_iter()
             .filter(|key| !has(key))
             .collect();
-        if records.source(&name).is_none() && !has("origin") {
-            missing.push("origin");
+        if records.source(&name).is_none() && !has(origin) {
+            missing.push(origin);
         }
         if missing.is_empty() {
             continue;

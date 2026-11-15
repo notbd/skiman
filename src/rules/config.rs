@@ -17,7 +17,7 @@ const REF_KINDS: &[&str] = &["branch", "tag", "commit"];
 
 /// The one-line text keys of `[skills.<name>]` that describe a skill to a
 /// person (`skiman overview`); `skiman check` reminds of missing ones.
-const INFO_KEYS: [&str; 3] = ["summary", "group", "origin"];
+pub const INFO_KEYS: [&str; 3] = ["summary", "group", "origin"];
 
 /// One parsed config file. `doc` is `None` when the file is missing or does not parse.
 pub struct ConfigFile {
@@ -499,15 +499,9 @@ impl Records {
             return;
         };
         let skill = m.section(table, format!("[skills.{name}]"), line);
+        let [summary, group, origin] = INFO_KEYS;
         skill.unknown_keys(
-            &[
-                "enabled",
-                "summary",
-                "group",
-                "origin",
-                "installed",
-                "source",
-            ],
+            &["enabled", summary, group, origin, "installed", "source"],
             out,
         );
         skill.value(

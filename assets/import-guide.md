@@ -124,6 +124,8 @@ fingerprint = "sha256:<hash of the matched text>"
 ```
 
 - A skill is third-party exactly when it has a `source` table.
+- Fill `summary`, `group`, `origin` and `installed` only with what the user
+  says or the existing setup shows; leave out what you would have to guess.
 - Unknown keys are an error. Leave out `ref_kind`; skiman derives it.
 - skiman keeps the skill repo's project scope: every `[projects.<id>]` table
   whose id the folder does not define, and every `[[secrets.allow]]` entry for

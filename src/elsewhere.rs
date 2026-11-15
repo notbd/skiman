@@ -58,8 +58,10 @@ pub fn find(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) -> Found {
                         found.add(&folder, owner, tool.id, false);
                     }
                 }
-                SkillsElsewhere::ClaudePlugins { registry } => {
-                    for (owner, folder) in plugin_skills(&home.join(registry), &mut found.notes) {
+                SkillsElsewhere::ClaudePlugins { registry, settings } => {
+                    let turned_off = turned_off_plugins(&home.join(settings));
+                    let registry = home.join(registry);
+                    for (owner, folder) in plugin_skills(&registry, &turned_off, &mut found.notes) {
                         found.add(&folder, &owner, tool.id, false);
                     }
                 }
@@ -127,6 +129,8 @@ impl Collected {
                 location,
                 read_by: Vec::new(),
             });
+        // Places are read before tool directories, so this only guards
+        // against that order changing.
         if !from_tool_dir && skill.owner == ANOTHER_MANAGER {
             skill.owner = owner.to_owned();
         }
@@ -184,7 +188,11 @@ fn sorted_children(dir: &Path) -> Vec<PathBuf> {
 /// `(owner, skill folder)` for every skill of every plugin in Claude Code's
 /// plugin registry (`installed_plugins.json`, version 2). A missing registry
 /// lists nothing; what cannot be read adds a note, and the rest is listed.
-fn plugin_skills(registry: &Path, notes: &mut Vec<String>) -> Vec<(String, PathBuf)> {
+fn plugin_skills(
+    registry: &Path,
+    turned_off: &[String],
+    notes: &mut Vec<String>,
+) -> Vec<(String, PathBuf)> {
     let text = match std::fs::read(registry) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -198,6 +206,7 @@ fn plugin_skills(registry: &Path, notes: &mut Vec<String>) -> Vec<(String, PathB
     };
     let plugins = serde_json::from_slice::<Value>(&text)
         .ok()
+        .filter(|v| v.get("version").and_then(Value::as_u64) == Some(2))
         .and_then(|v| v.get("plugins").and_then(Value::as_object).cloned());
     let Some(plugins) = plugins else {
         notes.push(format!(
@@ -232,12 +241,36 @@ fn plugin_skills(registry: &Path, notes: &mut Vec<String>) -> Vec<(String, PathB
             {
                 owner.push_str(&format!(" ({scope} scope)"));
             }
+            if turned_off.contains(plugin) {
+                owner.push_str(" (disabled)");
+            }
             let (folders, problems) = plugin_skill_folders(Path::new(dir));
             skills.extend(folders.into_iter().map(|f| (owner.clone(), f)));
             notes.extend(problems.into_iter().map(|p| format!("{owner}: {p}.")));
         }
     }
     skills
+}
+
+/// The plugins `enabledPlugins` in Claude Code's settings file turns off
+/// (`"<plugin>": false`); none when the file or the key cannot be read.
+fn turned_off_plugins(settings: &Path) -> Vec<String> {
+    let Ok(text) = std::fs::read(settings) else {
+        return Vec::new();
+    };
+    serde_json::from_slice::<Value>(&text)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.get("enabledPlugins"))
+        .and_then(Value::as_object)
+        .map(|plugins| {
+            plugins
+                .iter()
+                .filter(|(_, on)| on.as_bool() == Some(false))
+                .map(|(plugin, _)| plugin.clone())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The skill folders of the plugin installed at `dir`, as Claude Code loads

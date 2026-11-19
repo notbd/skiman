@@ -91,12 +91,15 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
             report.items.push(note(dir, path, "occupied", message));
             continue;
         }
-        let Ok(current) = std::fs::read_link(&path).map(|t| absolute_lexical(dir, &t)) else {
+        let Ok(written) = std::fs::read_link(&path) else {
             continue;
         };
+        let current = absolute_lexical(dir, &written);
         match (want, folder.map(|f| &f.state)) {
             (Some(want), _) if temporary_of(&name).is_none() => {
-                if current == *want {
+                // As written, not folded lexically: `a/link/../b` is not `a/b`
+                // when `link` leads elsewhere.
+                if written == *want {
                     confirmed.insert(text.into_owned());
                     continue;
                 }

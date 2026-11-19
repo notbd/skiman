@@ -108,3 +108,32 @@ fn a_sync_killed_while_it_retargets_linked_id_finishes_when_run_again() {
         ],
     );
 }
+
+/// A `linked/<id>` whose target names the registered path only when `..`
+/// is folded lexically (`work/alias/../company` with `alias` a link
+/// elsewhere) leads somewhere else: sync rebuilds it, and the next sync
+/// has nothing to do.
+#[test]
+fn a_link_that_resolves_elsewhere_than_its_text_says_is_rebuilt() {
+    let sandbox = company();
+    assert_eq!(sync(&sandbox).0, 0);
+    let work = sandbox.home().join("work");
+    let nested = sandbox.root().join("outside/nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    crate::support::write(
+        sandbox.root().join("outside/company/alpha/SKILL.md"),
+        crate::support::skill_md("wrong"),
+    );
+    symlink(&nested, work.join("alias")).unwrap();
+    let link = sandbox.canon().join("linked/company");
+    std::fs::remove_file(&link).unwrap();
+    symlink(work.join("alias/../company"), &link).unwrap();
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(std::fs::read_link(&link).unwrap(), work.join("company"));
+    let skill = sandbox.tool_dir(Tool::ClaudeCode).join("alpha/SKILL.md");
+    assert_eq!(read(skill), read(work.join("company/alpha/SKILL.md")));
+    sandbox.skiman().arg("sync").assert().code(0).stdout_eq("");
+}

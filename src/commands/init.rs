@@ -57,7 +57,8 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     test_hook::at("init", "locking");
     let machine = CanonLock::machine(&paths)?;
     // Every command that changes `skiman.toml` holds the machine lock while
-    // it does, so the registrations read now hold until init is done.
+    // it does, so the registrations read now hold through the closing sync;
+    // each session-hook write reads them again.
     let config = UserConfig::load(&paths).ok();
     let current = config
         .as_ref()
@@ -114,8 +115,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     // Settings files are outside the canon: do not hold the canon lock
     // while the preview waits for an answer; each write takes it again.
     drop(lock);
-    let previous_linked = previous.as_ref().and_then(|p| p.linked.as_ref());
-    let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks, previous_linked);
+    let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks, previous.as_ref());
     Ok(guarded.combine(exit).combine(hooks))
 }
 
@@ -164,14 +164,14 @@ fn refuse_inside_linked(current: Option<&(Canon, Linked)>, path: &Path) -> Resul
 /// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag
 /// (only possible with a terminal) previews the entries and asks. Each
 /// settings file is written under the canon lock, and left alone when it
-/// resolves into a linked folder registered at that moment or in the
-/// `previous` canon.
+/// resolves into a linked folder registered at that moment, in this canon
+/// or in the `previous` one (read again then, when it could be read before).
 fn install_session_hooks(
     paths: &Paths,
     repo: &Canon,
     binary: &Path,
     session_hooks: Option<&str>,
-    previous: Option<&Linked>,
+    previous: Option<&sync::PreviousCanon>,
 ) -> Exit {
     let request = match session_hooks {
         Some("none") => session_hooks::Request::Remove,
@@ -180,8 +180,12 @@ fn install_session_hooks(
     };
     let guard = |file: &Path, written: &Path| -> Result<CanonLock, Failure> {
         let lock = CanonLock::wait(paths, repo)?;
-        let linked =
-            Linked::read(paths.home(), repo, &Manifest::load(repo)?).guarding_also(previous);
+        let previous = previous
+            .filter(|p| p.linked.is_some())
+            .map(|p| Linked::load(paths.home(), &Canon::at(&p.root)?))
+            .transpose()?;
+        let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?)
+            .guarding_also(previous.as_ref());
         match linked.refusal(file, &linked::written_through(written)) {
             Some(message) => Err(Failure {
                 exit: Exit::NeedsAttention,

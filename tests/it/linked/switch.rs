@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Output;
 
 use super::{COMPANY, append_manifest, contents, folder, sync};
-use crate::support::{Sandbox, Tool, init, read, write};
+use crate::support::{Sandbox, Tool, ToolSetup, init, read, write};
 
 /// A canon at `sandbox.canon()` with `work/company` (skill `alpha`)
 /// registered and synced; returns the folder.
@@ -137,4 +137,40 @@ fn a_switch_removes_only_skimans_own_links_into_the_previous_canons_linked_folde
         std::fs::read_link(claude.join("other")).unwrap(),
         linked.join("solo")
     );
+}
+
+/// A registration of the canon `init` switches away from, re-pointed at
+/// the folder holding a settings file while the session-hook preview waits
+/// for its answer: the write reads that canon's registrations again under
+/// the lock, so the entry is not written (exit 3).
+#[test]
+fn a_previous_registration_re_pointed_at_the_settings_file_while_init_asks_blocks_the_hook_entry() {
+    let sandbox = Sandbox::builder()
+        .tool(Tool::Antigravity, ToolSetup::Absent)
+        .build();
+    first(&sandbox);
+    let company = folder(&sandbox, "company", &["beta"]);
+    let vendor = sandbox.home().join("vendor");
+    symlink(&company, &vendor).unwrap();
+    append_manifest(&sandbox, "\n[linked.vendor]\npath = \"~/vendor\"\n");
+    assert_eq!(sync(&sandbox).0, 0);
+    let next = sandbox.home().join("next");
+    write(next.join("settings.json"), "{}\n");
+    let settings = sandbox.presence_dir(Tool::ClaudeCode).join("settings.json");
+    symlink(next.join("settings.json"), &settings).unwrap();
+    let second = sandbox.root().join("second");
+
+    let mut pty = sandbox.skiman_pty([std::ffi::OsStr::new("init"), second.as_os_str()]);
+    pty.expect("Add this entry? [y/N] ");
+    std::fs::remove_file(&vendor).unwrap();
+    symlink(&next, &vendor).unwrap();
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 3, "{rest}");
+    assert!(
+        rest.contains("inside linked folder `vendor`") && rest.contains("of the previous canon"),
+        "{rest}"
+    );
+    assert_eq!(read(next.join("settings.json")), "{}\n");
 }

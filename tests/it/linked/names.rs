@@ -122,6 +122,59 @@ fn between_linked_folders_the_first_id_wins_and_the_next_takes_over() {
     assert_eq!(target(&sandbox, "pdf"), linked.join("zeta/pdf"));
 }
 
+/// A linked skill whose `SKILL.md` cannot be probed holds its name only
+/// where it would win: a readable winner keeps its link while a loser
+/// cannot be probed, and a readable loser does not take over from a
+/// winner that cannot be probed.
+#[test]
+fn a_skill_that_cannot_be_probed_changes_no_collision_winner() {
+    use std::os::unix::fs::PermissionsExt;
+    let chmod = |path: &std::path::Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    for locked in ["zeta", "acme"] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        folder(&sandbox, "work/acme", &["pdf"]);
+        folder(&sandbox, "work/zeta", &["pdf"]);
+        append_manifest(
+            &sandbox,
+            "\n[linked.zeta]\npath = \"~/work/zeta\"\n\n[linked.acme]\npath = \"~/work/acme\"\n",
+        );
+        let linked = sandbox.canon().join("linked");
+        assert_eq!(sync(&sandbox).0, 3);
+        assert_eq!(target(&sandbox, "pdf"), linked.join("acme/pdf"));
+        let skill = sandbox.home().join("work").join(locked).join("pdf");
+
+        chmod(&skill, 0o000);
+        let (code, stderr) = sync(&sandbox);
+        let list = sandbox.skiman().arg("list").output().unwrap().stdout;
+        chmod(&skill, 0o755);
+
+        assert_eq!(code, 3, "{locked}: {stderr}");
+        let unchecked = format!("linked skill pdf of `{locked}` is not checked");
+        assert!(stderr.contains(&unchecked), "{locked}: {stderr}");
+        assert!(!stderr.contains("removed"), "{locked}: {stderr}");
+        assert_eq!(target(&sandbox, "pdf"), linked.join("acme/pdf"), "{locked}");
+        let acme = sandbox.home().join("work/acme/pdf");
+        let zeta = sandbox.home().join("work/zeta/pdf");
+        let lost = |dir: &std::path::Path| {
+            format!("linked skill pdf in {} is not distributed", dir.display())
+        };
+        assert!(!stderr.contains(&lost(&acme)), "{locked}: {stderr}");
+        if locked == "acme" {
+            let kept = "linked folder `acme`, which cannot be read now, keeps the name";
+            assert!(
+                stderr.contains(&format!("{}: {kept}", lost(&zeta))),
+                "{stderr}"
+            );
+        } else {
+            let list = String::from_utf8(list).unwrap();
+            assert!(!list.contains("which cannot be read now"), "{list}");
+        }
+    }
+}
+
 /// A link an older script made for a linked skill resolves to the same
 /// folder: deleting it is safe, and the report prints the command.
 #[test]

@@ -292,48 +292,59 @@ impl Linked {
     /// holds their name (spec "Names and collisions"). Only folders `offers`
     /// accepts take part. Every skill folder under `skills/` (`layout`)
     /// holds its name, enabled or not, and so does every group folder (ADR
-    /// 0009); then the names `kept` (name to id) by
-    /// links of unreadable folders and by skills whose `SKILL.md` cannot be
-    /// probed; then the folder whose id sorts first.
+    /// 0009); then the names `kept` (name to id) by links of unreadable
+    /// folders; then the folder whose id sorts first. A skill whose
+    /// `SKILL.md` cannot be probed takes part in its folder's turn: it holds
+    /// a name no earlier folder holds (its link stays, [`Linked::frozen`]),
+    /// and never takes one from an earlier folder.
     pub fn names(
         &self,
         layout: &Layout,
         kept: &BTreeMap<String, String>,
         offers: impl Fn(&str) -> bool,
     ) -> (Vec<(String, PathBuf)>, Vec<Collision>) {
-        let mut kept = kept.clone();
-        for folder in &self.folders {
-            if let State::Read(contents) = &folder.state {
-                for (name, _) in &contents.unprobed {
-                    kept.entry(name.clone())
-                        .or_insert_with(|| folder.id.clone());
-                }
-            }
-        }
-        let mut taken: BTreeMap<String, String> = BTreeMap::new();
+        let mut taken: BTreeMap<String, Holder> = kept
+            .iter()
+            .map(|(name, id)| (name.clone(), Holder::Kept(id.clone())))
+            .collect();
         let mut wanted = Vec::new();
         let mut collisions = Vec::new();
         for folder in self.folders.iter().filter(|f| offers(&f.id)) {
-            for name in folder.skill_names() {
+            let unprobed: &[(String, String)] = match &folder.state {
+                State::Read(contents) => &contents.unprobed,
+                _ => &[],
+            };
+            // Each name with whether its `SKILL.md` was probed.
+            let mut names: Vec<(String, bool)> = folder
+                .skill_names()
+                .into_iter()
+                .map(|n| (n, true))
+                .chain(unprobed.iter().map(|(n, _)| (n.clone(), false)))
+                .collect();
+            names.sort();
+            for (name, probed) in names {
                 let holder = if let Some(placed) = layout.find(&name) {
                     Some(Holder::Canon(placed.path()))
                 } else if let Some(group) = layout.group_named(&name) {
                     Some(Holder::Group(format!("skills/{group}")))
-                } else if let Some(id) = kept.get(&name) {
-                    Some(Holder::Kept(id.clone()))
                 } else {
-                    taken.get(&name).map(|id| Holder::Linked(id.clone()))
+                    taken.get(&name).cloned()
                 };
-                match holder {
-                    Some(holder) => collisions.push(Collision {
+                match (holder, probed) {
+                    (Some(holder), true) => collisions.push(Collision {
                         id: folder.id.clone(),
                         dir: folder.skill_dir(&name),
                         name,
                         holder,
                     }),
-                    None => {
-                        taken.insert(name.clone(), folder.id.clone());
+                    (None, true) => {
+                        taken.insert(name.clone(), Holder::Linked(folder.id.clone()));
                         wanted.push((name.clone(), self.skill_target(folder, &name)));
+                    }
+                    // Not known to be a skill: it is reported unprobed, not as lost.
+                    (Some(_), false) => {}
+                    (None, false) => {
+                        taken.insert(name, Holder::Kept(folder.id.clone()));
                     }
                 }
             }

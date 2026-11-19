@@ -127,10 +127,16 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
         }
         let path = dir.join(id);
         test_hook::at("sync", &format!("link:{}", path.display()));
+        // `symlink` never replaces: an entry that appeared since the
+        // listing occupies the id like one the listing found.
         match std::os::unix::fs::symlink(want, &path) {
             Ok(()) => {
                 report.changes.push((Change::Linked, path));
                 confirmed.insert(id.to_owned());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                let message = occupied(&path, id);
+                report.items.push(note(dir, path, "occupied", message));
             }
             Err(e) => report
                 .errors

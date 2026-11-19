@@ -158,3 +158,49 @@ scalar: `metadata` in [..]/home/work/company/scalar/SKILL.md is not a map; make 
     );
     assert!(!stdout.contains("/done/SKILL.md"), "{stdout}");
 }
+
+/// `linked remove` of an id that is not registered changes nothing; when
+/// `linked/<id>` is left from an earlier registration, it says that sync
+/// removes it.
+#[test]
+fn linked_remove_refuses_an_id_that_is_not_registered() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    sandbox
+        .skiman()
+        .args(["linked", "remove", "company"])
+        .assert()
+        .code(1)
+        .stderr_eq("error: skiman.toml has no [linked.company]\n");
+
+    let leftover = sandbox.skill_repo().join("linked/company");
+    std::fs::create_dir_all(leftover.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("/nowhere", &leftover).unwrap();
+    sandbox
+        .skiman()
+        .args(["linked", "remove", "company"])
+        .assert()
+        .code(1)
+        .stderr_eq("error: skiman.toml has no [linked.company]; [..]/skill-repo/linked/company is left from an earlier registration, and `skiman sync` removes it\n");
+    sandbox.skiman().arg("sync").assert().code(0);
+    assert!(std::fs::symlink_metadata(&leftover).is_err());
+}
+
+/// `linked remove` works when the folder is gone from this machine.
+#[test]
+fn linked_remove_works_when_the_folder_is_gone() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    linked_add(&sandbox, &[&company]).code(0);
+    std::fs::remove_dir_all(&company).unwrap();
+
+    sandbox
+        .skiman()
+        .args(["linked", "remove", "company"])
+        .assert()
+        .code(0);
+
+    assert!(!read(sandbox.skill_repo().join("skiman.toml")).contains("[linked"));
+    assert!(std::fs::symlink_metadata(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).is_err());
+}

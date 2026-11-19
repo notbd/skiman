@@ -102,7 +102,7 @@ fn overview() -> Result<Exit, Failure> {
             None => ungrouped.push(row),
         }
     }
-    let found = elsewhere::find(&paths, &repo, &manifest);
+    let found = elsewhere::find(&paths, &repo);
 
     out!("# Skills\n");
     out!("## In the skill repo ({count})\n");

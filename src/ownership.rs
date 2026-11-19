@@ -8,9 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::backup::noted_copy;
 use crate::fsutil::absolute_lexical;
-use crate::manifest::Manifest;
 use crate::paths::Paths;
-use crate::project::root::configured_skill_dirs;
 use crate::repo::SkillRepo;
 use crate::tools::{ManagedElsewhere, PLUGIN_MARKER, TOOLS};
 
@@ -50,14 +48,7 @@ pub struct Ownership {
 }
 
 impl Ownership {
-    /// `manifest` is the `skiman.toml` the caller acts on (for import, the one
-    /// it is about to write); its project roots' `skill_dirs` are managed elsewhere.
-    pub fn new(
-        paths: &Paths,
-        repo: &SkillRepo,
-        manifest: &Manifest,
-        previous_repo: Option<PathBuf>,
-    ) -> Ownership {
+    pub fn new(paths: &Paths, repo: &SkillRepo, previous_repo: Option<PathBuf>) -> Ownership {
         let home = paths.home();
         let mut managed_paths = Vec::new();
         let mut managed_under = Vec::new();
@@ -78,9 +69,6 @@ impl Ownership {
                 }
             }
         }
-        // Skills under a project root's `skill_dirs` reach the tools through
-        // links another manager keeps (project-scope.md "Configuration").
-        managed_under.extend(configured_skill_dirs(home, repo, manifest));
         Ownership {
             skills_dir: repo.skills_dir(),
             managing_skills_dir: repo.managing_skills_dir(),

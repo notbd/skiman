@@ -788,7 +788,6 @@ struct Configured {
     id: String,
     /// The `path` expanded lexically, and its realpath when it exists.
     paths: Vec<PathBuf>,
-    skill_dirs: Vec<String>,
 }
 
 /// What eject does under one path.
@@ -818,7 +817,6 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             Configured {
                 id: entry.id,
                 paths,
-                skill_dirs: entry.skill_dirs,
             }
         })
         .collect();
@@ -842,7 +840,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 path.display()
             )));
         };
-        let items: Vec<Item> = read_mirror_of(&tree, &root.id, &root.skill_dirs)
+        let items: Vec<Item> = read_mirror_of(&tree, &root.id)
             .map_err(io_failure)?
             .items
             .into_iter()

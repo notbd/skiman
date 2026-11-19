@@ -25,7 +25,7 @@ pub struct Item {
 impl Item {
     /// The item at `rel` when `rel` has an item shape.
     pub fn at(root: &Root, rel: &str, is_dir: bool) -> Option<Item> {
-        shape(rel, is_dir, &root.skill_dirs).map(|(kind, anchor)| Item {
+        shape(rel, is_dir).map(|(kind, anchor)| Item {
             root: root.id.clone(),
             rel: rel.to_owned(),
             kind,
@@ -65,12 +65,12 @@ pub struct Mirror {
 /// Skill folders are not entered; ignored names ([`tree::IGNORED_NAMES`]) are
 /// skipped.
 pub fn read_mirror(tree: &dyn Tree, root: &Root) -> std::io::Result<Mirror> {
-    read_mirror_of(tree, &root.id, &root.skill_dirs)
+    read_mirror_of(tree, &root.id)
 }
 
-/// [`read_mirror`] by id and configured skill folders, for the rules (which
-/// read the configuration from the tree, not from a resolved root).
-pub fn read_mirror_of(tree: &dyn Tree, id: &str, skill_dirs: &[String]) -> std::io::Result<Mirror> {
+/// [`read_mirror`] by id, for the rules (which read the configuration from
+/// the tree, not from a resolved root).
+pub fn read_mirror_of(tree: &dyn Tree, id: &str) -> std::io::Result<Mirror> {
     let base = format!("{MIRROR_DIR}/{id}");
     let mut mirror = Mirror::default();
     let mut skills: Vec<String> = Vec::new();
@@ -80,8 +80,7 @@ pub fn read_mirror_of(tree: &dyn Tree, id: &str, skill_dirs: &[String]) -> std::
             continue;
         }
         let is_dir = entry.kind == tree::Kind::Dir;
-        let found = shape(rel, is_dir, skill_dirs)
-            .or_else(|| (!is_dir).then(|| shape(rel, true, skill_dirs)).flatten());
+        let found = shape(rel, is_dir).or_else(|| (!is_dir).then(|| shape(rel, true)).flatten());
         match found {
             Some((kind, anchor)) => {
                 if kind == Kind::Skill {

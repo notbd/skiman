@@ -19,7 +19,6 @@ use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::layout::skill_path;
-use crate::manifest::Manifest;
 use crate::names::{self, Taken};
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -52,8 +51,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
     if let Some(group) = group {
         names::check_group(group, name, &repo.layout()?)?;
     }
-    let manifest = Manifest::load(&repo)?;
-    let (entry, files) = read(&paths, &repo, &manifest, tool, name)?;
+    let (entry, files) = read(&paths, &repo, tool, name)?;
     let change = Change {
         pieces: vec![(skill_path(group, name), Want::Folder(files.clone()))],
         command: "adopt",
@@ -76,8 +74,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,
     // `.git/` left out), so only a change to what would be adopted refuses.
-    let manifest = Manifest::load(&repo)?;
-    if read(&paths, &repo, &manifest, tool, name)? != (entry.clone(), files) {
+    if read(&paths, &repo, tool, name)? != (entry.clone(), files) {
         return Err(Failure::refused(format!(
             "{} changed after adopt read it; nothing was changed, run adopt again",
             entry.display()
@@ -136,7 +133,6 @@ fn check_name(
 fn read(
     paths: &Paths,
     repo: &SkillRepo,
-    manifest: &Manifest,
     tool: &AgentTool,
     name: &str,
 ) -> Result<(PathBuf, Vec<SnapshotFile>), Failure> {
@@ -157,7 +153,7 @@ fn read(
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
-    let ownership = Ownership::new(paths, repo, manifest, None);
+    let ownership = Ownership::new(paths, repo, None);
     let refused = match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => {
             let files = read_copy(&entry, name)?;

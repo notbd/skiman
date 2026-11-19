@@ -130,7 +130,6 @@ pub struct ProjectEntry {
     /// `path`, as written: absolute or starting with `~/`.
     pub path: Option<String>,
     pub exclude: Vec<String>,
-    pub skill_dirs: Vec<String>,
 }
 
 impl Manifest {
@@ -162,7 +161,6 @@ pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
             id: id.to_owned(),
             path: item.get("path").and_then(Item::as_str).map(str::to_owned),
             exclude: strings(item, "exclude"),
-            skill_dirs: strings(item, "skill_dirs"),
         })
         .collect()
 }

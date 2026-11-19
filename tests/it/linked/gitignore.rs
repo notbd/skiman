@@ -151,3 +151,31 @@ fn check_warns_when_git_cannot_tell_whether_linked_is_ignored() {
         "{stderr}"
     );
 }
+
+/// In a git canon where git cannot tell (`linked` is a link), a `/linked/`
+/// line that a later `!/linked/` overrides does not count: the line is
+/// appended, decided by the last non-empty line.
+#[test]
+fn when_git_cannot_tell_the_last_line_decides() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.canon();
+    let gitignore = repo.join(".gitignore");
+    std::fs::write(&gitignore, ".skiman/\n/linked/\n!/linked/\n").unwrap();
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, repo.join("linked")).unwrap();
+    folder(&sandbox, "work/company", &["alpha"]);
+
+    sandbox
+        .skiman()
+        .args(["linked", "add"])
+        .arg(sandbox.home().join("work/company"))
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        read(&gitignore),
+        ".skiman/\n/linked/\n!/linked/\n/linked/\n"
+    );
+}

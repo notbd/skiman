@@ -26,9 +26,10 @@ pub enum Outcome {
 /// Appends `/linked/` to the canon's `.gitignore` unless git already
 /// ignores `linked/` by the canon's own rules (`check-ignore` with the
 /// folder's slash, so the rule counts before sync has made it) or the
-/// file's last non-empty line is `/linked/`. In a canon that is not a git
-/// repo there is no check: the line is appended unless any line is
-/// `/linked/`. A `.gitignore` that is a link is left alone.
+/// file's last non-empty line is `/linked/`; the last line decides too when
+/// git cannot tell. In a canon that is not a git repo there is no check:
+/// the line is appended unless any line is `/linked/`. A `.gitignore` that
+/// is a link is left alone.
 pub fn ignore(root: &Path) -> Result<Outcome, Failure> {
     let path = root.join(".gitignore");
     let cannot_read =
@@ -44,8 +45,10 @@ pub fn ignore(root: &Path) -> Result<Outcome, Failure> {
     };
     let present = match check_ignore(root) {
         Ignored::Yes => true,
-        Ignored::No => text.lines().rev().find(|l| !l.trim().is_empty()) == Some(LINE),
-        Ignored::NotARepo | Ignored::Failed(_) => text.lines().any(|l| l == LINE),
+        Ignored::No | Ignored::Failed(_) => {
+            text.lines().rev().find(|l| !l.trim().is_empty()) == Some(LINE)
+        }
+        Ignored::NotARepo => text.lines().any(|l| l == LINE),
     };
     if present {
         return Ok(Outcome::Present);

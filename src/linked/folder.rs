@@ -26,7 +26,8 @@ pub struct Contents {
     pub unprobed: Vec<(String, String)>,
     /// Why the folder's own top-level `SKILL.md` cannot be probed: the
     /// single-skill shape keeps its existing link and name (exit 3), and
-    /// the folder is read one level deep as usual.
+    /// the folder is read one level deep as usual; its skills take part in
+    /// naming only when that link is not kept (`Linked::names`).
     pub top_unprobed: Option<String>,
     /// The folder's own content problems: an invalid skill name, a dangling
     /// or looping child link, a child link that breaks the path rules. Each

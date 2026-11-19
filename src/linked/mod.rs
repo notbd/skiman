@@ -347,7 +347,9 @@ impl Linked {
     /// 0009); then the names `kept` by the links [`Linked::keeper`] keeps;
     /// then the folder whose id sorts first. A skill whose `SKILL.md`
     /// cannot be probed holds a name only through `kept`, so it never
-    /// takes a name it did not hold.
+    /// takes a name it did not hold; nor do the sub-folders of a single
+    /// skill whose top-level `SKILL.md` cannot be probed
+    /// ([`Linked::skill_names`]).
     pub fn names(
         &self,
         layout: &Layout,
@@ -358,7 +360,7 @@ impl Linked {
         let mut wanted = Vec::new();
         let mut collisions = Vec::new();
         for folder in self.folders.iter().filter(|f| offers(&f.id)) {
-            for name in folder.skill_names() {
+            for name in Linked::skill_names(folder, kept) {
                 let holder = if let Some(placed) = layout.find(&name) {
                     Some(Holder::Canon(placed.path()))
                 } else if let Some(group) = layout.group_named(&name) {
@@ -383,6 +385,29 @@ impl Linked {
         (wanted, collisions)
     }
 
+    /// The names of `folder`'s linked skills that take part in naming
+    /// ([`Folder::skill_names`]), none while its top-level `SKILL.md`
+    /// cannot be probed and the tool directories keep its `<id>` link
+    /// (`kept`): it was one skill, and stays one until it can be probed.
+    /// Its sub-folders' targets stay protected all the same.
+    fn skill_names(folder: &Folder, kept: &BTreeMap<String, Holder>) -> Vec<String> {
+        let was_single = |contents: &Contents| {
+            contents.top_unprobed.is_some()
+                // An unprobed sub-folder named like the id is kept under
+                // the same name: then the shape is unknown, and read as usual.
+                && !contents.unprobed.iter().any(|(name, _)| *name == folder.id)
+                && kept.get(&folder.id)
+                    == Some(&Holder::Unprobed {
+                        id: folder.id.clone(),
+                        name: folder.id.clone(),
+                    })
+        };
+        match &folder.state {
+            State::Read(contents) if was_single(contents) => Vec::new(),
+            _ => folder.skill_names(),
+        }
+    }
+
     /// What `list` and `overview` show of each folder, in id order (spec
     /// "Display"): one not on this machine, or the linked skills of one that
     /// was read, each with the skill that holds its name when it lost a
@@ -397,8 +422,7 @@ impl Linked {
                 let shown = match &folder.state {
                     State::Missing => Shown::Missing,
                     State::Read(_) => Shown::Skills(
-                        folder
-                            .skill_names()
+                        Linked::skill_names(folder, kept)
                             .into_iter()
                             .map(|name| {
                                 let lost = collisions

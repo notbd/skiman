@@ -489,3 +489,48 @@ fn commands_that_create_a_group_folder_refuse_a_linked_skills_name() {
         sandbox.canon().join("linked/company/alpha")
     );
 }
+
+/// A single-skill folder whose top-level `SKILL.md` cannot be probed, and
+/// whose `<id>` link the tool directories still hold, stays one skill for
+/// that sync: its sub-folder `kid` takes no part in naming, so the winner
+/// of `kid` in another folder keeps its link.
+#[test]
+fn a_single_skill_that_cannot_be_probed_lends_no_name_to_its_sub_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let work = sandbox.home().join("work");
+    folder(&sandbox, "work", &["a"]);
+    write(work.join("a/kid/SKILL.md"), skill_md("kid"));
+    folder(&sandbox, "work/b", &["kid"]);
+    append_manifest(
+        &sandbox,
+        "\n[linked.a]\npath = \"~/work/a\"\n\n[linked.b]\npath = \"~/work/b\"\n",
+    );
+    let linked = sandbox.canon().join("linked");
+    assert_eq!(sync(&sandbox).0, 0);
+    assert_eq!(target(&sandbox, "kid"), linked.join("b/kid"));
+    let locked = work.join("locked");
+    write(locked.join("SKILL.md"), skill_md("a"));
+    std::fs::remove_file(work.join("a/SKILL.md")).unwrap();
+    std::os::unix::fs::symlink(locked.join("SKILL.md"), work.join("a/SKILL.md")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (code, stderr) = sync(&sandbox);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        stderr.contains("linked skill a of `a` is not checked"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("sorts first"), "{stderr}");
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert_eq!(std::fs::read_link(dir.join("a")).unwrap(), linked.join("a"));
+        assert_eq!(
+            std::fs::read_link(dir.join("kid")).unwrap(),
+            linked.join("b/kid")
+        );
+    }
+}

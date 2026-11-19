@@ -239,7 +239,9 @@ fn an_unreadable_sub_folder_keeps_its_link_and_needs_attention() {
 
 /// A top-level `SKILL.md` that cannot be probed, in a folder that can be
 /// listed, keeps only the single-skill shape's existing link and name
-/// (exit 3): the readable sub-folders are read and synced as usual.
+/// (exit 3). The readable sub-folders of a folder of skills are read and
+/// synced as usual; those of a single skill, whose `<id>` link is kept,
+/// are no skills for that sync.
 #[test]
 fn a_top_level_skill_md_that_cannot_be_probed_freezes_only_the_single_skill_shape() {
     use std::os::unix::fs::PermissionsExt;
@@ -277,9 +279,10 @@ fn a_top_level_skill_md_that_cannot_be_probed_freezes_only_the_single_skill_shap
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);
         assert!(!exists(dir.join("alpha")), "{}", dir.display());
-        for name in ["gamma", "beta", "extra"] {
+        for name in ["gamma", "beta"] {
             assert!(dir.join(name).join("SKILL.md").is_file(), "{name}");
         }
+        assert!(!exists(dir.join("extra")), "{}", dir.display());
         assert_eq!(
             std::fs::read_link(dir.join("solo")).unwrap(),
             linked.join("solo")

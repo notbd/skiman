@@ -352,7 +352,7 @@ fn write_addition(settings: &Settings, shape: HookShape, own: &str) -> Exit {
 fn entry_to_add(shape: HookShape, own: &str) -> (&'static str, Value) {
     match shape {
         HookShape::Grouped { .. } => ("`hooks.SessionStart`", entry(shape, own)),
-        HookShape::Named { name } => ("its top level", json!({ name: entry(shape, own) })),
+        HookShape::Named { name } => ("the top level", json!({ name: entry(shape, own) })),
     }
 }
 
@@ -382,11 +382,7 @@ fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
         Err(Unusable::NotInstalled(_)) => return Exit::Success,
         Err(Unusable::Broken(reason)) => return by_hand(reason),
     };
-    let shape = session_hook(tool).shape;
-    if let Err(what) = entries(&settings.root, shape) {
-        return by_hand(format!("{}: {what}", settings.path.display()));
-    }
-    if !strip(&mut settings.root, shape, own, true) {
+    if !strip(&mut settings.root, session_hook(tool).shape, own, true) {
         return Exit::Success;
     }
     match settings.save() {
@@ -431,7 +427,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, own: &str) -> Exit {
     for (tool, path) in &planned {
         let (place, entry) = entry_to_add(session_hook(tool).shape, own);
         err!(
-            "skiman can add this session-start hook entry to {place} in {}, so a new or resumed session refreshes distribution:\n{}",
+            "skiman can add this session-start hook entry to {place} of {}, so starting a session refreshes distribution:\n{}",
             path.display(),
             pretty(&entry)
         );

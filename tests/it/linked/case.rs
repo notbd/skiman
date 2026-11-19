@@ -187,3 +187,36 @@ fn a_link_on_the_way_typed_in_another_case_breaks_the_rules_as_on_disk() {
         assert_eq!(read(&manifest), before, "{typed}");
     }
 }
+
+/// A top-level `skill.md` is the folder's `SKILL.md` on such a volume: when
+/// it cannot be probed it is reported once, as the single-skill shape, and
+/// never also as an entry of the folder.
+#[test]
+fn a_top_level_skill_md_in_another_case_is_not_an_entry() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(sandbox) = sandbox() else {
+        return;
+    };
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let locked = sandbox.home().join("work/locked");
+    write(locked.join("SKILL.md"), "x");
+    symlink(locked.join("SKILL.md"), company.join("skill.md")).unwrap();
+    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (code, stderr) = sync(&sandbox);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        stderr.contains("linked skill company of `company` is not checked"),
+        "{stderr}"
+    );
+    assert_eq!(stderr.matches("is not checked").count(), 1, "{stderr}");
+    assert!(
+        sandbox
+            .tool_dir(Tool::ClaudeCode)
+            .join("alpha/SKILL.md")
+            .is_file()
+    );
+}

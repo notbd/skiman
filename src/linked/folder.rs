@@ -6,7 +6,7 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::os::unix::fs::DirEntryExt;
+use std::os::unix::fs::{DirEntryExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use super::path::{self, Listings, Stop, resolve_in};
@@ -66,12 +66,18 @@ pub fn read(
         let entry = entry.map_err(|e| cannot(dir, e))?;
         listed.push((entry.file_name(), entry.ino()));
     }
-    let mut names: Vec<OsString> = listed.iter().map(|(name, _)| name.clone()).collect();
+    // The folder's own `SKILL.md`, probed above, is no entry: matched by
+    // inode, so another spelling of it on a volume that ignores case is too.
+    let top_ino = std::fs::symlink_metadata(&top).ok().map(|m| m.ino());
+    let mut names: Vec<OsString> = listed
+        .iter()
+        .filter(|(_, ino)| Some(*ino) != top_ino)
+        .map(|(name, _)| name.clone())
+        .collect();
     names.sort();
     listings.insert(dir.to_owned(), listed);
     for name in names {
-        // The folder's own `SKILL.md` was probed above; it is no entry.
-        if name.as_encoded_bytes().starts_with(b".") || name == "SKILL.md" {
+        if name.as_encoded_bytes().starts_with(b".") {
             continue;
         }
         let entry = dir.join(&name);

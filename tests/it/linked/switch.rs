@@ -180,6 +180,10 @@ fn a_previous_registration_re_pointed_at_the_settings_file_while_init_asks_block
 /// registrations, so it says so in the guard's words and leaves the
 /// settings file alone (exit 3).
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_previous_canon_that_cannot_be_read_again_leaves_the_hook_entry_unwritten() {
     let sandbox = Sandbox::builder()
         .tool(Tool::Antigravity, ToolSetup::Absent)

@@ -299,6 +299,10 @@ fn a_disabled_tools_directory_that_resolves_into_a_linked_folder_refuses_the_imp
 /// move takes the entry from the folder import checked, and the
 /// registered folder stays byte for byte.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn import_moves_an_entry_out_of_the_tool_directory_it_checked() {
     let sandbox = Sandbox::new();
     let setup = setup(&sandbox);

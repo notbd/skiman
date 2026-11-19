@@ -403,6 +403,10 @@ fn sync_with_hook_at(sandbox: &Sandbox, at: &Path, run: &str) -> (i32, String) {
 /// registered folder while sync links in it: every link lands in the
 /// folder sync checked, and the registered folder stays byte for byte.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn a_tool_directory_relinked_while_sync_links_is_written_where_it_was_checked() {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -438,6 +442,10 @@ fn a_tool_directory_relinked_while_sync_links_is_written_where_it_was_checked() 
 /// after sync checked it: the closing instruction sync re-checks where it
 /// writes and refuses (exit 3); the registered folder stays byte for byte.
 #[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
 fn an_instruction_location_relinked_during_sync_is_guarded_where_it_is_written() {
     let sandbox = Sandbox::new();
     init(&sandbox);

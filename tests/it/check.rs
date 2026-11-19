@@ -683,3 +683,54 @@ fn a_skiman_toml_that_does_not_parse_gives_no_skill_info_warning() {
     let stderr = String::from_utf8(output.get_output().stderr.clone()).unwrap();
     assert!(!stderr.contains("skill-info"), "{stderr}");
 }
+
+/// `skills/big/SKILL.md` whose body, without its surrounding blank lines, is `bytes` long.
+fn write_skill_body(sandbox: &Sandbox, bytes: usize) {
+    write(
+        sandbox,
+        "skills/big/SKILL.md",
+        format!(
+            "---\nname: big\ndescription: d\n---\n\n\n{}\n\n",
+            "x".repeat(bytes)
+        ),
+    );
+}
+
+/// The `skill-body-size` lines `check` prints; asserts exit 0.
+fn body_size_warnings(sandbox: &Sandbox) -> Vec<String> {
+    let output = check(sandbox).code(0);
+    String::from_utf8(output.get_output().stderr.clone())
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("skill-body-size"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_skill_body_over_antigravitys_limit_is_a_warning_while_antigravity_is_enabled() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+
+    // Measured with agy 1.5.12: it keeps 24000 bytes of the body, counted
+    // without the frontmatter and without surrounding whitespace.
+    write_skill_body(&sandbox, 23999);
+    assert_eq!(body_size_warnings(&sandbox), Vec::<String>::new());
+    write_skill_body(&sandbox, 24000);
+    assert_eq!(body_size_warnings(&sandbox), Vec::<String>::new());
+
+    write_skill_body(&sandbox, 24001);
+    assert_eq!(
+        body_size_warnings(&sandbox),
+        [
+            "warning: skills/big/SKILL.md: skill-body-size: the body is 24001 bytes (without the frontmatter and surrounding whitespace); antigravity cuts it after 24000 bytes without a message"
+        ]
+    );
+
+    write(
+        &sandbox,
+        "skiman.toml",
+        "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
+    );
+    assert_eq!(body_size_warnings(&sandbox), Vec::<String>::new());
+}

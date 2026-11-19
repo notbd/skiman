@@ -54,6 +54,11 @@ pub struct AgentTool {
     pub instruction_additions: &'static [&'static str],
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
+    /// Bytes of a `SKILL.md` body the tool keeps when the skill is used,
+    /// counted after the frontmatter's closing `---` line and without
+    /// surrounding whitespace; the rest is cut without a message. `None`
+    /// when none is known.
+    pub skill_body_size_limit: Option<u64>,
     pub managed_elsewhere: &'static [ManagedElsewhere],
     /// Where other managers keep skills this tool reads (`skiman overview`).
     pub skills_elsewhere: &'static [SkillsElsewhere],
@@ -100,6 +105,7 @@ pub const TOOLS: &[AgentTool] = &[
         instruction_overrides: &[],
         instruction_additions: &[],
         instruction_size_limit: None,
+        skill_body_size_limit: None,
         managed_elsewhere: &[
             ManagedElsewhere::Path(".claude/skills/synced"),
             ManagedElsewhere::Path(".claude/skills/.trash"),
@@ -141,6 +147,7 @@ pub const TOOLS: &[AgentTool] = &[
         instruction_overrides: &[".codex/AGENTS.override.md"],
         instruction_additions: &[],
         instruction_size_limit: Some(32768),
+        skill_body_size_limit: None,
         managed_elsewhere: &[
             ManagedElsewhere::RealpathUnder(".codex/plugins"),
             ManagedElsewhere::Path(".codex/skills/.system"),
@@ -179,6 +186,10 @@ pub const TOOLS: &[AgentTool] = &[
         // Bytes, inclusive: phase 1 measured 24000 loads whole, 24001 is
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
+        // Bytes, inclusive: agy 1.5.12 keeps a body of 24000 bytes whole and
+        // cuts one of 24001; the frontmatter does not count
+        // (`docs/project-scope-evidence.md`).
+        skill_body_size_limit: Some(24000),
         managed_elsewhere: &[],
         skills_elsewhere: &[],
         // agy 1.5.12 also loads these two folders (`docs/project-scope-evidence.md`).

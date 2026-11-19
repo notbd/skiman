@@ -153,6 +153,16 @@ fn is_delimiter(line: &str) -> bool {
 
 /// The YAML between the `---` on line 1 and the next `---` line.
 pub(crate) fn split(text: &str) -> Option<&str> {
+    parts(text).map(|(yaml, _)| yaml)
+}
+
+/// Everything after the frontmatter's closing `---` line.
+pub(crate) fn body(text: &str) -> Option<&str> {
+    parts(text).map(|(_, body)| body)
+}
+
+/// The frontmatter's YAML and the body after its closing line.
+fn parts(text: &str) -> Option<(&str, &str)> {
     let mut lines = text.split_inclusive('\n');
     if !is_delimiter(lines.next()?.trim_end_matches('\n')) {
         return None;
@@ -161,7 +171,7 @@ pub(crate) fn split(text: &str) -> Option<&str> {
     let mut offset = start;
     for line in lines {
         if is_delimiter(line.trim_end_matches('\n')) {
-            return Some(&text[start..offset]);
+            return Some((&text[start..offset], &text[offset + line.len()..]));
         }
         offset += line.len();
     }

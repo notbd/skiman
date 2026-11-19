@@ -431,6 +431,41 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     assert_eq!(contents(&[&company]), before);
 }
 
+/// `init` into a registered folder of the current canon, or into a folder
+/// inside one, refuses before writing anything (exit 1): the user config
+/// still names the current canon.
+#[test]
+fn init_refuses_a_folder_inside_a_linked_folder_of_the_current_canon() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &[]);
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    let config = sandbox.config_home().join("skiman");
+    let before = (contents(&[&company]), crate::support::tree(&config));
+
+    for target in [company.clone(), company.join("new")] {
+        let output = sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(&target)
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains("lies inside, linked folder `company`")
+                && stderr.contains("skiman linked remove company"),
+            "{stderr}"
+        );
+        assert_eq!(
+            (contents(&[&company]), crate::support::tree(&config)),
+            before
+        );
+    }
+}
+
 /// A new registration that would take the place of an existing one (its id
 /// sorts first and the folders overlap) is refused: the existing one keeps
 /// working and nothing is written.

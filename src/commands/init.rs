@@ -51,6 +51,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current directory: {e}")))?;
     let path = absolute_lexical(&cwd, path);
+    refuse_inside_linked(&paths, &path)?;
     let machine = CanonLock::machine(&paths)?;
     let target = inspect(&path)?;
 
@@ -93,6 +94,27 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     drop(lock);
     let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks);
     Ok(guarded.combine(exit).combine(hooks))
+}
+
+/// Refuses a canon at `path` when `path` is, or lies inside, a linked
+/// folder of the current canon: making it would write there. With no
+/// current canon whose `skiman.toml` can be read, no folder is known.
+fn refuse_inside_linked(paths: &Paths, path: &Path) -> Result<(), Failure> {
+    let Some(linked) = UserConfig::load(paths)
+        .and_then(|config| Canon::at(&config.repo))
+        .and_then(|current| Linked::load(paths.home(), &current))
+        .ok()
+    else {
+        return Ok(());
+    };
+    match linked.holding(&linked::written_through(path)) {
+        Some(folder) => Err(Failure::refused(format!(
+            "{} is, or lies inside, linked folder `{id}` of the current canon, where skiman writes nothing; to make a canon there, first run `skiman linked remove {id}`",
+            path.display(),
+            id = folder.id
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag

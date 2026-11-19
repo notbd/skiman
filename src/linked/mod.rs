@@ -211,10 +211,7 @@ impl Linked {
     /// folder"). Every registration with a path counts, one that breaks a
     /// rule too. `None` when the write may go ahead.
     pub fn refusal(&self, path: &Path, target: &Path) -> Option<String> {
-        let folder = self
-            .folders
-            .iter()
-            .find(|f| f.registered().any(|p| target.starts_with(p)))?;
+        let folder = self.holding(target)?;
         let shown = folder
             .path
             .as_ref()
@@ -226,6 +223,14 @@ impl Linked {
             folder.id,
             shown.display()
         ))
+    }
+
+    /// The registered folder `target` (a realpath, or resolved as far as it
+    /// goes) is, or lies inside; every registration with a path counts.
+    pub fn holding(&self, target: &Path) -> Option<&Folder> {
+        self.folders
+            .iter()
+            .find(|f| f.registered().any(|p| target.starts_with(p)))
     }
 
     /// The first folder that cannot be read: while one cannot, its child

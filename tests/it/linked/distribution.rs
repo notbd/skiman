@@ -271,6 +271,8 @@ fn a_top_level_skill_md_that_cannot_be_probed_freezes_only_the_single_skill_shap
         let line = format!("linked skill {id} of `{id}` is not checked");
         assert!(stderr.contains(&line), "{line}\n{stderr}");
     }
+    // The top-level `SKILL.md` is not also read as an entry of the folder.
+    assert_eq!(stderr.matches("is not checked").count(), 2, "{stderr}");
     let linked = sandbox.canon().join("linked");
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);

@@ -70,7 +70,8 @@ pub fn read(
     names.sort();
     listings.insert(dir.to_owned(), listed);
     for name in names {
-        if name.as_encoded_bytes().starts_with(b".") {
+        // The folder's own `SKILL.md` was probed above; it is no entry.
+        if name.as_encoded_bytes().starts_with(b".") || name == "SKILL.md" {
             continue;
         }
         let entry = dir.join(&name);

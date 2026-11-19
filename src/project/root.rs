@@ -32,6 +32,12 @@ pub struct Problem {
     pub absent: bool,
 }
 
+/// Whether `path` has the form `skiman.toml` requires of a project root's
+/// or a linked folder's `path`: absolute or starting with `~/`.
+pub fn is_path_form(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with("~/")
+}
+
 /// `written` (absolute or `~/...`) as an absolute path, lexically normalised;
 /// `None` for anything else.
 pub fn expand(home: &Path, written: &str) -> Option<PathBuf> {

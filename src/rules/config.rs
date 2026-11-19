@@ -8,6 +8,8 @@ use toml_edit::{Document, Item, TableLike};
 
 use super::secrets::AllowEntry;
 use super::{Scope, Violation, rule};
+use crate::manifest::{LinkedProblem, linked_problems};
+use crate::project::root::is_path_form;
 use crate::tree::Tree;
 
 pub const MANIFEST: &str = "skiman.toml";
@@ -467,15 +469,11 @@ impl Records {
                     ),
                 ));
             }
-            let path: fn(&Item) -> bool = |i| {
-                i.as_str()
-                    .is_some_and(|p| p.starts_with("~/") || p.starts_with('/'))
-            };
             section.value(
                 "path",
                 true,
                 "a string: an absolute path or one starting with `~/`",
-                path,
+                |i| i.as_str().is_some_and(is_path_form),
                 out,
             );
             section.value("exclude", false, "an array of strings", is_strings, out);
@@ -503,9 +501,8 @@ impl Records {
         }
     }
 
-    /// The `[linked.<id>]` tables (ADR 0010): each a table with exactly the
-    /// key `path`, absolute or starting with `~/`; the id follows the skill
-    /// name rule and is not a reserved name. Both modes check them.
+    /// The `[linked.<id>]` tables (ADR 0010), as [`linked_problems`]
+    /// defines a well-formed one. Both modes check them.
     fn check_linked(
         &self,
         linked: &dyn TableLike,
@@ -515,26 +512,18 @@ impl Records {
         let m = &self.manifest;
         for (id, item) in linked.iter() {
             let line = m.key_line(linked, id, line);
-            let Some(table) = item.as_table_like() else {
-                out.insert(m.violation(
-                    line,
-                    rule::TOML_VALUE,
-                    format!("[linked.{id}] must be a table"),
-                ));
-                continue;
-            };
-            if let Some(why) = crate::linked::invalid_id(id) {
-                out.insert(m.violation(line, rule::TOML_VALUE, why));
+            for problem in linked_problems(id, item) {
+                let (rule, key) = match &problem {
+                    LinkedProblem::UnknownKey(key) => (rule::UNKNOWN_KEY, Some(key.as_str())),
+                    LinkedProblem::BadPath => (rule::TOML_VALUE, Some("path")),
+                    _ => (rule::TOML_VALUE, None),
+                };
+                let line = match (item.as_table_like(), key) {
+                    (Some(table), Some(key)) => m.key_line(table, key, line),
+                    _ => line,
+                };
+                out.insert(m.violation(line, rule, problem.message(id)));
             }
-            let section = m.section(table, format!("[linked.{id}]"), line);
-            section.unknown_keys(&["path"], out);
-            section.value(
-                "path",
-                true,
-                "a string: an absolute path or one starting with `~/`",
-                |i| i.as_str().is_some_and(crate::linked::is_path_form),
-                out,
-            );
         }
     }
 

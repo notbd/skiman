@@ -582,8 +582,3 @@ pub fn invalid_id(id: &str) -> Option<String> {
         None
     }
 }
-
-/// Whether `path` has the form of a registered path: absolute or starting with `~/`.
-pub fn is_path_form(path: &str) -> bool {
-    path.starts_with('/') || path.starts_with("~/")
-}

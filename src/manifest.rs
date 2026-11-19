@@ -7,6 +7,7 @@ use toml_edit::{DocumentMut, Item, Table, Value, value};
 
 use crate::canon::Canon;
 use crate::failure::Failure;
+use crate::project::root::is_path_form;
 
 #[derive(Debug, Clone)]
 pub struct Manifest {
@@ -201,28 +202,76 @@ impl Manifest {
     }
 }
 
-/// The `path` of a well-formed `[linked.<id>]` table, or what is wrong with it.
+/// The `path` of a well-formed `[linked.<id>]` table, or its first problem.
 fn linked_path(id: &str, item: &Item) -> Result<String, Malformed> {
-    let table = item.as_table_like();
-    let path = table
+    let path = item
+        .as_table_like()
         .and_then(|t| t.get("path"))
         .and_then(Item::as_str)
-        .filter(|p| crate::linked::is_path_form(p))
+        .filter(|p| is_path_form(p))
         .map(str::to_owned);
-    let why = match table {
-        None => format!("[linked.{id}] is not a table"),
-        Some(_) if let Some(why) = crate::linked::invalid_id(id) => why,
-        Some(t) if let Some((key, _)) = t.iter().find(|(key, _)| *key != "path") => {
-            format!("[linked.{id}] has the unknown key `{key}`")
+    match linked_problems(id, item).first() {
+        None => Ok(path.expect("a well-formed table has a usable path")),
+        Some(problem) => Err(Malformed {
+            why: problem.message(id),
+            path,
+        }),
+    }
+}
+
+/// What makes a `[linked.<id>]` table not well formed (ADR 0010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkedProblem {
+    NotATable,
+    /// The id breaks the skill-name rule or is reserved: why.
+    Id(String),
+    UnknownKey(String),
+    NoPath,
+    /// `path` is not a string of the path form.
+    BadPath,
+}
+
+impl LinkedProblem {
+    pub fn message(&self, id: &str) -> String {
+        const PATH: &str = "a string: an absolute path or one starting with `~/`";
+        match self {
+            LinkedProblem::NotATable => format!("[linked.{id}] must be a table"),
+            LinkedProblem::Id(why) => why.clone(),
+            LinkedProblem::UnknownKey(key) => {
+                format!("unknown key `{key}` in [linked.{id}] (allowed: path)")
+            }
+            LinkedProblem::NoPath => format!("[linked.{id}] has no `path` ({PATH})"),
+            LinkedProblem::BadPath => format!("`path` in [linked.{id}] must be {PATH}"),
         }
-        Some(_) => match path {
-            Some(path) => return Ok(path),
-            None => format!(
-                "`path` in [linked.{id}] must be a string: an absolute path or one starting with `~/`"
-            ),
-        },
+    }
+}
+
+/// Every problem of the `[linked.<id>]` table `item`: `check` reports each,
+/// sync the first. A table holding exactly the key `path`, a string of the
+/// path form, under an id that follows the skill-name rule and is not
+/// reserved is well formed.
+pub fn linked_problems(id: &str, item: &Item) -> Vec<LinkedProblem> {
+    let Some(table) = item.as_table_like() else {
+        return vec![LinkedProblem::NotATable];
     };
-    Err(Malformed { why, path })
+    let mut problems: Vec<LinkedProblem> = crate::linked::invalid_id(id)
+        .map(LinkedProblem::Id)
+        .into_iter()
+        .collect();
+    problems.extend(
+        table
+            .iter()
+            .filter(|(key, _)| *key != "path")
+            .map(|(key, _)| LinkedProblem::UnknownKey(key.to_owned())),
+    );
+    match table.get("path") {
+        None => problems.push(LinkedProblem::NoPath),
+        Some(path) if !path.as_str().is_some_and(is_path_form) => {
+            problems.push(LinkedProblem::BadPath)
+        }
+        Some(_) => {}
+    }
+    problems
 }
 
 /// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.

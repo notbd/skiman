@@ -400,14 +400,16 @@ pub fn reconcile(
             reconciled.push(through.clone());
             continue;
         }
-        // The tool directory itself may be missing; its parent chain is never replaced.
-        if let Err(e) = std::fs::create_dir_all(dir) {
+        // Created and written where the guard checked, never through `dir`
+        // again: a link on its way may change meanwhile. The tool directory
+        // itself may be missing; its parent chain is never replaced.
+        if let Err(e) = std::fs::create_dir_all(through) {
             report
                 .errors
                 .push(format!("cannot create {}: {e}", dir.display()));
             continue;
         }
-        let real = match dir.canonicalize() {
+        let real = match through.canonicalize() {
             Ok(real) => real,
             Err(e) => {
                 report
@@ -416,6 +418,11 @@ pub fn reconcile(
                 continue;
             }
         };
+        // A folder created as a link meanwhile is checked where it leads.
+        if real != *through && guarded(linked, dir, &real, &mut report) {
+            reconciled.push(real);
+            continue;
+        }
         if !reconciled.contains(&real) {
             let tool_dir = ToolDir {
                 tool,
@@ -432,7 +439,15 @@ pub fn reconcile(
     {
         let (dir, real) = (&target.path, &target.lands);
         if !reconciled.contains(real) && !guarded(linked, dir, real, &mut report) {
-            remove_owned_entries(dir, real, &ownership, &mut report);
+            remove_owned_entries(
+                &ToolDir {
+                    tool: target.tool,
+                    dir,
+                    real,
+                },
+                &ownership,
+                &mut report,
+            );
         }
         reconciled.push(real.clone());
     }
@@ -544,6 +559,11 @@ fn reconcile_instruction_locations(
             }
         };
         if reconciled.contains(&location) {
+            continue;
+        }
+        // Resolved again here, so checked again where it is written.
+        if location != *lands && guarded(linked, &path, &location, report) {
+            refused.push(location);
             continue;
         }
         let refused = |path: PathBuf| Item {
@@ -681,7 +701,7 @@ pub fn kept_names(
         let Ok(real) = dir.canonicalize() else {
             continue;
         };
-        for (name, meta) in read_entries(&dir, &mut Report::default()) {
+        for (name, meta) in read_entries(&real, &dir, &mut Report::default()) {
             if let Entry::Owned(target) = ownership.classify(&real, &name, &meta)
                 && let Some(holder) = linked.keeper(&target)
             {
@@ -783,8 +803,13 @@ fn not_distributable(name: &str, dir: &Path) -> Option<&'static str> {
     }
 }
 
-/// The entries of `dir` with their own metadata (links not followed), sorted by name.
-fn read_entries(dir: &Path, report: &mut Report) -> Vec<(OsString, std::fs::Metadata)> {
+/// The entries of `dir` with their own metadata (links not followed),
+/// sorted by name; a failure is reported as reading `shown`.
+fn read_entries(
+    dir: &Path,
+    shown: &Path,
+    report: &mut Report,
+) -> Vec<(OsString, std::fs::Metadata)> {
     let read = || -> std::io::Result<Vec<(OsString, std::fs::Metadata)>> {
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(dir)? {
@@ -797,12 +822,14 @@ fn read_entries(dir: &Path, report: &mut Report) -> Vec<(OsString, std::fs::Meta
     read().unwrap_or_else(|e| {
         report
             .errors
-            .push(format!("cannot read {}: {e}", dir.display()));
+            .push(format!("cannot read {}: {e}", shown.display()));
         Vec::new()
     })
 }
 
-/// A tool directory of `tool`: `dir` as spelled, `real` its realpath.
+/// A tool directory of `tool`: `dir` as spelled, which messages show, and
+/// `real` its realpath as the write guard checked it, which every read
+/// and write goes through.
 struct ToolDir<'a> {
     tool: &'a AgentTool,
     dir: &'a Path,
@@ -826,14 +853,14 @@ fn reconcile_tool_dir(
         .map(|w| (w.name.as_str(), w.target.as_path()))
         .collect();
     let scope = real.display().to_string();
-    let occupied = |name: &str, path: PathBuf| Item {
+    let occupied = |name: &str, at: &Path, path: PathBuf| Item {
         scope: scope.clone(),
-        kind: occupied(name, &path, by_name[name]),
+        kind: occupied(name, at, by_name[name]),
         path,
     };
     let mut handled = BTreeSet::new();
-    for (name, meta) in read_entries(dir, report) {
-        let path = dir.join(&name);
+    for (name, meta) in read_entries(real, dir, report) {
+        let (at, path) = (real.join(&name), dir.join(&name));
         let want = name.to_str().and_then(|n| by_name.get_key_value(n));
         let entry = ownership.classify(real, &name, &meta);
         if let Entry::Owned(current) = &entry
@@ -848,24 +875,24 @@ fn reconcile_tool_dir(
             (Entry::Owned(current), Some((name, target))) => {
                 handled.insert(*name);
                 if current != *target {
-                    match fsutil::relink(&path, real, &current, Some(target)) {
+                    match fsutil::relink(&at, real, &current, Some(target)) {
                         Ok(true) => report.changes.push((Change::Retargeted, path)),
-                        Ok(false) => report.items.push(occupied(name, path)),
+                        Ok(false) => report.items.push(occupied(name, &at, path)),
                         Err(e) => report
                             .errors
                             .push(format!("cannot retarget {}: {e}", path.display())),
                     }
                 }
             }
-            (Entry::Owned(current), None) => remove(&path, real, &current, path.clone(), report),
+            (Entry::Owned(current), None) => remove(&at, real, &current, path, report),
             (Entry::Foreign, None) => report.items.push(Item {
                 scope: scope.clone(),
-                kind: foreign(&name, tool.id, &path, &meta, repo, linked),
+                kind: foreign(&name, tool.id, &at, &meta, repo, linked),
                 path,
             }),
             (_, Some((name, _))) => {
                 handled.insert(*name);
-                report.items.push(occupied(name, path));
+                report.items.push(occupied(name, &at, path));
             }
             (Entry::ManagedElsewhere | Entry::NotASkill | Entry::Moved(_), None) => {}
         }
@@ -874,16 +901,16 @@ fn reconcile_tool_dir(
         if handled.contains(name.as_str()) {
             continue;
         }
-        let path = dir.join(name);
-        match std::fs::symlink_metadata(&path) {
+        let (at, path) = (real.join(name), dir.join(name));
+        match std::fs::symlink_metadata(&at) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 test_hook::at("sync", &format!("link:{}", path.display()));
                 // `symlink` never replaces: an entry that appeared since the
                 // check is occupied like one the check found.
-                match std::os::unix::fs::symlink(target, &path) {
+                match std::os::unix::fs::symlink(target, &at) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        report.items.push(occupied(name, path))
+                        report.items.push(occupied(name, &at, path))
                     }
                     Err(e) => report
                         .errors
@@ -894,19 +921,19 @@ fn reconcile_tool_dir(
                 .errors
                 .push(format!("cannot inspect {}: {e}", path.display())),
             // Another spelling of the name (APFS is case-insensitive) holds it.
-            Ok(_) => report.items.push(occupied(name, path)),
+            Ok(_) => report.items.push(occupied(name, &at, path)),
         }
     }
 }
 
 /// Removes every owned entry of a tool directory nothing is distributed to.
-fn remove_owned_entries(dir: &Path, real: &Path, ownership: &Ownership, report: &mut Report) {
-    for (name, meta) in read_entries(dir, report) {
+fn remove_owned_entries(tool_dir: &ToolDir, ownership: &Ownership, report: &mut Report) {
+    let ToolDir { dir, real, .. } = *tool_dir;
+    for (name, meta) in read_entries(real, dir, report) {
         if let (true, Entry::Owned(current)) =
             (meta.is_symlink(), ownership.classify(real, &name, &meta))
         {
-            let path = dir.join(name);
-            remove(&path, real, &current, path.clone(), report);
+            remove(&real.join(&name), real, &current, dir.join(name), report);
         }
     }
 }

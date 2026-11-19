@@ -384,6 +384,90 @@ fn a_tool_directory_that_resolves_into_a_linked_folder_is_skipped() {
     );
 }
 
+/// `sync`, running `run` right before it links the entry at `at`.
+fn sync_with_hook_at(sandbox: &Sandbox, at: &Path, run: &str) -> (i32, String) {
+    let output = sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", format!("sync:link:{}", at.display()))
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// A tool directory that is a link to a plain folder, re-pointed into a
+/// registered folder while sync links in it: every link lands in the
+/// folder sync checked, and the registered folder stays byte for byte.
+#[test]
+fn a_tool_directory_relinked_while_sync_links_is_written_where_it_was_checked() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let plain = sandbox.home().join("plain");
+    std::fs::rename(&claude, &plain).unwrap();
+    symlink(&plain, &claude).unwrap();
+    for name in ["notes", "zebra"] {
+        write(
+            sandbox.canon().join("skills").join(name).join("SKILL.md"),
+            skill_md(name),
+        );
+    }
+    let before = contents(&[&company]);
+    let run = format!(
+        "rm '{0}' && ln -s '{1}' '{0}'",
+        claude.display(),
+        company.display()
+    );
+
+    let (code, stderr) = sync_with_hook_at(&sandbox, &claude.join("notes"), &run);
+
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(contents(&[&company]), before);
+    for name in ["alpha", "notes", "zebra"] {
+        assert!(plain.join(name).join("SKILL.md").is_file(), "{name}");
+    }
+}
+
+/// The instruction location's parent re-pointed into a registered folder
+/// after sync checked it: the closing instruction sync re-checks where it
+/// writes and refuses (exit 3); the registered folder stays byte for byte.
+#[test]
+fn an_instruction_location_relinked_during_sync_is_guarded_where_it_is_written() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    write(
+        sandbox.canon().join("skills/notes/SKILL.md"),
+        skill_md("notes"),
+    );
+    let codex = sandbox.presence_dir(Tool::Codex);
+    let before = contents(&[&company]);
+    let run = format!(
+        "mv '{0}' '{0}-old' && ln -s '{1}' '{0}'",
+        codex.display(),
+        company.display()
+    );
+    let at = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+
+    let (code, stderr) = sync_with_hook_at(&sandbox, &at, &run);
+
+    assert_eq!(code, 3, "{stderr}");
+    let line = format!(
+        "resolves to {}, inside linked folder `company`",
+        company.join("AGENTS.md").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(contents(&[&company]), before);
+}
+
 /// A presence directory that holds skiman's instruction link and its
 /// session-start hook, turned into a link into a registered folder with
 /// its tool disabled: neither sync's cleanup nor `init --session-hooks

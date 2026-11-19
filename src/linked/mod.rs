@@ -408,33 +408,28 @@ pub enum Holder {
     Kept(String),
 }
 
-impl Holder {
-    /// The holder, as `list` and `overview` show it.
-    pub fn holds_the_name(&self) -> String {
+/// What holds the name, as sync, `check`, `doctor`, `list` and `overview` say it.
+impl std::fmt::Display for Holder {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Holder::Canon(path) | Holder::Group(path) => format!("{path} holds the name"),
-            Holder::Linked(id) => format!("linked folder `{id}` holds the name"),
-            Holder::Kept(id) => {
-                format!("linked folder `{id}`, which cannot be read now, keeps the name")
-            }
+            Holder::Canon(path) => write!(f, "the skill folder {path} uses the name"),
+            Holder::Group(path) => write!(f, "the group folder {path} uses the name"),
+            Holder::Linked(id) => write!(f, "linked folder `{id}` sorts first and uses the name"),
+            Holder::Kept(id) => write!(
+                f,
+                "linked folder `{id}`, which cannot be read now, keeps the name"
+            ),
         }
     }
 }
 
 impl Collision {
     pub fn message(&self) -> String {
-        let holder = match &self.holder {
-            Holder::Canon(path) => format!("the skill folder {path} uses the name"),
-            Holder::Group(path) => format!("the group folder {path} uses the name"),
-            Holder::Linked(id) => format!("linked folder `{id}` sorts first and uses the name"),
-            Holder::Kept(id) => {
-                format!("linked folder `{id}`, which cannot be read now, keeps the name")
-            }
-        };
         format!(
-            "linked skill {} in {} is not distributed: {holder}",
+            "linked skill {} in {} is not distributed: {}",
             self.name,
-            self.dir.display()
+            self.dir.display(),
+            self.holder
         )
     }
 }

@@ -152,7 +152,7 @@ fn overview() -> Result<Exit, Failure> {
                     _ => "-".to_owned(),
                 };
                 let distributed = match lost {
-                    Some(holder) => format!("no: {}", holder.holds_the_name()),
+                    Some(holder) => format!("no: {holder}"),
                     None => yes_no(true),
                 };
                 [name, summary, distributed]

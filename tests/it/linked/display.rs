@@ -83,7 +83,7 @@ fn list_shows_each_linked_skill_with_its_folder_and_state() {
                 "-",
                 "-",
                 "-",
-                "no: skills/office/pdf holds the name",
+                "no: the skill folder skills/office/pdf uses the name",
             ]),
             row([
                 "-",
@@ -110,7 +110,7 @@ fn list_shows_each_linked_skill_with_its_folder_and_state() {
                 "-",
                 "-",
                 "-",
-                "no: linked folder `company` holds the name",
+                "no: linked folder `company` sorts first and uses the name",
             ]),
             row(["beta", "linked", "zeta (~/work/zeta)", "-", "-", "-", "yes"]),
         ]
@@ -172,7 +172,7 @@ fn overview_shows_each_linked_folder_as_a_section_with_summaries_or_stand_ins() 
 | Skill | Summary | Distributed |
 | --- | --- | --- |
 | alpha | Alpha for people | yes |
-| pdf | Forms \\| for people | no: skills/office/pdf holds the name |
+| pdf | Forms \\| for people | no: the skill folder skills/office/pdf uses the name |
 
 ## Linked folder gone: `~/work/gone`
 
@@ -190,7 +190,7 @@ Not on this machine.
 
 | Skill | Summary | Distributed |
 | --- | --- | --- |
-| alpha | *Does alpha things* | no: linked folder `company` holds the name |
+| alpha | *Does alpha things* | no: linked folder `company` sorts first and uses the name |
 | beta | *处理中文文档。* | yes |
 | long | *{}…* | yes |
 

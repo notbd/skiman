@@ -89,7 +89,7 @@ fn list() -> Result<Exit, Failure> {
             Shown::Missing => rows.push(row("-".to_owned(), "not on this machine".to_owned())),
             Shown::Skills(skills) => rows.extend(skills.into_iter().map(|(name, lost)| {
                 let state = match lost {
-                    Some(holder) => format!("no: {}", holder.holds_the_name()),
+                    Some(holder) => format!("no: {holder}"),
                     None => yes_no(true),
                 };
                 row(name, state)

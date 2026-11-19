@@ -201,3 +201,53 @@ Not on this machine.
     );
     assert_eq!(stdout[start..end], expected, "{stdout}");
 }
+
+/// While a single skill's top-level `SKILL.md` cannot be probed and the
+/// tool directories keep its link, `list`, `overview` and `doctor` all
+/// show it as the one skill it is, still distributed, and none shows its
+/// sub-folders (`kid`, and `solo/solo`, whose summary is not the skill's).
+#[test]
+fn a_single_skill_that_cannot_be_probed_shows_as_one_skill_everywhere() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let locked = super::unprobed_single(&sandbox);
+    let solo = sandbox.home().join("work/solo");
+    write(
+        solo.join("solo/SKILL.md"),
+        skill_md_with("solo", "Does solo things", Some("Not the skill")),
+    );
+    let chmod = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let list = sandbox.skiman().arg("list").output().unwrap();
+    let overview = sandbox.skiman().arg("overview").output().unwrap();
+    let doctor = sandbox.skiman().arg("doctor").output().unwrap();
+    chmod(0o755).unwrap();
+
+    let linked: Vec<Vec<String>> = cells(&list.stdout, &sandbox)
+        .into_iter()
+        .filter(|row| row.get(1).is_some_and(|kind| kind == "linked"))
+        .collect();
+    assert_eq!(
+        linked,
+        [["solo", "linked", "solo (~/work/solo)", "-", "-", "-", "yes"].map(str::to_owned)]
+    );
+    let overview = String::from_utf8(overview.stdout).unwrap();
+    assert!(
+        overview.contains("## Linked folder solo (1): `~/work/solo`\n"),
+        "{overview}"
+    );
+    assert!(overview.contains("| solo | - | yes |"), "{overview}");
+    assert!(!overview.contains("Not the skill"), "{overview}");
+    let doctor = String::from_utf8(doctor.stdout).unwrap();
+    assert!(
+        doctor.contains(&format!(
+            "linked folder solo: {} (one skill)",
+            solo.display()
+        )),
+        "{doctor}"
+    );
+    for out in [&overview, &doctor] {
+        assert!(!out.contains("kid"), "{out}");
+    }
+}

@@ -138,10 +138,15 @@ fn overview() -> Result<Exit, Failure> {
             continue;
         }
         let mut stand_in = false;
+        let single = Linked::is_single(folder, &kept);
         let rows: Vec<[String; 3]> = skills
             .into_iter()
             .map(|(name, lost)| {
-                let about = std::fs::read_to_string(folder.skill_dir(&name).join("SKILL.md"))
+                let dir = match &folder.path {
+                    Some(path) if single => path.clone(),
+                    _ => folder.skill_dir(&name),
+                };
+                let about = std::fs::read_to_string(dir.join("SKILL.md"))
                     .ok()
                     .and_then(|text| About::read(&text))
                     .unwrap_or_default();

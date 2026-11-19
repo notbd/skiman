@@ -431,7 +431,8 @@ impl Linked {
     /// "Display"): one not on this machine, or the linked skills of one that
     /// was read, each with the skill that holds its name when it lost a
     /// collision ([`Linked::names`] with every folder taking part and the
-    /// names `kept` in the tool directories). A folder that breaks a rule
+    /// names `kept` in the tool directories); a folder that is one skill
+    /// only through `kept` ([`Linked::is_single`]) shows that skill. A folder that breaks a rule
     /// or cannot be read is left out: sync, `check` and `doctor` report it.
     pub fn shown(&self, layout: &Layout, kept: &BTreeMap<String, Holder>) -> Vec<(&Folder, Shown)> {
         let (_, collisions) = self.names(layout, kept, |_| true);
@@ -440,6 +441,12 @@ impl Linked {
             .filter_map(|folder| {
                 let shown = match &folder.state {
                     State::Missing => Shown::Missing,
+                    // One skill only through its kept link, which holds the name.
+                    State::Read(contents)
+                        if !contents.single && Linked::is_single(folder, kept) =>
+                    {
+                        Shown::Skills(vec![(folder.id.clone(), None)])
+                    }
                     State::Read(_) => Shown::Skills(
                         Linked::skill_names(folder, kept)
                             .into_iter()

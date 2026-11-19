@@ -405,8 +405,8 @@ impl Linked {
     /// command reads them: the id for a folder that is one skill, none for
     /// a folder that was not read, and none while [`Linked::is_single`]
     /// holds only through `kept` (it stays one skill until its top-level
-    /// `SKILL.md` can be probed). Its sub-folders' targets stay protected
-    /// all the same.
+    /// `SKILL.md` can be probed; [`Linked::shown`] shows it as that one
+    /// skill). Its sub-folders' targets stay protected all the same.
     pub fn skill_names(folder: &Folder, kept: &BTreeMap<String, Holder>) -> Vec<String> {
         match &folder.state {
             State::Read(contents) if contents.single => vec![folder.id.clone()],
@@ -434,8 +434,9 @@ impl Linked {
     /// was read, each with the skill that holds its name when it lost a
     /// collision ([`Linked::names`] with every folder taking part and the
     /// names `kept` in the tool directories); a folder that is one skill
-    /// only through `kept` ([`Linked::is_single`]) shows that skill. A folder that breaks a rule
-    /// or cannot be read is left out: sync, `check` and `doctor` report it.
+    /// only through `kept` ([`Linked::is_single`]) shows that skill. A
+    /// folder that breaks a rule or cannot be read is left out: sync,
+    /// `check` and `doctor` report it.
     pub fn shown(&self, layout: &Layout, kept: &BTreeMap<String, Holder>) -> Vec<(&Folder, Shown)> {
         let (_, collisions) = self.names(layout, kept, |_| true);
         self.folders

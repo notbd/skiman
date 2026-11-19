@@ -98,12 +98,20 @@ fn linked_warnings(paths: &Paths, repo: &Canon) -> Result<Vec<String>, Failure> 
 }
 
 /// While `[linked]` tables exist in a canon that is a git repo: that git
-/// does not ignore `linked/`, and where to add the line.
+/// does not ignore `linked/`, and where to add the line, or that git
+/// cannot tell, and why.
 fn linked_not_ignored(repo: &Canon) -> Option<String> {
-    if Manifest::load(repo).ok()?.linked().is_empty()
-        || gitignore::check_ignore(repo.root()) != Some(false)
-    {
+    if Manifest::load(repo).ok()?.linked().is_empty() {
         return None;
+    }
+    match gitignore::check_ignore(repo.root()) {
+        gitignore::Ignored::No => {}
+        gitignore::Ignored::Failed(why) => {
+            return Some(format!(
+                "git cannot tell whether `linked/` is ignored ({why}), so the links in it could be committed"
+            ));
+        }
+        gitignore::Ignored::Yes | gitignore::Ignored::NotARepo => return None,
     }
     let path = repo.root().join(".gitignore");
     let fix = match std::fs::symlink_metadata(&path) {

@@ -126,3 +126,28 @@ fn check_warns_while_linked_is_not_ignored() {
     std::fs::write(repo.join(".gitignore"), ".skiman/\n/linked/\n").unwrap();
     sandbox.skiman().arg("check").assert().code(0).stderr_eq("");
 }
+
+/// When git cannot tell whether `linked/` is ignored (`linked` is a link,
+/// so the path lies beyond it), `check` warns with git's own message; the
+/// exit status does not change.
+#[test]
+fn check_warns_when_git_cannot_tell_whether_linked_is_ignored() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.canon();
+    std::fs::write(repo.join(".gitignore"), ".skiman/\n").unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, repo.join("linked")).unwrap();
+
+    let output = sandbox.skiman().arg("check").output().unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.starts_with("warning: git cannot tell whether `linked/` is ignored (")
+            && stderr.contains("beyond a symbolic link"),
+        "{stderr}"
+    );
+}

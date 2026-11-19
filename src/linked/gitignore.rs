@@ -3,6 +3,7 @@
 //! the canon's history.
 
 use std::path::Path;
+use std::process::Stdio;
 
 use crate::failure::Failure;
 use crate::fsutil::{rewrite_atomic, write_atomic};
@@ -42,9 +43,9 @@ pub fn ignore(root: &Path) -> Result<Outcome, Failure> {
         Err(e) => return Err(cannot_read(e)),
     };
     let present = match check_ignore(root) {
-        Some(true) => true,
-        Some(false) => text.lines().rev().find(|l| !l.trim().is_empty()) == Some(LINE),
-        None => text.lines().any(|l| l == LINE),
+        Ignored::Yes => true,
+        Ignored::No => text.lines().rev().find(|l| !l.trim().is_empty()) == Some(LINE),
+        Ignored::NotARepo | Ignored::Failed(_) => text.lines().any(|l| l == LINE),
     };
     if present {
         return Ok(Outcome::Present);
@@ -63,11 +64,21 @@ pub fn ignore(root: &Path) -> Result<Outcome, Failure> {
     Ok(Outcome::Added)
 }
 
+/// What git says about `linked/` in the canon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ignored {
+    Yes,
+    No,
+    /// The canon is not a git repo, or git cannot run: nothing to ask.
+    NotARepo,
+    /// The canon is a git repo but git cannot tell; its message.
+    Failed(String),
+}
+
 /// Whether git ignores `linked/` in the canon at `root` by the canon's own
-/// ignore files (the user's global excludes file left out); `None` when
-/// the canon is not a git repo or git cannot tell.
-pub fn check_ignore(root: &Path) -> Option<bool> {
-    let status = git::query_command(root)
+/// ignore files (the user's global excludes file left out).
+pub fn check_ignore(root: &Path) -> Ignored {
+    let Ok(output) = git::query_command(root)
         .args([
             "-c",
             "core.excludesFile=/dev/null",
@@ -76,13 +87,26 @@ pub fn check_ignore(root: &Path) -> Option<bool> {
             "--no-index",
             "linked/",
         ])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .ok()?;
-    match status.code() {
-        Some(0) => Some(true),
-        Some(1) => Some(false),
-        _ => None,
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .output()
+    else {
+        return Ignored::NotARepo;
+    };
+    match output.status.code() {
+        Some(0) => Ignored::Yes,
+        Some(1) => Ignored::No,
+        _ if !is_repo(root) => Ignored::NotARepo,
+        _ => Ignored::Failed(String::from_utf8_lossy(&output.stderr).trim().to_owned()),
     }
+}
+
+/// Whether `root` is in a git repo.
+fn is_repo(root: &Path) -> bool {
+    git::query_command(root)
+        .args(["rev-parse", "--git-dir"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }

@@ -97,6 +97,7 @@ fn linked_warnings(paths: &Paths, repo: &Canon) -> Result<Vec<String>, Failure> 
     let linked = Linked::read(paths.home(), repo, &manifest);
     let kept = sync::kept_names(paths, repo, &manifest, &linked);
     Ok(linked::check::warnings(
+        repo.root(),
         &linked,
         &manifest,
         &repo.layout()?,

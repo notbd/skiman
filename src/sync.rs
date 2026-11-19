@@ -17,7 +17,7 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::layout::Layout;
+use crate::layout::{Layout, Placed};
 use crate::linked::{self, Holder, Linked, State};
 use crate::manifest::Manifest;
 use crate::names;
@@ -743,18 +743,14 @@ pub fn wanted_entries(
     let entries = manifest.skills();
     let scope = repo.skills_dir().display().to_string();
     let layout = Layout::read(&WorkingTree::new(repo.root()))?;
-    let withheld = linked::withheld(&layout, manifest, kept);
+    let withheld = linked::withheld(repo.root(), &layout, manifest, kept);
     let mut wanted = Vec::new();
     for placed in layout.skills() {
         let (name, dir) = (&placed.name, repo.root().join(placed.path()));
         if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
             continue;
         }
-        let reason = match layout.all_of(name).len() {
-            1 => not_distributable(name, &dir),
-            _ => Some("its name is in more than one group folder"),
-        };
-        match reason {
+        match invalid_skill_folder(&layout, placed, &dir) {
             Some(reason) => report.items.push(Item {
                 scope: scope.clone(),
                 path: dir,
@@ -802,11 +798,15 @@ pub fn wanted_entries(
     Ok(wanted)
 }
 
-/// Why the skill folder `dir` (`skills/<name>` or `skills/<group>/<name>`) is not distributable; a
-/// distributable one's name passes the regex, is not reserved, and its
-/// folder holds a `SKILL.md`.
-fn not_distributable(name: &str, dir: &Path) -> Option<&'static str> {
-    if names::is_reserved(name) {
+/// Why the skill folder `placed` of `layout`, at `dir`, is an invalid
+/// skill folder that sync does not distribute; `None` when its name passes
+/// the regex, is not reserved and is in one place only, and its folder
+/// holds a `SKILL.md`. Sync, `check` and `doctor` all decide by it.
+pub fn invalid_skill_folder(layout: &Layout, placed: &Placed, dir: &Path) -> Option<&'static str> {
+    let name = &placed.name;
+    if layout.all_of(name).len() > 1 {
+        Some("its name is in more than one group folder")
+    } else if names::is_reserved(name) {
         Some("its name is reserved")
     } else if !names::is_valid(name) {
         Some("its name is not a valid skill name")

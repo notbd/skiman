@@ -5,6 +5,7 @@
 //! not hold.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use super::summary::About;
 use super::{Holder, Linked};
@@ -17,10 +18,11 @@ use crate::sync::ItemKind;
 const UNPARSABLE: &str = "; Antigravity drops a skill whose frontmatter does not parse";
 
 /// Every warning, in id and then name order (what cannot be read first),
-/// then the collisions and the skill folders a kept link withholds (`kept`
-/// from [`crate::sync::kept_names`]), then the
+/// then the collisions and the skill folders of the canon at `root` a kept
+/// link withholds (`kept` from [`crate::sync::kept_names`]), then the
 /// `[skills.<name>]` tables.
 pub fn warnings(
+    root: &Path,
     linked: &Linked,
     manifest: &Manifest,
     layout: &Layout,
@@ -86,7 +88,7 @@ pub fn warnings(
     let (_, collisions) = linked.names(layout, kept, |_| true);
     out.extend(collisions.iter().map(|c| c.message()));
     out.extend(
-        super::withheld(layout, manifest, kept)
+        super::withheld(root, layout, manifest, kept)
             .iter()
             .map(|w| w.message()),
     );

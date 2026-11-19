@@ -238,6 +238,59 @@ fn a_disabled_canon_skill_under_a_kept_name_is_not_reported_as_withheld() {
     }
 }
 
+/// A canon skill folder under a kept name that is not distributable (no
+/// `SKILL.md`, or its name in two group folders) is an invalid skill
+/// folder, never a withheld one: sync and `check` report it as invalid,
+/// and none of sync, `check` and `doctor` reports it as withheld.
+#[test]
+fn an_invalid_canon_skill_folder_under_a_kept_name_is_not_reported_as_withheld() {
+    let sandbox = company();
+    let company = sandbox.home().join("work/company");
+    write(sandbox.canon().join("skills/alpha/notes.md"), "notes\n");
+    for group in ["one", "two"] {
+        write(
+            sandbox
+                .canon()
+                .join("skills")
+                .join(group)
+                .join("beta/SKILL.md"),
+            skill_md("beta"),
+        );
+    }
+    chmod(&company, 0o000);
+
+    let said = ["sync", "check", "doctor"].map(|command| {
+        let output = sandbox.skiman().arg(command).output().unwrap();
+        String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap()
+    });
+    chmod(&company, 0o755);
+
+    for out in &said {
+        assert!(!out.contains("is not distributed: linked folder"), "{out}");
+    }
+    let canon = sandbox.canon();
+    let invalid = |path: &str, why: &str| {
+        format!(
+            "skill folder {} is not distributed: {why}",
+            canon.join(path).display()
+        )
+    };
+    for line in [
+        invalid("skills/alpha", "it holds no SKILL.md"),
+        invalid(
+            "skills/one/beta",
+            "its name is in more than one group folder",
+        ),
+    ] {
+        assert!(said[0].contains(&line), "{line}\n{}", said[0]);
+    }
+    assert!(
+        said[1].contains("skills/alpha: skill-md: no SKILL.md"),
+        "{}",
+        said[1]
+    );
+}
+
 /// The same for a linked skill whose `SKILL.md` cannot be probed: its kept
 /// link holds the name against a new canon skill until it can be.
 #[test]

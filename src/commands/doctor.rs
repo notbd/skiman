@@ -226,7 +226,7 @@ fn report_linked(
     for collision in collisions {
         out!("{}", collision.message());
     }
-    for withheld in linked::withheld(&layout, manifest, kept) {
+    for withheld in linked::withheld(repo.root(), &layout, manifest, kept) {
         out!("{}", withheld.message());
     }
     for problem in linked::canon::problems(linked) {

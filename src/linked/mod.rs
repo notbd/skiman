@@ -501,10 +501,12 @@ impl Withheld {
     }
 }
 
-/// Every skill folder under `skills/` (`layout`) that is not `enabled =
-/// false` in `manifest` and whose name `kept` holds, in layout order:
+/// Every skill folder under `skills/` (`layout`) of the canon at `root`
+/// that is valid ([`crate::sync::invalid_skill_folder`]), not `enabled =
+/// false` in `manifest`, and whose name `kept` holds, in layout order:
 /// sync, `check` and `doctor` report each.
 pub fn withheld(
+    root: &Path,
     layout: &Layout,
     manifest: &Manifest,
     kept: &BTreeMap<String, Holder>,
@@ -513,6 +515,9 @@ pub fn withheld(
     layout
         .skills()
         .iter()
+        .filter(|placed| {
+            crate::sync::invalid_skill_folder(layout, placed, &root.join(placed.path())).is_none()
+        })
         .filter(|placed| entries.get(&placed.name).is_none_or(|e| e.enabled))
         .filter_map(|placed| {
             Some(Withheld {

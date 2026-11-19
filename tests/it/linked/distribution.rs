@@ -236,6 +236,7 @@ fn an_unreadable_sub_folder_keeps_its_link_and_needs_attention() {
             linked.join("alpha")
         );
         assert!(dir.join("gamma/SKILL.md").is_file());
+        assert!(dir.join("solo/SKILL.md").is_file());
     }
 }
 

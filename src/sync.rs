@@ -272,7 +272,7 @@ pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exi
 
 /// The canon `init` just switched away from.
 #[derive(Debug)]
-pub struct Previous {
+pub struct PreviousCanon {
     /// Its realpath: skiman's links into it count as owned for one sync.
     pub root: PathBuf,
     /// Its registrations, when its `skiman.toml` can be read: they guard
@@ -289,7 +289,7 @@ pub fn run_with(
     repo: &Canon,
     _lock: &CanonLock,
     output: Output,
-    previous: Option<&Previous>,
+    previous: Option<&PreviousCanon>,
     failed: &[PathBuf],
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {

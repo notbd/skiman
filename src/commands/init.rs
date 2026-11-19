@@ -80,7 +80,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let previous = config
         .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
         .filter(|previous| previous != repo.root())
-        .map(|root| sync::Previous {
+        .map(|root| sync::PreviousCanon {
             root,
             linked: current.map(|(_, linked)| linked),
         });

@@ -945,24 +945,34 @@ fn a_mirror_path_that_lost_its_item_shape_is_skipped_and_its_synced_hash_dropped
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = root(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "a\n");
     register(&sandbox, &dir);
+    adopt_all(&sandbox);
     write(mirror(&sandbox, "core/skills/x/SKILL.md"), skill_md("x"));
     write(dir.join("core/skills/x/SKILL.md"), "edited\n");
-    write(
-        synced_file(&sandbox),
-        format!(
-            "[work]\nroot = \"{}\"\n\n[work.items]\n\"core/skills/x\" = \"skill sha256:{}\"\n",
-            dir.canonicalize().unwrap().display(),
+    let recorded = read(synced_file(&sandbox));
+    assert!(recorded.contains("\"proj/AGENTS.md\""), "{recorded}");
+    let planted = recorded.replace(
+        "[work.items]\n",
+        &format!(
+            "[work.items]\n\"core/skills/x\" = \"skill sha256:{}\"\n",
             "0".repeat(64)
         ),
     );
+    assert!(planted.contains("core/skills/x"), "{recorded}");
+    std::fs::write(synced_file(&sandbox), planted).unwrap();
 
     let out = sync(&sandbox);
 
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
     assert_eq!(stdout_of(&out), "");
     assert_eq!(stderr_of(&out), "", "`check` reports the path, not sync");
-    assert!(!read(synced_file(&sandbox)).contains("core/skills/x"));
+    let synced = read(synced_file(&sandbox));
+    assert!(!synced.contains("core/skills/x"), "{synced}");
+    assert!(
+        synced.contains("\"proj/AGENTS.md\""),
+        "the root's record stays: {synced}"
+    );
     assert_eq!(
         read(mirror(&sandbox, "core/skills/x/SKILL.md")),
         skill_md("x")

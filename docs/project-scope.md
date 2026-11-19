@@ -100,7 +100,6 @@ only. Project items are not per tool, so `[tools].enabled` does not apply.
 [projects.work]
 path = "~/Work/Acme-Corp"
 exclude = ["_archive", "项目甲/草稿"]
-skill_dirs = ["acme-core/skills"]
 ```
 
 (An example: this change configures nothing on the user's machine.)
@@ -116,17 +115,11 @@ skill_dirs = ["acme-core/skills"]
   kept after a migration). An item adopted before its path was excluded
   keeps syncing; eject it to stop. An exact path given to `adopt` wins over
   `exclude`.
-- `skill_dirs` (optional): root-relative folders whose child folders holding
-  `SKILL.md` are project skill items too, for skills kept in a folder of
-  their own and linked into the tools by other means (such as company
-  skills in `acme-core/skills/`, linked by another tool). Same
-  item kind, gates and protocol; skiman never touches the tool directories
-  for them, and a tool-directory link whose realpath lies under a configured
-  `skill_dirs` folder counts as managed elsewhere, so global sync never
-  reports it as foreign. Anchor: the configured folder's parent. `check`
-  refuses an entry that is absolute, contains `..` or a tool's skill-dir
-  pattern anywhere, or lies inside another entry (a skill would have two
-  anchors).
+- `skill_dirs` is retired (ADR 0013): no command reads it, and `check`
+  reports the key as one `toml-value` violation that names
+  `skiman linked add` as the replacement. Mirror items it made have no item
+  shape any more (sync row 3); deleting `projects/<id>/<folder>` removes
+  them. A tool-directory link into such a folder is foreign like any other.
 - One function validates a root wherever it is used (`project add`, `adopt`,
   `restore`, `sync`, `doctor`; `eject` maps a path to its root lexically,
   after expanding `~`, so a root that is gone can still be ejected), because
@@ -205,7 +198,7 @@ roots.
 |---|---|---|---|
 | 1 | The skill repo is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned; a `.git` file is followed to the worktree's git dir) | skip every project item; one notice | 0 |
 | 2 | Root fails validation or its folder is absent | skip the root; one warning | 0 |
-| 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path has no item shape (a `skill_dirs` entry removed, say; shape only: a skill folder that lost its `SKILL.md` still has the shape and falls to row 5) | skip, drop its S (`check` reports the path) | 0 |
+| 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path has no item shape (one copied from a folder a retired `skill_dirs` key named, say; shape only: a skill folder that lost its `SKILL.md` still has the shape and falls to row 5) | skip, drop its S (`check` reports the path) | 0 |
 | 4 | M absent, S set, D is not a regular item of its kind | drop S | 0 |
 | 5 | M exists but is not a regular file / folder of the item's kind, or is a skill folder without `SKILL.md` | report "mirror invalid" | 3 |
 | 6 | Anchor absent, S set | report "project gone", once per anchor | 0 |
@@ -381,8 +374,6 @@ locks, staging, backups under machine state.
   (row 7), leftover staging folders, mirror paths git ignores, and whether
   `projects/` has uncommitted changes (skiman never commits; mirror changes
   are committed by the user like any other change).
-- Ownership: a tool-directory link whose realpath is a managed project skill
-  item (from `skill_dirs`) is managed elsewhere, not foreign.
 - `managing-skills`: project items are real files, edit them in place; after
   creating a project `AGENTS.md`, rules file or project skill under a root,
   run `skiman project adopt <path>`; edits made in the mirror reach the
@@ -399,11 +390,9 @@ locks, staging, backups under machine state.
   checked by the same rules and hooks. The user already keeps work-related
   instructions there. Registering a root is an explicit act, and
   `project add` says where content goes.
-- Company skills kept in a folder of their own and linked into the tools by
-  another tool can stay outside skiman by a rule the user keeps in that
-  folder. `skill_dirs` makes mirroring them possible without touching their
-  links; whether to use it is the user's call (it means changing that rule),
-  so this change does not configure it or edit that rule.
+- Company skills kept in a folder of their own are not project items: they
+  are registered as a linked folder (ADR 0010). `skill_dirs`, which mirrored
+  them, is retired (ADR 0013).
 
 ## Not in scope
 
@@ -425,8 +414,7 @@ locks, staging, backups under machine state.
 
 1. `project add` and root validation: every refusal, also for a hand-edited
    `skiman.toml`.
-2. Discovery: every pattern (including `.claude/rules/**/*.md`),
-   `skill_dirs`; skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, `exclude` (name, path),
+2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, `exclude` (name, path),
    skill repo and state dir skipped; alias links ignored.
 3. Gates: tracked file, skill with one tracked file, git failure, secret,
    symlink inside a skill, missing `SKILL.md`, git conflict markers; a skill
@@ -439,14 +427,14 @@ locks, staging, backups under machine state.
    state, an oversized file, a `path` changed under recorded synced hashes,
    hook mode printing each report once, the set-aside check catching a
    concurrent change, a failing backup step keeping the set-aside copy, and
-   a tool-directory link into a `skill_dirs` item not reported as foreign.
+   a tool-directory link into a former `skill_dirs` folder reported as foreign.
 6. Restore: missing items under a folder; exact-path replace with the old
    project content in a backup; nothing replaced under a folder; a path the
    project repo tracks is not written; a failing step 4 or 5 keeps the
    original; leftover staging folder handling; a folder restore does not undo a
    deletion; every project command refuses during a skill repo merge.
 7. Eject: item, folder, root (table removed), with mirror or project gone.
-8. Check: `project-path`, `skill_dirs` values, the gate 2 rules (a skill
+8. Check: `project-path`, a retired `skill_dirs` key, the gate 2 rules (a skill
    without frontmatter `name` passes).
 9. Doctor: the project section.
 

@@ -31,7 +31,7 @@ pub fn check_layout(
             continue;
         }
         let id = crate::tree::basename(&entry.path);
-        let Some(root) = roots.iter().find(|r| r.id == id) else {
+        if !roots.iter().any(|r| r.id == id) {
             // A folder of ignored files only (`.DS_Store`) is nothing to report.
             if tree
                 .walk(&entry.path)?
@@ -51,7 +51,7 @@ pub fn check_layout(
             ));
             scan_files(tree, &entry.path, found)?;
             continue;
-        };
+        }
         if entry.kind != Kind::Dir {
             out.insert(Violation::new(
                 &entry.path,
@@ -61,7 +61,7 @@ pub fn check_layout(
             ));
             continue;
         }
-        for stray in read_mirror_of(tree, id, &root.skill_dirs)?.strays {
+        for stray in read_mirror_of(tree, id)?.strays {
             scan_files(tree, &stray, found)?;
             out.insert(Violation::new(
                 &stray,
@@ -99,7 +99,7 @@ fn scan_files(tree: &dyn Tree, path: &str, found: &mut Vec<Found>) -> io::Result
 pub fn item_paths(tree: &dyn Tree, records: &Records) -> io::Result<BTreeSet<String>> {
     let mut paths = BTreeSet::new();
     for root in records.projects() {
-        for item in read_mirror_of(tree, &root.id, &root.skill_dirs)?.items {
+        for item in read_mirror_of(tree, &root.id)?.items {
             paths.insert(item.mirror_rel());
         }
     }

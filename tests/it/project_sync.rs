@@ -1,7 +1,7 @@
 //! The project part of `skiman sync [--hook]`: one test per row of the
 //! state table in `docs/project-scope.md` ("Sync: the state table"), plus the
 //! pause while the skill repo is mid-operation, hook mode, and tool-directory
-//! links into a `skill_dirs` folder.
+//! links into a folder a retired `skill_dirs` key named.
 
 use std::path::{Path, PathBuf};
 
@@ -821,49 +821,36 @@ fn sync_hook_mirrors_a_project_edit_without_printing() {
     assert_eq!(read(mirror(&sandbox, "proj/AGENTS.md")), "v2\n");
 }
 
-// ------------------------------------------------------------ skill_dirs and ownership
+// ------------------------------------------------------------ retired skill_dirs
 
+/// A link into a folder a retired `skill_dirs` key named is foreign like any
+/// other (ADR 0013); sync no longer reads the key.
 #[test]
-fn a_tool_directory_link_into_a_skill_dirs_folder_is_not_reported_as_foreign() {
+fn a_tool_directory_link_into_a_former_skill_dirs_folder_is_foreign() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = root(&sandbox);
     register(&sandbox, &dir);
     let manifest = sandbox.skill_repo().join("skiman.toml");
-    let text = read(&manifest);
-    std::fs::write(
-        &manifest,
-        text.replace(
-            "[projects.work]\n",
-            "[projects.work]\nskill_dirs = [\"core/skills\"]\n",
-        ),
-    )
-    .unwrap();
-    assert!(
-        read(&manifest).contains("skill_dirs"),
-        "{}",
-        read(&manifest)
+    let text = read(&manifest).replace(
+        "[projects.work]\n",
+        "[projects.work]\nskill_dirs = [\"core/skills\"]\n",
     );
+    assert!(text.contains("skill_dirs"), "{text}");
+    std::fs::write(&manifest, text).unwrap();
     write(dir.join("core/skills/x/SKILL.md"), skill_md("x"));
-    // The control: the same kind of link to a skill outside `skill_dirs`.
-    write(dir.join("loose/y/SKILL.md"), skill_md("y"));
     let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
     std::os::unix::fs::symlink(dir.join("core/skills/x"), tool_dir.join("x")).unwrap();
-    std::os::unix::fs::symlink(dir.join("loose/y"), tool_dir.join("y")).unwrap();
 
     let out = sync(&sandbox);
 
     let stderr = stderr_of(&out);
     assert!(
-        !stderr.contains(&tool_dir.join("x").display().to_string()),
-        "{stderr}"
-    );
-    assert!(
         stderr.contains(&format!(
             "foreign skill {} is not managed by skiman",
-            tool_dir.join("y").display()
+            tool_dir.join("x").display()
         )),
-        "the control link is foreign: {stderr}"
+        "{stderr}"
     );
     assert_eq!(out.status.code(), Some(0), "{stderr}");
     assert_eq!(
@@ -951,39 +938,46 @@ fn a_mirror_skill_without_skill_md_is_invalid() {
     assert!(!exists(skill.join("other.md")));
 }
 
+/// The state a canon has after its retired `skill_dirs` key is removed
+/// (ADR 0013): a mirror skill and a synced hash at a path with no item shape.
 #[test]
 fn a_mirror_path_that_lost_its_item_shape_is_skipped_and_its_synced_hash_dropped() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = root(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "a\n");
     register(&sandbox, &dir);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
-    let with_dirs = read(&manifest).replace(
-        "[projects.work]\n",
-        "[projects.work]\nskill_dirs = [\"core/skills\"]\n",
-    );
-    std::fs::write(&manifest, &with_dirs).unwrap();
-    write(dir.join("core/skills/x/SKILL.md"), skill_md("x"));
     adopt_all(&sandbox);
-    assert!(read(synced_file(&sandbox)).contains("core/skills/x"));
-    // The `skill_dirs` entry is removed by hand.
-    std::fs::write(
-        &manifest,
-        with_dirs.replace("skill_dirs = [\"core/skills\"]\n", ""),
-    )
-    .unwrap();
+    write(mirror(&sandbox, "core/skills/x/SKILL.md"), skill_md("x"));
     write(dir.join("core/skills/x/SKILL.md"), "edited\n");
+    let recorded = read(synced_file(&sandbox));
+    assert!(recorded.contains("\"proj/AGENTS.md\""), "{recorded}");
+    let planted = recorded.replace(
+        "[work.items]\n",
+        &format!(
+            "[work.items]\n\"core/skills/x\" = \"skill sha256:{}\"\n",
+            "0".repeat(64)
+        ),
+    );
+    assert!(planted.contains("core/skills/x"), "{recorded}");
+    std::fs::write(synced_file(&sandbox), planted).unwrap();
 
     let out = sync(&sandbox);
 
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
     assert_eq!(stdout_of(&out), "");
     assert_eq!(stderr_of(&out), "", "`check` reports the path, not sync");
-    assert!(!read(synced_file(&sandbox)).contains("core/skills/x"));
+    let synced = read(synced_file(&sandbox));
+    assert!(!synced.contains("core/skills/x"), "{synced}");
+    assert!(
+        synced.contains("\"proj/AGENTS.md\""),
+        "the root's record stays: {synced}"
+    );
     assert_eq!(
         read(mirror(&sandbox, "core/skills/x/SKILL.md")),
         skill_md("x")
     );
+    assert_eq!(read(dir.join("core/skills/x/SKILL.md")), "edited\n");
 }
 
 #[test]

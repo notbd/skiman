@@ -67,51 +67,33 @@ fn split(patterns: &[&'static str]) -> Vec<Vec<&'static str>> {
 
 /// The item shape of the root-relative path `rel` (`/`-separated, no leading
 /// `/`), or `None`: the kind and the anchor (root-relative, `""` for the root
-/// itself). `skill_dirs` are the root's configured extra skill folders.
-/// Shape only: whether a skill folder holds `SKILL.md` is not looked at.
-pub fn shape(rel: &str, is_dir: bool, skill_dirs: &[String]) -> Option<(Kind, String)> {
+/// itself). Shape only: whether a skill folder holds `SKILL.md` is not looked at.
+pub fn shape(rel: &str, is_dir: bool) -> Option<(Kind, String)> {
     let parts: Vec<&str> = rel.split('/').collect();
     if parts.iter().any(|p| p.is_empty()) {
         return None;
     }
     // Anything inside a skill folder's location is that skill's content,
     // never an item of its own (discovery never enters a skill folder).
-    if (1..parts.len()).any(|len| skill_anchor(&parts[..len], skill_dirs).is_some()) {
+    if (1..parts.len()).any(|len| skill_anchor(&parts[..len]).is_some()) {
         return None;
     }
     if is_dir {
-        return skill_anchor(&parts, skill_dirs).map(|len| (Kind::Skill, parts[..len].join("/")));
+        return skill_anchor(&parts).map(|len| (Kind::Skill, parts[..len].join("/")));
     }
     (0..parts.len())
         .find(|&start| INSTRUCTIONS.iter().any(|p| matches(p, &parts[start..])))
         .map(|start| (Kind::File, parts[..start].join("/")))
 }
 
-/// When `parts` is a skill folder's location (a skill-dir pattern or a
-/// configured skill folder, then one name): the length of its anchor.
-fn skill_anchor(parts: &[&str], skill_dirs: &[String]) -> Option<usize> {
+/// When `parts` is a skill folder's location (a skill-dir pattern, then one
+/// name): the length of its anchor.
+fn skill_anchor(parts: &[&str]) -> Option<usize> {
     let (_, parent) = parts.split_last()?;
     if parent.is_empty() {
         return None;
     }
-    for dir in skill_dirs {
-        let dir: Vec<&str> = dir.split('/').collect();
-        if parent == dir.as_slice() {
-            return Some(dir.len() - 1);
-        }
-    }
     (0..parent.len()).find(|&start| SKILL_DIRS.iter().any(|p| matches(p, &parent[start..])))
-}
-
-/// Whether `path` contains a tool's skill-dir pattern as consecutive
-/// components anywhere (a `skill_dirs` entry may not).
-pub fn contains_skill_dir_pattern(path: &str) -> bool {
-    let parts: Vec<&str> = path.split('/').collect();
-    skill_dir_patterns().iter().any(|p| {
-        let p: Vec<&str> = p.split('/').collect();
-        (0..parts.len())
-            .any(|start| (start + p.len()..=parts.len()).any(|end| matches(&p, &parts[start..end])))
-    })
 }
 
 /// Whether the whole of `path` matches the whole of `pattern`.
@@ -145,12 +127,11 @@ mod tests {
     use super::*;
 
     fn file(rel: &str) -> Option<String> {
-        shape(rel, false, &[]).map(|(_, a)| a)
+        shape(rel, false).map(|(_, a)| a)
     }
 
-    fn skill(rel: &str, dirs: &[&str]) -> Option<String> {
-        let dirs: Vec<String> = dirs.iter().map(|d| d.to_string()).collect();
-        shape(rel, true, &dirs).map(|(_, a)| a)
+    fn skill(rel: &str) -> Option<String> {
+        shape(rel, true).map(|(_, a)| a)
     }
 
     #[test]
@@ -170,24 +151,13 @@ mod tests {
 
     #[test]
     fn skill_folders_and_their_anchors() {
-        assert_eq!(skill("p/.claude/skills/x", &[]).as_deref(), Some("p"));
-        assert_eq!(skill(".agents/skills/x", &[]).as_deref(), Some(""));
-        assert_eq!(skill("p/.agent/skills/x", &[]).as_deref(), Some("p"));
-        assert_eq!(skill("p/.claude/skills", &[]), None);
-        assert_eq!(skill("p/.gemini/skills/x", &[]), None);
-        assert_eq!(
-            skill("core/skills/x", &["core/skills"]).as_deref(),
-            Some("core")
-        );
-        assert_eq!(skill("core/skills/x/y", &["core/skills"]), None);
-        assert_eq!(skill("p/.claude/skills/s/.claude/skills/inner", &[]), None);
-    }
-
-    #[test]
-    fn skill_dir_patterns_inside_paths() {
-        assert!(contains_skill_dir_pattern("p/.claude/skills"));
-        assert!(contains_skill_dir_pattern("p/.claude/skills/x/sub"));
-        assert!(!contains_skill_dir_pattern("acme-core/skills"));
+        assert_eq!(skill("p/.claude/skills/x").as_deref(), Some("p"));
+        assert_eq!(skill(".agents/skills/x").as_deref(), Some(""));
+        assert_eq!(skill("p/.agent/skills/x").as_deref(), Some("p"));
+        assert_eq!(skill("p/.claude/skills"), None);
+        assert_eq!(skill("p/.gemini/skills/x"), None);
+        assert_eq!(skill("core/skills/x"), None);
+        assert_eq!(skill("p/.claude/skills/s/.claude/skills/inner"), None);
     }
 
     #[test]

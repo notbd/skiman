@@ -60,7 +60,7 @@ fn doctor() -> Result<Exit, Failure> {
     report_session_hooks(home, &installed, &root, &config.binary);
     report_tools(home, &manifest, &installed);
     report_entries(&paths, &repo, &manifest, &installed).map_err(io)?;
-    report_instruction_locations(&paths, &repo, &manifest, &installed);
+    report_instruction_locations(&paths, &repo, &installed);
     report_skill_repo(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
     report_projects(&paths, &repo, &manifest);
@@ -205,7 +205,7 @@ fn report_entries(
         .map(|w| w.name)
         .collect();
     let home = paths.home();
-    let ownership = Ownership::new(paths, repo, manifest, None);
+    let ownership = Ownership::new(paths, repo, None);
     let mut managed = BTreeSet::new();
     let mut reconciled = Vec::new();
     for tool in installed {
@@ -295,14 +295,9 @@ fn entries(dir: &Path) -> std::io::Result<Vec<(OsString, std::fs::Metadata)>> {
 }
 
 /// Instruction locations skiman does not own, and files a tool loads instead of them.
-fn report_instruction_locations(
-    paths: &Paths,
-    repo: &SkillRepo,
-    manifest: &Manifest,
-    installed: &[&AgentTool],
-) {
+fn report_instruction_locations(paths: &Paths, repo: &SkillRepo, installed: &[&AgentTool]) {
     let home = paths.home();
-    let ownership = Ownership::new(paths, repo, manifest, None);
+    let ownership = Ownership::new(paths, repo, None);
     let mut seen = Vec::new();
     for tool in installed {
         let path = home.join(tool.instruction_file);

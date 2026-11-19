@@ -117,24 +117,21 @@ fn a_mirror_folder_of_an_unknown_root_id_is_a_project_path_violation() {
     );
 }
 
+/// What a removed `skill_dirs` key leaves in the mirror (ADR 0013): a
+/// skill folder outside every tool's project skill folder has no item shape.
 #[test]
-fn a_skill_mirrored_through_skill_dirs_becomes_a_stray_when_the_entry_is_removed() {
+fn a_former_skill_dirs_mirror_item_is_a_path_without_an_item_shape() {
     let (sandbox, _) = with_root();
-    let manifest = sandbox.skill_repo().join("skiman.toml");
-    let without = read(&manifest);
-    append(&manifest, "skill_dirs = [\"lib/skills\"]\n");
     write(
         mirror(&sandbox, "work/lib/skills/tool/SKILL.md"),
         "# tool\n",
     );
-    assert_eq!(check(&sandbox), (0, String::new()));
 
-    std::fs::write(&manifest, without).unwrap();
     let (code, stdout) = check(&sandbox);
     assert_eq!(code, 1);
-    assert!(
-        stdout.starts_with("projects/work/lib/skills/tool/SKILL.md: project-path: "),
-        "{stdout}"
+    assert_eq!(
+        stdout,
+        "projects/work/lib/skills/tool/SKILL.md: project-path: belongs to no project item (an instruction file or a project skill); restore the configuration that made it one, or `git rm -r projects/work/lib/skills/tool/SKILL.md`\n"
     );
 }
 

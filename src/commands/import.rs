@@ -758,7 +758,7 @@ impl Plan {
             .map(|(name, skill)| (name.clone(), repo.root().join(&skill.path)))
             .collect();
         wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
-        let ownership = Ownership::new(paths, repo, manifest, None);
+        let ownership = Ownership::new(paths, repo, None);
         let io = |path: &Path, e: std::io::Error| {
             Failure::operational(format!("cannot read {}: {e}", path.display()))
         };

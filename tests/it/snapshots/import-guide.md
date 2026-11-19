@@ -41,8 +41,6 @@ during the import.
   - anything whose realpath is under `~/.codex/plugins/`
   - `~/.codex/skills/.system/`
   - any folder containing `.claude-plugin/plugin.json`
-  - anything whose realpath is under a `skill_dirs` folder of a project root
-    in `skiman.toml`
 - Follow symlinks to find where content really lives. Several entries can
   point to the same folder.
 - No tool directory may be a link into the skill repo (such as

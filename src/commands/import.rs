@@ -872,7 +872,8 @@ impl Plan {
         let layout = Layout::read(&WorkingTree::new(&content.root)).map_err(|e| {
             Failure::operational(format!("cannot read {}: {e}", content.root.display()))
         })?;
-        wanted.extend(linked.names(&layout, &BTreeMap::new(), |_| true).0);
+        let kept = sync::kept_names(paths, repo, manifest, &linked);
+        wanted.extend(linked.names(&layout, &kept, |_| true).0);
         let ownership = Ownership::new(paths, repo, None);
         let io = |path: &Path, e: std::io::Error| {
             Failure::operational(format!("cannot read {}: {e}", path.display()))

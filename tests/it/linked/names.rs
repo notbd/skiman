@@ -161,6 +161,7 @@ fn a_skill_that_cannot_be_probed_changes_no_collision_winner() {
         chmod(&skill, 0o000);
         let (code, stderr) = sync(&sandbox);
         let list = sandbox.skiman().arg("list").output().unwrap().stdout;
+        let overview = sandbox.skiman().arg("overview").output().unwrap().stdout;
         chmod(&skill, 0o755);
 
         assert_eq!(code, 3, "{case}: {stderr}");
@@ -178,6 +179,7 @@ fn a_skill_that_cannot_be_probed_changes_no_collision_winner() {
         };
         assert!(!stderr.contains(&lost(&acme)), "{case}: {stderr}");
         let list = String::from_utf8(list).unwrap();
+        let overview = String::from_utf8(overview).unwrap();
         let kept = "linked skill pdf of `acme`, whose SKILL.md cannot be read now, keeps the name";
         if locked == "acme" && !new {
             assert!(
@@ -185,9 +187,14 @@ fn a_skill_that_cannot_be_probed_changes_no_collision_winner() {
                 "{stderr}"
             );
             assert!(list.contains(&format!("no: {kept}")), "{list}");
+            assert!(overview.contains(&format!("no: {kept}")), "{overview}");
         } else {
             assert!(!stderr.contains(&lost(&zeta)), "{case}: {stderr}");
             assert!(!list.contains("cannot be read now"), "{case}: {list}");
+            assert!(
+                !overview.contains("cannot be read now"),
+                "{case}: {overview}"
+            );
         }
     }
 }

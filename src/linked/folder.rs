@@ -20,6 +20,10 @@ pub struct Contents {
     /// Entries whose `SKILL.md` cannot be probed (permissions, I/O), and the
     /// error: each keeps its existing link and its name (exit 3).
     pub unprobed: Vec<(String, String)>,
+    /// Why the folder's own top-level `SKILL.md` cannot be probed: the
+    /// single-skill shape keeps its existing link and name (exit 3), and
+    /// the folder is read one level deep as usual.
+    pub top_unprobed: Option<String>,
     /// The folder's own content problems: an invalid skill name, a dangling
     /// or looping child link, a child link that breaks the path rules. Each
     /// is reported and leaves the exit status unchanged.
@@ -46,7 +50,7 @@ pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Cont
         }
         Ok(_) => {}
         Err(e) if path::is_missing(&e) => {}
-        Err(e) => return Err(cannot(&top, e)),
+        Err(e) => contents.top_unprobed = Some(cannot(&top, e)),
     }
     let mut names = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| cannot(dir, e))? {

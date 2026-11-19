@@ -237,6 +237,54 @@ fn an_unreadable_sub_folder_keeps_its_link_and_needs_attention() {
     }
 }
 
+/// A top-level `SKILL.md` that cannot be probed, in a folder that can be
+/// listed, keeps only the single-skill shape's existing link and name
+/// (exit 3): the readable sub-folders are read and synced as usual.
+#[test]
+fn a_top_level_skill_md_that_cannot_be_probed_freezes_only_the_single_skill_shape() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = two_folders();
+    sandbox.skiman().arg("sync").assert().code(0);
+    let work = sandbox.home().join("work");
+    let locked = work.join("locked");
+    write(locked.join("SKILL.md"), crate::support::skill_md("locked"));
+    for id in ["company", "solo"] {
+        let top = work.join(id).join("SKILL.md");
+        if top.exists() {
+            std::fs::remove_file(&top).unwrap();
+        }
+        std::os::unix::fs::symlink(locked.join("SKILL.md"), top).unwrap();
+    }
+    std::fs::rename(work.join("company/alpha"), work.join("company/gamma")).unwrap();
+    write(
+        work.join("solo/extra/SKILL.md"),
+        crate::support::skill_md("extra"),
+    );
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = sandbox.skiman().arg("sync").output().unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for id in ["company", "solo"] {
+        let line = format!("linked skill {id} of `{id}` is not checked");
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+    }
+    let linked = sandbox.canon().join("linked");
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert!(!exists(dir.join("alpha")), "{}", dir.display());
+        for name in ["gamma", "beta", "extra"] {
+            assert!(dir.join(name).join("SKILL.md").is_file(), "{name}");
+        }
+        assert_eq!(
+            std::fs::read_link(dir.join("solo")).unwrap(),
+            linked.join("solo")
+        );
+    }
+}
+
 /// After `linked remove`, no link of the folder is left in the canon or in
 /// any tool directory.
 #[test]

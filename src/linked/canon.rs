@@ -246,9 +246,17 @@ pub fn folder_items(linked: &Linked, folder: &Folder) -> Vec<Item> {
             true,
         )],
         State::Read(contents) => {
-            let unprobed = contents.unprobed.iter().map(|(name, why)| {
+            let top = contents
+                .top_unprobed
+                .iter()
+                .map(|why| (id, why, path.clone()));
+            let children = contents
+                .unprobed
+                .iter()
+                .map(|(name, why)| (name, why, folder.skill_dir(name)));
+            let unprobed = top.chain(children).map(|(name, why, dir)| {
                 item(
-                    folder.skill_dir(name),
+                    dir,
                     "unprobed",
                     format!(
                         "linked skill {name} of `{id}` is not checked ({why}); its links stay as they are"

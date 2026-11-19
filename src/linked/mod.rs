@@ -135,15 +135,16 @@ impl Linked {
             let State::Read(contents) = &folder.state else {
                 return None;
             };
-            let holds = if contents.single {
-                folder.id == name
-            } else {
-                contents
+            // The single-skill shape, probed or not: the registered path.
+            if folder.id == name && (contents.single || contents.top_unprobed.is_some()) {
+                return Some((folder, folder.path.clone().unwrap_or_default()));
+            }
+            let holds = !contents.single
+                && contents
                     .skills
                     .iter()
                     .chain(contents.unprobed.iter().map(|(n, _)| n))
-                    .any(|n| n == name)
-            };
+                    .any(|n| n == name);
             holds.then(|| (folder, folder.skill_dir(name)))
         })
     }
@@ -269,7 +270,9 @@ impl Linked {
     pub fn keeps_any(&self) -> bool {
         self.folders.iter().any(|f| match &f.state {
             State::Unreadable(_) => true,
-            State::Read(contents) => !contents.unprobed.is_empty(),
+            State::Read(contents) => {
+                !contents.unprobed.is_empty() || contents.top_unprobed.is_some()
+            }
             _ => false,
         })
     }
@@ -277,21 +280,29 @@ impl Linked {
     /// What keeps a tool-directory link to `target` exactly as it is, with
     /// its name: the folder that cannot be read when `target` lies in its
     /// `<canon>/linked/<id>`, or the linked skill whose `SKILL.md` cannot
-    /// be probed when it lies in that skill's target.
+    /// be probed when it lies in that skill's target (when it is
+    /// `<canon>/linked/<id>` itself, for the folder's top-level `SKILL.md`).
     pub fn keeper(&self, target: &Path) -> Option<Holder> {
-        self.folders.iter().find_map(|folder| match &folder.state {
-            State::Unreadable(_) => target
-                .starts_with(self.dir.join(&folder.id))
-                .then(|| Holder::Kept(folder.id.clone())),
-            State::Read(contents) => contents
-                .unprobed
-                .iter()
-                .find(|(name, _)| target.starts_with(self.skill_target(folder, name)))
-                .map(|(name, _)| Holder::Unprobed {
-                    id: folder.id.clone(),
-                    name: name.clone(),
-                }),
-            _ => None,
+        self.folders.iter().find_map(|folder| {
+            let link = self.dir.join(&folder.id);
+            let unprobed = |name: &str| Holder::Unprobed {
+                id: folder.id.clone(),
+                name: name.to_owned(),
+            };
+            match &folder.state {
+                State::Unreadable(_) => target
+                    .starts_with(&link)
+                    .then(|| Holder::Kept(folder.id.clone())),
+                State::Read(contents) if contents.top_unprobed.is_some() && target == link => {
+                    Some(unprobed(&folder.id))
+                }
+                State::Read(contents) => contents
+                    .unprobed
+                    .iter()
+                    .find(|(name, _)| target.starts_with(self.skill_target(folder, name)))
+                    .map(|(name, _)| unprobed(name)),
+                _ => None,
+            }
         })
     }
 

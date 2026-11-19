@@ -364,8 +364,8 @@ impl Records {
         let m = &self.manifest;
         let root = doc.as_table();
         m.section(root, "skiman.toml", Some(1))
-            .unknown_keys(&["tools", "skills", "secrets", "projects"], out);
-        for key in ["tools", "skills", "secrets", "projects"] {
+            .unknown_keys(&["tools", "skills", "secrets", "projects", "linked"], out);
+        for key in ["tools", "skills", "secrets", "projects", "linked"] {
             if root.get(key).is_some_and(|i| i.as_table_like().is_none()) {
                 out.insert(m.violation(
                     m.key_line(root, key, Some(1)),
@@ -382,6 +382,10 @@ impl Records {
         if let Some(projects) = root.get("projects").and_then(Item::as_table_like) {
             let line = m.key_line(root, "projects", Some(1));
             self.check_projects(projects, line, out);
+        }
+        if let Some(linked) = root.get("linked").and_then(Item::as_table_like) {
+            let line = m.key_line(root, "linked", Some(1));
+            self.check_linked(linked, line, out);
         }
         if let Some(secrets) = root.get("secrets").and_then(Item::as_table_like) {
             let line = m.key_line(root, "secrets", Some(1));
@@ -487,6 +491,36 @@ impl Records {
                     ));
                 }
             }
+        }
+    }
+
+    /// The `[linked.<id>]` tables (ADR 0010): each a table with exactly the
+    /// key `path`, absolute or starting with `~/`; the id follows the skill
+    /// name rule and is not a reserved name. Both modes check them.
+    fn check_linked(&self, linked: &dyn TableLike, line: Option<usize>, out: &mut BTreeSet<Violation>) {
+        let m = &self.manifest;
+        for (id, item) in linked.iter() {
+            let line = m.key_line(linked, id, line);
+            let Some(table) = item.as_table_like() else {
+                out.insert(m.violation(
+                    line,
+                    rule::TOML_VALUE,
+                    format!("[linked.{id}] must be a table"),
+                ));
+                continue;
+            };
+            if let Some(why) = crate::linked::invalid_id(id) {
+                out.insert(m.violation(line, rule::TOML_VALUE, why));
+            }
+            let section = m.section(table, format!("[linked.{id}]"), line);
+            section.unknown_keys(&["path"], out);
+            section.value(
+                "path",
+                true,
+                "a string: an absolute path or one starting with `~/`",
+                |i| i.as_str().is_some_and(crate::linked::is_path_form),
+                out,
+            );
         }
     }
 

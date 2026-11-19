@@ -22,6 +22,7 @@ mod import_guide;
 mod import_resume;
 mod init;
 mod instructions;
+mod linked;
 mod list;
 mod managing_skills;
 mod mv;

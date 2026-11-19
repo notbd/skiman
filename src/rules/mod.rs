@@ -77,6 +77,8 @@ pub mod rule {
     /// A skill without a summary, group folder or origin: a warning that only
     /// `skiman check` prints, never a violation.
     pub const SKILL_INFO: &str = "skill-info";
+    /// `linked` or a path under it in the git index (`skiman check` only).
+    pub const LINKED_TRACKED: &str = "linked-tracked";
 }
 
 /// The frontmatter rules on a skill's `SKILL.md`.

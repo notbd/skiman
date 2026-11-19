@@ -142,6 +142,27 @@ pub fn in_real_index<'a>(root: &Path, places: &[&'a str]) -> Option<Vec<&'a str>
     )
 }
 
+/// Every path at or below `place` (relative to `root`) in the repo's own
+/// index, ignoring `GIT_INDEX_FILE` as [`in_real_index`] does; none when
+/// git cannot list it (a folder that is not a git repo has no index).
+pub fn paths_in_real_index(root: &Path, place: &str) -> Vec<String> {
+    let Some(output) = git(root)
+        .env_remove("GIT_INDEX_FILE")
+        .args(["ls-files", "-z", "--", place])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+    else {
+        return Vec::new();
+    };
+    output
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .collect()
+}
+
 /// One `git cat-file --batch` process for every blob read.
 struct CatFile {
     child: Child,

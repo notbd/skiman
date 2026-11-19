@@ -167,6 +167,52 @@ pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
         .collect()
 }
 
+/// One `[linked.<id>]` table (ADR 0010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedEntry {
+    pub id: String,
+    /// `path` as written when the table is well formed; otherwise why it is not.
+    pub path: Result<String, String>,
+}
+
+impl Manifest {
+    /// Every `[linked.<id>]` table, sorted by id: between overlapping
+    /// registrations and colliding names, the id that sorts first wins.
+    pub fn linked(&self) -> Vec<LinkedEntry> {
+        let Some(linked) = self.doc.get("linked").and_then(Item::as_table_like) else {
+            return Vec::new();
+        };
+        let mut entries: Vec<LinkedEntry> = linked
+            .iter()
+            .map(|(id, item)| LinkedEntry {
+                id: id.to_owned(),
+                path: linked_path(id, item),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
+        entries
+    }
+}
+
+/// The `path` of a well-formed `[linked.<id>]` table, or what is wrong with it.
+fn linked_path(id: &str, item: &Item) -> Result<String, String> {
+    let table = item
+        .as_table_like()
+        .ok_or_else(|| format!("[linked.{id}] is not a table"))?;
+    if let Some(why) = crate::linked::invalid_id(id) {
+        return Err(why);
+    }
+    if let Some((key, _)) = table.iter().find(|(key, _)| *key != "path") {
+        return Err(format!("[linked.{id}] has the unknown key `{key}`"));
+    }
+    match table.get("path").and_then(Item::as_str) {
+        Some(path) if crate::linked::is_path_form(path) => Ok(path.to_owned()),
+        _ => Err(format!(
+            "`path` in [linked.{id}] must be a string: an absolute path or one starting with `~/`"
+        )),
+    }
+}
+
 /// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.
 /// Everything else keeps its bytes, except a `projects` table written inline,
 /// which becomes a standard table (`subtable`).

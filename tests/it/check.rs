@@ -429,7 +429,7 @@ fn unknown_keys_in_skiman_toml_are_reported_with_their_line() {
 skiman.toml:7: unknown-key: unknown key `branch` in [skills.pdf.source] (allowed: url, path, ref, ref_kind, upstream_name)
 skiman.toml:10: toml-value: `enabled` in [skills.pdf] must be true or false
 skiman.toml:11: unknown-key: unknown key `pinned` in [skills.pdf] (allowed: enabled, summary, origin, installed, source)
-skiman.toml:13: unknown-key: unknown key `colors` in skiman.toml (allowed: tools, skills, secrets, projects)
+skiman.toml:13: unknown-key: unknown key `colors` in skiman.toml (allowed: tools, skills, secrets, projects, linked)
 
 "#]]);
 }

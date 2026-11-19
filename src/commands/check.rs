@@ -16,7 +16,8 @@ use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::rules;
 use crate::staged::{self, StagedTree};
-use crate::tree::{Tree, WorkingTree};
+use crate::linked::LINKED_DIR;
+use crate::tree::{Kind, Tree, WorkingTree};
 
 pub fn run(staged: bool) -> Exit {
     finish(check(staged))
@@ -44,7 +45,10 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         Box::new(WorkingTree::new(repo.root()))
     };
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let report = rules::check_repo(tree.as_ref()).map_err(io)?;
+    let mut report = rules::check_repo(tree.as_ref()).map_err(io)?;
+    let tracked = linked_in_index(tree.as_ref(), staged, repo.root());
+    report.violations.extend(tracked.iter().cloned());
+    report.violations.sort();
     for violation in &report.violations {
         out!("{violation}");
     }
@@ -61,8 +65,10 @@ fn check(staged: bool) -> Result<Exit, Failure> {
             err!("warning: {gap}");
         }
     }
+    // Staging the working tree cannot take a path out of the index.
     if staged
         && !report.violations.is_empty()
+        && tracked.is_empty()
         && let Some(hint) = stage_hint(repo.root())
     {
         out!("\n{hint}");
@@ -72,6 +78,39 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         out!("\n{hint}");
     }
     Ok(rules::exit_of(&report.violations))
+}
+
+/// `linked` and every path under it in the git index: the staged snapshot
+/// when `staged`, else the repo's own index, never the folder on disk (it
+/// holds links to content outside git). A canon that is not a git repo has
+/// no index entries.
+fn linked_in_index(tree: &dyn Tree, staged: bool, root: &Path) -> Vec<rules::Violation> {
+    let paths = if staged {
+        match tree.kind(LINKED_DIR) {
+            Ok(Some(Kind::Dir)) => tree
+                .walk(LINKED_DIR)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.kind != Kind::Dir)
+                .map(|e| e.path)
+                .collect(),
+            Ok(Some(_)) => vec![LINKED_DIR.to_owned()],
+            _ => Vec::new(),
+        }
+    } else {
+        staged::paths_in_real_index(root, LINKED_DIR)
+    };
+    paths
+        .into_iter()
+        .map(|path| {
+            rules::Violation::new(
+                path,
+                None,
+                rules::rule::LINKED_TRACKED,
+                "nothing under `linked/` may be in the git index; run `git rm -r --cached linked`",
+            )
+        })
+        .collect()
 }
 
 /// After violations in the staged snapshot, when the working tree passes

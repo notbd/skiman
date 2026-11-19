@@ -734,10 +734,11 @@ fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
 
 /// The canon's linked folders on this machine, as registered in `manifest`
 /// (the canon's, which the import keeps). Refuses (exit 1) while one cannot
-/// be read, since what leads into it is unknown; when a skill of the import
-/// folder uses a linked skill's name; and when an installed tool's tool
-/// directory or instruction location resolves into a linked folder, as sync
-/// compares them (spec "Write targets never reach into a linked folder").
+/// be read, since what leads into it is unknown; when a skill folder or a
+/// group folder of the import folder uses a linked skill's name; and when
+/// an installed tool's tool directory or instruction location resolves
+/// into a linked folder, as sync compares them (spec "Write targets never
+/// reach into a linked folder").
 fn linked_folders(
     paths: &Paths,
     repo: &Canon,
@@ -756,17 +757,29 @@ fn linked_folders(
             folder.id
         )));
     }
-    let lines: Vec<String> = content
-        .skills
+    // Every folder the import writes under `skills/`, by path, with the name
+    // it takes: each skill folder, and each group folder above one.
+    let mut folders = BTreeMap::new();
+    for (name, skill) in &content.skills {
+        folders.insert(skill.path.as_str(), name.as_str());
+        let mut path = skill.path.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/')
+            && let Some((_, group)) = parent.rsplit_once('/')
+        {
+            folders.insert(parent, group);
+            path = parent;
+        }
+    }
+    let lines: Vec<String> = folders
         .iter()
-        .filter_map(|(name, skill)| {
+        .filter_map(|(path, name)| {
             let (it, _) = linked.described(name)?;
-            Some(format!("  {}: it is {it}", skill.path))
+            Some(format!("  {path}: it is {it}"))
         })
         .collect();
     if !lines.is_empty() {
         return Err(Failure::refused(format!(
-            "refusing to import {}: these skills use the name of a linked skill, which skiman never replaces; rename them in the import folder, nothing was changed:\n{}",
+            "refusing to import {}: these skill folders and group folders use the name of a linked skill, which skiman never replaces; rename them in the import folder, nothing was changed:\n{}",
             content.root.display(),
             lines.join("\n")
         )));

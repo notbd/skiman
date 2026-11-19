@@ -135,6 +135,29 @@ fn an_import_skill_that_uses_a_linked_skills_name_is_refused_before_any_write() 
     );
 }
 
+/// A group folder of the import folder takes its name like a skill does
+/// (ADR 0009), at any depth: one named like a linked skill is refused
+/// before any write.
+#[test]
+fn an_import_group_folder_that_uses_a_linked_skills_name_is_refused_before_any_write() {
+    let sandbox = Sandbox::new();
+    let setup = setup(&sandbox);
+    let company = folder(&sandbox, "work/company", &["office"]);
+    append_manifest(&sandbox, COMPANY);
+    let skills = setup.folder.join("skills");
+    std::fs::create_dir_all(skills.join("tools/office")).unwrap();
+    std::fs::rename(skills.join("notes"), skills.join("tools/office/notes")).unwrap();
+
+    assert_refused(
+        &sandbox,
+        &setup.folder,
+        &format!(
+            "skills/tools/office: it is a linked skill in {}, in linked folder `company`",
+            company.join("office").display()
+        ),
+    );
+}
+
 /// While a registered folder cannot be read, what in the tool directories
 /// leads into it is unknown: the import is refused before any write.
 #[test]

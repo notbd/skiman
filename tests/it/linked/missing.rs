@@ -238,15 +238,23 @@ fn a_disabled_canon_skill_under_a_kept_name_is_not_reported_as_withheld() {
     }
 }
 
-/// A canon skill folder under a kept name that is not distributable (no
-/// `SKILL.md`, or its name in two group folders) is an invalid skill
-/// folder, never a withheld one: sync and `check` report it as invalid,
-/// and none of sync, `check` and `doctor` reports it as withheld.
+/// A canon skill folder under a kept name that sync does not distribute
+/// anyway (no `SKILL.md`, its name in two group folders, or a symlink) is
+/// never a withheld one: sync and `check` report it as invalid, and none
+/// of sync, `check` and `doctor` reports it as withheld.
 #[test]
 fn an_invalid_canon_skill_folder_under_a_kept_name_is_not_reported_as_withheld() {
     let sandbox = company();
     let company = sandbox.home().join("work/company");
+    folder(&sandbox, "work/company", &["gamma"]);
+    assert_eq!(sync(&sandbox, &["sync"]).0, 0);
     write(sandbox.canon().join("skills/alpha/notes.md"), "notes\n");
+    let elsewhere = folder(&sandbox, "elsewhere", &["gamma"]);
+    std::os::unix::fs::symlink(
+        elsewhere.join("gamma"),
+        sandbox.canon().join("skills/gamma"),
+    )
+    .unwrap();
     for group in ["one", "two"] {
         write(
             sandbox
@@ -284,11 +292,12 @@ fn an_invalid_canon_skill_folder_under_a_kept_name_is_not_reported_as_withheld()
     ] {
         assert!(said[0].contains(&line), "{line}\n{}", said[0]);
     }
-    assert!(
-        said[1].contains("skills/alpha: skill-md: no SKILL.md"),
-        "{}",
-        said[1]
-    );
+    for rule in [
+        "skills/alpha: skill-md: no SKILL.md",
+        "skills/gamma: symlink: the skill folder is a symlink",
+    ] {
+        assert!(said[1].contains(rule), "{rule}\n{}", said[1]);
+    }
 }
 
 /// The same for a linked skill whose `SKILL.md` cannot be probed: its kept

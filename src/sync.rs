@@ -755,17 +755,17 @@ pub fn wanted_entries(
     let mut wanted = Vec::new();
     for placed in layout.skills() {
         let (name, dir) = (&placed.name, repo.root().join(placed.path()));
-        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
-            continue;
-        }
-        match invalid_skill_folder(&layout, placed, &dir) {
-            Some(reason) => report.items.push(Item {
+        match skill_folder(&layout, placed, &dir) {
+            SkillFolder::NotAFolder => {}
+            SkillFolder::Invalid(reason) => report.items.push(Item {
                 scope: scope.clone(),
                 path: dir,
                 kind: ItemKind::InvalidSkillFolder { reason },
             }),
-            None if entries.get(name).is_some_and(|e| !e.enabled) => {}
-            None if let Some(withheld) = withheld.iter().find(|w| w.path == placed.path()) => {
+            SkillFolder::Distributable if entries.get(name).is_some_and(|e| !e.enabled) => {}
+            SkillFolder::Distributable
+                if let Some(withheld) = withheld.iter().find(|w| w.path == placed.path()) =>
+            {
                 report.items.push(Item {
                     scope: scope.clone(),
                     kind: ItemKind::Linked {
@@ -776,7 +776,7 @@ pub fn wanted_entries(
                     path: dir,
                 })
             }
-            None => wanted.push(Wanted {
+            SkillFolder::Distributable => wanted.push(Wanted {
                 name: name.clone(),
                 target: dir,
             }),
@@ -806,22 +806,36 @@ pub fn wanted_entries(
     Ok(wanted)
 }
 
-/// Why the skill folder `placed` of `layout`, at `dir`, is an invalid
-/// skill folder that sync does not distribute; `None` when its name passes
-/// the regex, is not reserved and is in one place only, and its folder
-/// holds a `SKILL.md`. Sync, `check` and `doctor` all decide by it.
-pub fn invalid_skill_folder(layout: &Layout, placed: &Placed, dir: &Path) -> Option<&'static str> {
+/// What sync makes of a skill folder under `skills/`
+/// ([`skill_folder`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillFolder {
+    /// Not a real folder: sync leaves it to the rules, which report it.
+    NotAFolder,
+    /// An invalid skill folder, not distributed for this reason.
+    Invalid(&'static str),
+    /// Distributed while it is enabled and no kept link holds its name.
+    Distributable,
+}
+
+/// What sync makes of the skill folder `placed` of `layout`, at `dir`. A
+/// distributable one is a real folder whose name passes the regex, is not
+/// reserved and is in one place only, and that holds a `SKILL.md`. Sync,
+/// `check` and `doctor` all decide by it.
+pub fn skill_folder(layout: &Layout, placed: &Placed, dir: &Path) -> SkillFolder {
     let name = &placed.name;
-    if layout.all_of(name).len() > 1 {
-        Some("its name is in more than one group folder")
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        SkillFolder::NotAFolder
+    } else if layout.all_of(name).len() > 1 {
+        SkillFolder::Invalid("its name is in more than one group folder")
     } else if names::is_reserved(name) {
-        Some("its name is reserved")
+        SkillFolder::Invalid("its name is reserved")
     } else if !names::is_valid(name) {
-        Some("its name is not a valid skill name")
+        SkillFolder::Invalid("its name is not a valid skill name")
     } else if !dir.join("SKILL.md").is_file() {
-        Some("it holds no SKILL.md")
+        SkillFolder::Invalid("it holds no SKILL.md")
     } else {
-        None
+        SkillFolder::Distributable
     }
 }
 

@@ -252,9 +252,9 @@ mod tests {
     fn home_its_parents_and_the_places_skiman_writes_break_the_rules() {
         let (_temp, root) = root();
         let home = root.join("home");
-        let repo_dir = root.join("canon");
+        let repo_dir = root.join("canons/main");
         std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
-        std::fs::create_dir(&repo_dir).unwrap();
+        std::fs::create_dir_all(&repo_dir).unwrap();
         let repo = SkillRepo::at(&repo_dir).unwrap();
         let places = Places::new(&home, &repo);
 
@@ -267,6 +267,8 @@ mod tests {
             // Not there yet: Codex writes to `~/.agents/skills`.
             home.join(".agents"),
             repo_dir.join("sub"),
+            // Contains the canon, not HOME.
+            root.join("canons"),
         ] {
             assert!(places.breaks(&path).is_some(), "{}", path.display());
         }

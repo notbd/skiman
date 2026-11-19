@@ -66,6 +66,11 @@ fn linked_add_refuses_a_path_that_overlaps_a_place_skiman_writes_or_home() {
     let (code, stderr) = linked_add(&sandbox, &home.join("not-there"));
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.contains("is not an existing folder"), "{stderr}");
+    std::fs::write(home.join("file"), "x").unwrap();
+    let (code, stderr) = linked_add(&sandbox, &home.join("file"));
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("is not a folder"), "{stderr}");
+    assert_eq!(records(&sandbox), before);
 }
 
 /// A link an older script left in a tool directory is no way to name a

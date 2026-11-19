@@ -639,3 +639,49 @@ fn names_kept_for_an_unreadable_folder_stay_taken() {
         );
     }
 }
+
+/// A linked skill named like the group, registered and distributed while
+/// `new`, `add` or `adopt` waits for input: each checks the group again
+/// once it has its answer, so it refuses (exit 1), makes no group folder,
+/// and the linked skill stays distributed; adopt moves nothing away.
+#[test]
+fn commands_check_the_group_again_after_waiting_for_input() {
+    for (args, prompt, answer) in [
+        (&["new", "foo"][..], "Description: ", "Does foo things"),
+        (&["add", "acme/tool"], "Install skill tool? [y/N] ", "y"),
+        (
+            &["adopt", "delta", "--from", "antigravity"],
+            "Adopt skill delta? [y/N] ",
+            "y",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let delta = sandbox.tool_dir(Tool::Antigravity).join("delta");
+        write(delta.join("SKILL.md"), skill_md("delta"));
+        let up = sandbox.upstream("acme/tool");
+        up.write("SKILL.md", skill_md("tool"));
+        up.commit("v1");
+        let company = folder(&sandbox, "work/company", &["alpha"]);
+
+        let mut pty = sandbox.skiman_pty([args, &["--group", "alpha"]].concat());
+        pty.expect(prompt);
+        let (code, stderr) = run(&sandbox, &["linked", "add", "~/work/company"]);
+        assert_eq!(code, 0, "{stderr}");
+        pty.send_line(answer);
+        let (code, rest) = pty.wait();
+
+        assert_eq!(code, 1, "{args:?}: {rest}");
+        let line = format!(
+            "`alpha` cannot be a group: `alpha` is a linked skill in {}, in linked folder `company`",
+            company.join("alpha").display()
+        );
+        assert!(rest.contains(&line), "{args:?}: {line}\n{rest}");
+        assert!(!sandbox.canon().join("skills/alpha").exists(), "{args:?}");
+        assert_eq!(
+            target(&sandbox, "alpha"),
+            sandbox.canon().join("linked/company/alpha")
+        );
+        assert!(delta.join("SKILL.md").is_file(), "{args:?}");
+    }
+}

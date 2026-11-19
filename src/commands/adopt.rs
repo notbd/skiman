@@ -72,6 +72,9 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
     test_hook::at("adopt", "confirmed");
     let lock = CanonLock::wait(&paths, &repo)?;
     check_name(&paths, &repo, name, &entry, Some(&change))?;
+    if let Some(group) = group {
+        names::check_group(&paths, &repo, group, name)?;
+    }
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,
     // `.git/` left out), so only a change to what would be adopted refuses.

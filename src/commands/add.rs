@@ -113,11 +113,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         let group = args.group.as_deref();
         installs.push(inspect(source, snapshot, candidate, name.clone(), group)?);
     }
-    if let Some(group) = &args.group {
-        for install in &installs {
-            names::check_group(&paths, &repo, group, &install.name)?;
-        }
-    }
+    check_group(&paths, &repo, args.group.as_deref(), &installs)?;
     check_install_names(&paths, &repo, &installs, &upstream)?;
 
     for install in &installs {
@@ -137,6 +133,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     }
 
     let lock = CanonLock::wait(&paths, &repo)?;
+    check_group(&paths, &repo, args.group.as_deref(), &installs)?;
     check_install_names(&paths, &repo, &installs, &upstream)?;
     let change = change(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &change)?;
@@ -383,6 +380,19 @@ fn inspect(
         upstream_name,
         renamed_skill_md,
     })
+}
+
+/// [`names::check_group`] for each install going into `group`.
+fn check_group(
+    paths: &Paths,
+    repo: &Canon,
+    group: Option<&str>,
+    installs: &[Install],
+) -> Result<(), Failure> {
+    let Some(group) = group else { return Ok(()) };
+    installs
+        .iter()
+        .try_for_each(|install| names::check_group(paths, repo, group, &install.name))
 }
 
 /// Refuses (exit 1) the whole add when any install name is invalid,

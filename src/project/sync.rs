@@ -15,6 +15,7 @@ use super::state::{State, classify};
 use super::swap::{Expect, Outcome, Previous, Replace};
 use super::synced::Synced;
 use crate::backup::Backups;
+use crate::linked::Linked;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -22,12 +23,33 @@ use crate::staging::Staging;
 use crate::sync::{Change, Item as Report, ItemKind, Report as SyncReport};
 use crate::tree::WorkingTree;
 
-/// Reconciles every project root into `report`.
-pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &mut SyncReport) {
+/// Reconciles every project root into `report`. An item that overlaps a
+/// linked folder is skipped; while a linked folder cannot be read, nothing
+/// is (`crate::linked`).
+pub fn reconcile(
+    paths: &Paths,
+    repo: &SkillRepo,
+    manifest: &Manifest,
+    linked: &Linked,
+    report: &mut SyncReport,
+) {
     if manifest.projects().is_empty() {
         return;
     }
     let scope = repo.root().join(MIRROR_DIR).display().to_string();
+    if let Some(folder) = linked.unreadable() {
+        report.items.push(note(
+            &scope,
+            repo.root().join(MIRROR_DIR),
+            "paused",
+            format!(
+                "project items are not synced while linked folder `{}` cannot be read, since its child links are unknown; run `skiman sync` once it can be read",
+                folder.id
+            ),
+            false,
+        ));
+        return;
+    }
     if let Some(operation) = operation_in_progress(repo.root()) {
         report.items.push(note(
             &scope,
@@ -67,7 +89,7 @@ pub fn reconcile(paths: &Paths, repo: &SkillRepo, manifest: &Manifest, report: &
                     false,
                 ));
             }
-            Ok(root) => reconcile_root(&root, &mut synced, &mut writer, report),
+            Ok(root) => reconcile_root(&root, linked, &mut synced, &mut writer, report),
         }
     }
     if let Err(e) = synced.save(paths) {
@@ -87,7 +109,13 @@ struct Pending {
     changed: Vec<PathBuf>,
 }
 
-fn reconcile_root(root: &Root, synced: &mut Synced, writer: &mut Writer, report: &mut SyncReport) {
+fn reconcile_root(
+    root: &Root,
+    linked: &Linked,
+    synced: &mut Synced,
+    writer: &mut Writer,
+    report: &mut SyncReport,
+) {
     let repo = writer.repo;
     let scope = root.dir.display().to_string();
     let items = match managed(&WorkingTree::new(repo.root()), root, synced) {
@@ -110,6 +138,15 @@ fn reconcile_root(root: &Root, synced: &mut Synced, writer: &mut Writer, report:
     let mut gone_anchors = BTreeSet::new();
     let mut pending = Pending::default();
     for item in &items {
+        // Skipped, not forgotten: its synced hash stays.
+        if let Some(why) = linked.item_overlap(&item.disk(root)) {
+            let disk = item.disk(root);
+            let message = format!("{} is not synced: {why}", disk.display());
+            report
+                .items
+                .push(note(&scope, disk, "linked", message, false));
+            continue;
+        }
         let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
         let evaluated = match classify(repo, root, item, recorded.as_deref()) {
             Ok(evaluated) => evaluated,

@@ -10,6 +10,7 @@ use crate::backup::Backups;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
+use crate::linked::Linked;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::command;
@@ -115,6 +116,8 @@ struct Context {
     /// [`never_entered`]: discovery never enters these, and [`Self::locate`]
     /// refuses a path inside them.
     skip: [PathBuf; 2],
+    /// The linked folders: items that overlap one are skipped.
+    linked: Linked,
 }
 
 impl Context {
@@ -142,6 +145,7 @@ impl Context {
             }
         }
         let skip = never_entered(&paths, &repo);
+        let linked = Linked::read(paths.home(), &repo, &manifest);
         Ok(Context {
             paths,
             repo,
@@ -149,7 +153,23 @@ impl Context {
             manifest,
             roots,
             skip,
+            linked,
         })
+    }
+
+    /// Refuses (exit 3) to change project items while a linked folder
+    /// cannot be read: its child links, and so what overlaps it, are unknown.
+    fn refuse_while_unreadable(&self, verb: &str) -> Result<(), Failure> {
+        match self.linked.unreadable() {
+            Some(folder) => Err(Failure {
+                exit: Exit::NeedsAttention,
+                message: format!(
+                    "linked folder `{}` cannot be read, so which project items overlap it is unknown; nothing was {verb}, run this again once it can be read",
+                    folder.id
+                ),
+            }),
+            None => Ok(()),
+        }
     }
 
     fn backups(&self) -> Backups {
@@ -514,6 +534,7 @@ pub fn adopt(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
+    ctx.refuse_while_unreadable("adopted")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let mut plan = Plan::default();
@@ -555,6 +576,10 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
+            if let Some(why) = ctx.linked.item_overlap(&disk) {
+                plan.skip(&disk, format!("skip {}: {why}", disk.display()));
+                continue;
+            }
             let eval = ctx.classify(&synced, target.root, &item)?;
             let what = match (&eval.state, exact) {
                 (State::New, _) => "adopt",
@@ -658,6 +683,7 @@ pub fn restore(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
+    ctx.refuse_while_unreadable("restored")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let tree = WorkingTree::new(ctx.repo.root());
@@ -688,6 +714,10 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
+            if let Some(why) = ctx.linked.item_overlap(&disk) {
+                plan.skip(&disk, format!("skip {}: {why}", disk.display()));
+                continue;
+            }
             let eval = ctx.classify(&synced, target.root, &item)?;
             let what = match (&eval.state, exact) {
                 (State::NotOnMachine, _) => "write",

@@ -163,6 +163,37 @@ impl Linked {
         ))
     }
 
+    /// The first folder that cannot be read: while one cannot, its child
+    /// links are unknown, so nothing may be moved out of it and project
+    /// items are not changed.
+    pub fn unreadable(&self) -> Option<&Folder> {
+        self.folders
+            .iter()
+            .find(|f| matches!(f.state, State::Unreadable(_)))
+    }
+
+    /// The registered folder the project item at `path` overlaps (spec
+    /// "Project items"): [`Linked::reaches_into`] on the item's path
+    /// resolved link by link, so a missing item behind a chain of links is
+    /// compared where the links lead.
+    pub fn overlapped_by(&self, path: &Path) -> Option<&Folder> {
+        self.reaches_into(&resolve(path).path)
+    }
+
+    /// Why the project item at `path` is neither mirrored nor restored.
+    pub fn item_overlap(&self, path: &Path) -> Option<String> {
+        let folder = self.overlapped_by(path)?;
+        Some(format!(
+            "it overlaps linked folder `{}` ({}), whose content skiman never copies or writes",
+            folder.id,
+            folder
+                .path
+                .as_ref()
+                .expect("a registered folder has a path")
+                .display()
+        ))
+    }
+
     /// Whether `path` (a realpath) could be registered as a linked folder
     /// now: it breaks no path rule and overlaps no registered folder.
     pub fn admits(&self, path: &Path) -> bool {

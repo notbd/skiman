@@ -267,7 +267,7 @@ pub fn run_with(
         Ok(manifest) => {
             let linked = Linked::read(paths.home(), repo, &manifest);
             let mut report = reconcile(paths, repo, &manifest, &linked, previous_repo, output);
-            crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
+            crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);
             report
         }
         Err(failure) => return (report_failure(failure, output), Report::default()),

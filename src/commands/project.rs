@@ -156,19 +156,11 @@ impl Context {
         })
     }
 
-    /// Refuses (exit 3) to change project items while a linked folder
-    /// cannot be read: its child links, and so what overlaps it, are unknown.
-    fn refuse_while_unreadable(&self, verb: &str) -> Result<(), Failure> {
-        match self.linked.unreadable() {
-            Some(folder) => Err(Failure {
-                exit: Exit::NeedsAttention,
-                message: format!(
-                    "linked folder `{}` cannot be read, so which project items overlap it is unknown; nothing was {verb}, run this again once it can be read",
-                    folder.id
-                ),
-            }),
-            None => Ok(()),
-        }
+    /// The linked folders as they are now. The lock keeps `skiman.toml` as
+    /// it is, not the file system: a registered path can lead elsewhere
+    /// once the user has answered a prompt.
+    fn linked_now(&self) -> Linked {
+        Linked::read(self.paths.home(), &self.repo, &self.manifest)
     }
 
     fn backups(&self) -> Backups {
@@ -484,6 +476,22 @@ impl<'a> Plan<'a> {
     }
 }
 
+/// Refuses (exit 3) to change project items while a linked folder of
+/// `linked` cannot be read: its child links, and so what overlaps it, are
+/// unknown.
+fn refuse_while_unreadable(linked: &Linked, verb: &str) -> Result<(), Failure> {
+    match linked.unreadable() {
+        Some(folder) => Err(Failure {
+            exit: Exit::NeedsAttention,
+            message: format!(
+                "linked folder `{}` cannot be read, so which project items overlap it is unknown; nothing was {verb}, run this again once it can be read",
+                folder.id
+            ),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Prints the outcome of one replace and returns the exit it adds; the
 /// new content is in place exactly when the first value is `true`.
 fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) -> (bool, Exit) {
@@ -533,7 +541,7 @@ pub fn adopt(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
-    ctx.refuse_while_unreadable("adopted")?;
+    refuse_while_unreadable(&ctx.linked, "adopted")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let mut plan = Plan::default();
@@ -691,7 +699,7 @@ pub fn restore(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
-    ctx.refuse_while_unreadable("restored")?;
+    refuse_while_unreadable(&ctx.linked, "restored")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let tree = WorkingTree::new(ctx.repo.root());
@@ -777,11 +785,21 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     if !plan.confirm(Verb::Restore, yes, dry_run)? {
         return Ok(own);
     }
+    // The checks again, on the linked folders as they are after the answer.
+    let linked = ctx.linked_now();
+    refuse_while_unreadable(&linked, "restored")?;
     let mut backups = ctx.backups();
     let mut exit = own;
     let mut failed = Vec::new();
     for p in &plan.writes {
         let disk = p.item.disk(p.root);
+        if let Some(why) = linked.item_overlap(&disk) {
+            err!("skip {}: {why}", disk.display());
+            if plan.named.contains(&disk) {
+                exit = exit.combine(Exit::Refused);
+            }
+            continue;
+        }
         // Its tmp leftovers go where the anchor's items go in the backup.
         let saved = Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.anchor);
         let anchor = p.item.anchor_dir(p.root);

@@ -301,3 +301,76 @@ fn a_child_link_to_a_file_does_not_block_its_project_item() {
     assert!(!stderr.contains("overlaps linked folder"), "{stderr}");
     assert_eq!(read(mirror(&sandbox, "client/AGENTS.md")), OLD);
 }
+
+/// A registered path re-pointed at the project while `project restore`
+/// waits for its answer: the restore reads the registrations again once
+/// confirmed and skips the item that overlaps now, staging and backing up
+/// nothing for it.
+#[test]
+fn restore_skips_an_item_that_overlaps_a_linked_folder_re_pointed_while_it_asked() {
+    let sandbox = adopted(&["app/AGENTS.md"], &[]);
+    let company = sandbox.home().join("company");
+    write(company.join("alpha/SKILL.md"), skill_md("alpha"));
+    let vendor = sandbox.home().join("vendor");
+    symlink(&company, &vendor).unwrap();
+    append_manifest(&sandbox, "\n[linked.vendor]\npath = \"~/vendor\"\n");
+    let (code, stderr) = run(&sandbox, &["sync"], &[]);
+    assert_eq!(code, 0, "{stderr}");
+    write(mirror(&sandbox, "app/AGENTS.md"), NEW);
+    let synced_file = sandbox.state_home().join("skiman/projects-synced.toml");
+    let synced = read(&synced_file);
+    let app = work(&sandbox, "app");
+    let item = app.join("AGENTS.md").display().to_string();
+
+    let mut pty = sandbox.skiman_pty(["project", "restore", item.as_str()]);
+    pty.expect("Restore 1 item(s)? [y/N] ");
+    std::fs::remove_file(&vendor).unwrap();
+    symlink(&app, &vendor).unwrap();
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 1, "{rest}");
+    assert!(
+        rest.contains("it overlaps linked folder `vendor`"),
+        "{rest}"
+    );
+    assert!(!rest.contains("restored "), "{rest}");
+    assert_eq!(read(app.join("AGENTS.md")), OLD);
+    assert_eq!(read(&synced_file), synced);
+    let names: Vec<_> = std::fs::read_dir(&app)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, ["AGENTS.md"]);
+    assert!(!exists(crate::support::backups(&sandbox)));
+}
+
+/// A registered folder that cannot be read once `project restore` has its
+/// answer: which items overlap it is unknown, so nothing is restored.
+#[test]
+fn restore_writes_nothing_when_a_linked_folder_cannot_be_read_after_it_asked() {
+    let sandbox = adopted(&["app/AGENTS.md"], &[]);
+    let company = sandbox.home().join("company");
+    write(company.join("alpha/SKILL.md"), skill_md("alpha"));
+    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/company\"\n");
+    let (code, stderr) = run(&sandbox, &["sync"], &[]);
+    assert_eq!(code, 0, "{stderr}");
+    write(mirror(&sandbox, "app/AGENTS.md"), NEW);
+    let item = work(&sandbox, "app/AGENTS.md");
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+
+    let mut pty = sandbox.skiman_pty(["project".as_ref(), "restore".as_ref(), item.as_os_str()]);
+    pty.expect("Restore 1 item(s)? [y/N] ");
+    chmod(0o000).unwrap();
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+    chmod(0o755).unwrap();
+
+    assert_eq!(code, 3, "{rest}");
+    assert!(
+        rest.contains("linked folder `company` cannot be read, so which project items overlap it is unknown; nothing was restored"),
+        "{rest}"
+    );
+    assert_eq!(read(&item), OLD);
+    assert!(!exists(crate::support::backups(&sandbox)));
+}

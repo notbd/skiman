@@ -64,12 +64,12 @@ pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Cont
             Err(e) => return Err(cannot(&entry, e)),
         };
         if meta.is_symlink() {
-            match std::fs::read_link(&entry) {
-                Ok(_) => {}
+            let target = match std::fs::read_link(&entry) {
+                Ok(target) => dir.join(target),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(cannot(&entry, e)),
-            }
-            if !child_link(&entry, breaks, &mut contents) {
+            };
+            if !child_link(&entry, &target, breaks, &mut contents) {
                 continue;
             }
         } else if !meta.is_dir() {
@@ -98,15 +98,17 @@ pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Cont
     Ok(contents)
 }
 
-/// Checks the child link `entry`: records its target when it is protected
-/// and its problem when it has one. `true` when it may be a skill (it
-/// resolves to a folder, or to something that cannot be entered).
+/// Checks the child link `entry`, whose target is `target` (joined to the
+/// folder): records where it resolves when that is protected and its
+/// problem when it has one. `true` when it may be a skill (it resolves to
+/// a folder, or to something that cannot be entered).
 fn child_link(
     entry: &Path,
+    target: &Path,
     breaks: &dyn Fn(&Path) -> Option<String>,
     contents: &mut Contents,
 ) -> bool {
-    let resolved = resolve(entry);
+    let resolved = resolve(target);
     if let Some(Stop::Loop) = resolved.stop {
         contents.problems.push((
             entry.to_owned(),
@@ -114,12 +116,9 @@ fn child_link(
         ));
         return false;
     }
-    // The entry itself is the first link met; it is in the linked folder.
-    // None at all: the entry stopped being a link since it was listed.
+    // Every link met after the entry itself, which is in the linked folder.
     let broken = resolved
         .links
-        .get(1..)
-        .unwrap_or_default()
         .iter()
         .chain([&resolved.path])
         .find_map(|path| breaks(path));

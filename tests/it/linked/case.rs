@@ -152,3 +152,38 @@ fn adopt_refuses_a_link_into_a_folder_registered_in_another_case() {
     );
     assert_eq!(crate::support::tree(sandbox.canon()), canon);
 }
+
+/// A link met on the way, typed in another case, is compared as spelled
+/// on disk: `~/.AGENTS/extra` goes through the link `~/.agents`, which
+/// holds Codex's tool directory, like `~/.agents/extra` does.
+#[test]
+fn a_link_on_the_way_typed_in_another_case_breaks_the_rules_as_on_disk() {
+    let Some(sandbox) = sandbox() else { return };
+    let agents = sandbox.home().join(".agents");
+    let real = folder(&sandbox, "agents-real/extra", &["alpha"])
+        .parent()
+        .unwrap()
+        .to_owned();
+    std::fs::rename(&agents, real.join("old")).unwrap();
+    std::fs::rename(real.join("old/skills"), real.join("skills")).unwrap();
+    symlink(&real, &agents).unwrap();
+    let manifest = sandbox.canon().join("skiman.toml");
+    let before = read(&manifest);
+
+    for typed in [".agents/extra", ".AGENTS/extra"] {
+        let output = sandbox
+            .skiman()
+            .args(["linked", "add", "--id", "extra"])
+            .arg(sandbox.home().join(typed))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{typed}: {stderr}");
+        assert!(
+            stderr.contains("goes through the link"),
+            "{typed}: {stderr}"
+        );
+        assert_eq!(read(&manifest), before, "{typed}");
+    }
+}

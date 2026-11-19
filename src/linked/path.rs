@@ -3,8 +3,9 @@
 //! by link so that every link met on the way is checked too.
 
 use std::collections::VecDeque;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io;
+use std::os::unix::fs::{DirEntryExt, MetadataExt};
 use std::path::{Component, Path, PathBuf};
 
 use crate::canon::Canon;
@@ -14,7 +15,9 @@ use crate::tools::TOOLS;
 /// At most this many links are followed on the way to one path; more is a loop.
 const MAX_LINKS: usize = 40;
 
-/// How a path resolved, link by link.
+/// How a path resolved, link by link. Every component that exists is
+/// spelled as on disk, so on a volume that ignores case a path typed in
+/// another case compares equal to a realpath.
 #[derive(Debug)]
 pub struct Resolution {
     /// Every link met, at the path it was met at (the links before it resolved).
@@ -41,6 +44,8 @@ pub enum Stop {
 /// link that can be read, as the system does. Unlike
 /// [`realpath_as_far_as_exists`] it goes on through a link whose target is
 /// missing, so a chain of links ends at the last target that can be named.
+/// Every component that exists, a link met included, comes back spelled
+/// as on disk.
 pub fn resolve(path: &Path) -> Resolution {
     let mut done = PathBuf::from("/");
     let mut rest: VecDeque<OsString> = parts(path).collect();
@@ -57,6 +62,7 @@ pub fn resolve(path: &Path) -> Resolution {
         let next = done.join(&name);
         let stop = match std::fs::symlink_metadata(&next) {
             Ok(meta) if meta.is_symlink() => {
+                let next = listed(&done, &name, &meta).unwrap_or(next);
                 links.push(next.clone());
                 if links.len() > MAX_LINKS {
                     Stop::Loop
@@ -78,9 +84,7 @@ pub fn resolve(path: &Path) -> Resolution {
             // A file where a folder is needed, before a name or a `..`.
             Ok(meta) if !meta.is_dir() && !rest.is_empty() => Stop::Missing,
             Ok(_) => {
-                // `done` stays a realpath spelled as on disk, so a path
-                // typed in another case on a volume that ignores case
-                // compares equal to a realpath.
+                // `done` stays a realpath spelled as on disk.
                 done = std::fs::canonicalize(&next).unwrap_or(next);
                 continue;
             }
@@ -98,6 +102,22 @@ pub fn resolve(path: &Path) -> Resolution {
         links,
         stop: None,
     }
+}
+
+/// The link `name` (metadata `meta`) in the folder `dir`, a realpath, as
+/// the listing spells it: the entry of that name, or else the entry with
+/// its inode. `canonicalize` cannot tell, since it follows the link.
+fn listed(dir: &Path, name: &OsStr, meta: &std::fs::Metadata) -> Option<PathBuf> {
+    let mut same = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        if entry.file_name() == name {
+            return Some(dir.join(name));
+        }
+        if same.is_none() && entry.ino() == meta.ino() {
+            same = Some(entry.file_name());
+        }
+    }
+    same.map(|found| dir.join(found))
 }
 
 /// The components of `path` that name something: normal names and `..`.

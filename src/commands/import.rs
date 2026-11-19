@@ -760,13 +760,8 @@ fn linked_folders(
         .skills
         .iter()
         .filter_map(|(name, skill)| {
-            let (folder, dir) = linked.skill(name)?;
-            Some(format!(
-                "  {}: it is a linked skill in {}, in linked folder `{}`",
-                skill.path,
-                dir.display(),
-                folder.id
-            ))
+            let (it, _) = linked.described(name)?;
+            Some(format!("  {}: it is {it}", skill.path))
         })
         .collect();
     if !lines.is_empty() {

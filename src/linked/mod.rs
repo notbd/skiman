@@ -145,18 +145,28 @@ impl Linked {
         })
     }
 
-    /// Why a command that acts on a skill in the canon refuses `name`, which
-    /// is a linked skill (call it when nothing in the canon has the name):
-    /// the folder it is edited in, and the linked folder's id.
-    pub fn edited_elsewhere(&self, name: &str) -> Option<(String, &str)> {
+    /// The linked skill `name` as messages name it, "a linked skill in <its
+    /// folder>, in linked folder `<id>`", and the linked folder's id.
+    pub fn described(&self, name: &str) -> Option<(String, &str)> {
         let (folder, dir) = self.skill(name)?;
         Some((
             format!(
-                "{name} is a linked skill: it is edited in {}, in linked folder `{}`, and skiman never changes it",
+                "a linked skill in {}, in linked folder `{}`",
                 dir.display(),
                 folder.id
             ),
             &folder.id,
+        ))
+    }
+
+    /// Why a command that acts on a skill in the canon refuses `name`, which
+    /// is a linked skill (call it when nothing in the canon has the name),
+    /// and the linked folder's id.
+    pub fn edited_elsewhere(&self, name: &str) -> Option<(String, &str)> {
+        let (it, id) = self.described(name)?;
+        Some((
+            format!("{name} is {it}; it is edited there, and skiman never changes it"),
+            id,
         ))
     }
 

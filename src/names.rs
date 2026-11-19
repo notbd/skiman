@@ -111,13 +111,9 @@ pub fn check_not_taken(
     } else if exists(repo.upstream_dir(name)) && !ours(Taken::Snapshot)? {
         Some(format!("upstream/{name} already exists"))
     } else {
-        Linked::load(home, repo)?.skill(name).map(|(folder, dir)| {
-            format!(
-                "it is a linked skill in {}, in linked folder `{}`",
-                dir.display(),
-                folder.id
-            )
-        })
+        Linked::load(home, repo)?
+            .described(name)
+            .map(|(it, _)| format!("it is {it}"))
     };
     match reason {
         Some(reason) => Err(Failure::refused(format!(

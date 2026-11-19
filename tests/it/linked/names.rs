@@ -249,7 +249,7 @@ fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
     assert_eq!(sync(&sandbox).0, 0);
     let before = world(&sandbox, &company);
     let named = format!(
-        "alpha is a linked skill: it is edited in {}, in linked folder `company`",
+        "alpha is a linked skill in {}, in linked folder `company`; it is edited there",
         company.join("alpha").display()
     );
 

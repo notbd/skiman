@@ -281,7 +281,8 @@ impl Linked {
     /// order, and the ones that are not distributed because another skill
     /// holds their name (spec "Names and collisions"). Only folders `offers`
     /// accepts take part. Every skill folder under `skills/` (`layout`)
-    /// holds its name, enabled or not; then the names `kept` (name to id) by
+    /// holds its name, enabled or not, and so does every group folder (ADR
+    /// 0009); then the names `kept` (name to id) by
     /// links of unreadable folders and by skills whose `SKILL.md` cannot be
     /// probed; then the folder whose id sorts first.
     pub fn names(
@@ -306,6 +307,8 @@ impl Linked {
             for name in folder.skill_names() {
                 let holder = if let Some(placed) = layout.find(&name) {
                     Some(Holder::Canon(placed.path()))
+                } else if let Some(group) = layout.group_named(&name) {
+                    Some(Holder::Group(format!("skills/{group}")))
                 } else if let Some(id) = kept.get(&name) {
                     Some(Holder::Kept(id.clone()))
                 } else {
@@ -387,6 +390,8 @@ pub struct Collision {
 pub enum Holder {
     /// A skill folder under `skills/`, as a path relative to the canon.
     Canon(String),
+    /// A group folder under `skills/`, as a path relative to the canon.
+    Group(String),
     /// The linked folder whose id sorts first.
     Linked(String),
     /// A link kept for a linked folder that cannot be read now.
@@ -397,7 +402,7 @@ impl Holder {
     /// The holder, as `list` and `overview` show it.
     pub fn holds_the_name(&self) -> String {
         match self {
-            Holder::Canon(path) => format!("{path} holds the name"),
+            Holder::Canon(path) | Holder::Group(path) => format!("{path} holds the name"),
             Holder::Linked(id) => format!("linked folder `{id}` holds the name"),
             Holder::Kept(id) => {
                 format!("linked folder `{id}`, which cannot be read now, keeps the name")
@@ -410,6 +415,7 @@ impl Collision {
     pub fn message(&self) -> String {
         let holder = match &self.holder {
             Holder::Canon(path) => format!("the skill folder {path} uses the name"),
+            Holder::Group(path) => format!("the group folder {path} uses the name"),
             Holder::Linked(id) => format!("linked folder `{id}` sorts first and uses the name"),
             Holder::Kept(id) => {
                 format!("linked folder `{id}`, which cannot be read now, keeps the name")

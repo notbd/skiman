@@ -98,7 +98,8 @@ canon's and never writes into it.
   `new`, `add`, `adopt`, `import` and `mv` refuse to create a skill with a
   linked skill's name.
 - A name used by a skill in `skills/` and by a linked skill goes to the one
-  in `skills/`. Between two linked folders, the id that sorts first wins.
+  in `skills/`; a group folder's name is taken the same way. Between two
+  linked folders, the id that sorts first wins.
   sync and `skiman check` report each such collision.
 - To move the folder, move it and change its `path` line in `skiman.toml`.
   The next sync links it again. A sync between the two steps sees the

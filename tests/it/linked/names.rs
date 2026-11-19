@@ -63,6 +63,45 @@ fn a_canon_skill_enabled_or_not_wins_over_a_linked_skill() {
     );
 }
 
+/// A group folder's name is taken like a skill's, at any depth (ADR 0009),
+/// so a linked skill of that name is not distributed.
+#[test]
+fn a_group_folder_wins_over_a_linked_skill() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(
+        sandbox
+            .canon()
+            .join("skills/third-party/tstack/tool/SKILL.md"),
+        skill_md("tool"),
+    );
+    let company = folder(
+        &sandbox,
+        "work/company",
+        &["third-party", "tstack", "alpha"],
+    );
+    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 3, "{stderr}");
+    for (name, path) in [
+        ("third-party", "skills/third-party"),
+        ("tstack", "skills/third-party/tstack"),
+    ] {
+        let line = format!(
+            "warning: linked skill {name} in {} is not distributed: the group folder {path} uses the name",
+            company.join(name).display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert!(!sandbox.tool_dir(Tool::ClaudeCode).join(name).exists());
+    }
+    for name in ["tool", "alpha"] {
+        let skill = sandbox.tool_dir(Tool::ClaudeCode).join(name);
+        assert!(skill.join("SKILL.md").is_file(), "{name}");
+    }
+}
+
 /// Between linked folders the id that sorts first wins; when it goes away,
 /// the next one takes over.
 #[test]

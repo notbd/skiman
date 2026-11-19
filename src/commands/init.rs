@@ -165,7 +165,8 @@ fn refuse_inside_linked(current: Option<&(Canon, Linked)>, path: &Path) -> Resul
 /// (only possible with a terminal) previews the entries and asks. Each
 /// settings file is written under the canon lock, and left alone when it
 /// resolves into a linked folder registered at that moment, in this canon
-/// or in the `previous` one (read again then, when it could be read before).
+/// or in the `previous` one (read again then, when it could be read before;
+/// left alone too when it cannot be read again).
 fn install_session_hooks(
     paths: &Paths,
     repo: &Canon,
@@ -178,19 +179,34 @@ fn install_session_hooks(
         Some(ids) => session_hooks::Request::Add(ids),
         None => session_hooks::Request::Ask,
     };
+    let left = |message: String| Failure {
+        exit: Exit::NeedsAttention,
+        message: format!("{message}; its session-start hook entry is left as it is"),
+    };
     let guard = |file: &Path, written: &Path| -> Result<CanonLock, Failure> {
         let lock = CanonLock::wait(paths, repo)?;
         let previous = previous
             .filter(|p| p.linked.is_some())
-            .map(|p| Linked::load(paths.home(), &Canon::at(&p.root)?))
+            .map(|p| {
+                let canon = Canon::at(&p.root);
+                canon.and_then(|c| Linked::load(paths.home(), &c)).map_err(|failure| {
+                    let manifest = p.root.join("skiman.toml");
+                    // The cause's first line, without the file it names again.
+                    let named = format!("{}: ", manifest.display());
+                    let why = failure.message.lines().next().unwrap_or_default();
+                    let why = why.strip_prefix(&named).unwrap_or(why);
+                    left(format!(
+                        "{} of the previous canon cannot be read ({why}), so whether {} lies inside one of its linked folders is unknown",
+                        manifest.display(),
+                        file.display()
+                    ))
+                })
+            })
             .transpose()?;
         let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?)
             .guarding_also(previous.as_ref());
         match linked.refusal(file, &linked::written_through(written)) {
-            Some(message) => Err(Failure {
-                exit: Exit::NeedsAttention,
-                message: format!("{message}; its session-start hook entry is left as it is"),
-            }),
+            Some(message) => Err(left(message)),
             None => Ok(lock),
         }
     };

@@ -174,3 +174,43 @@ fn a_previous_registration_re_pointed_at_the_settings_file_while_init_asks_block
     );
     assert_eq!(read(next.join("settings.json")), "{}\n");
 }
+
+/// The previous canon's `skiman.toml` broken right before `init` writes a
+/// session-start hook entry: the guard cannot read that canon's
+/// registrations, so it says so in the guard's words and leaves the
+/// settings file alone (exit 3).
+#[test]
+fn a_previous_canon_that_cannot_be_read_again_leaves_the_hook_entry_unwritten() {
+    let sandbox = Sandbox::builder()
+        .tool(Tool::Antigravity, ToolSetup::Absent)
+        .build();
+    first(&sandbox);
+    let settings = sandbox.presence_dir(Tool::ClaudeCode).join("settings.json");
+    let before = std::fs::read(&settings).ok();
+    let manifest = sandbox.canon().join("skiman.toml");
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "claude-code"])
+        .arg(sandbox.root().join("second"))
+        .env("SKIMAN_TEST_HOOK", "session-hooks:guard")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("printf '[[[\\n' >> '{}'", manifest.display()),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    let line = format!(
+        "{} of the previous canon cannot be read (",
+        manifest.display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert!(
+        stderr.contains("; its session-start hook entry is left as it is"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read(&settings).ok(), before);
+}

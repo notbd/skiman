@@ -138,6 +138,61 @@ fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
     }
 }
 
+/// A canon skill that appears while the folder whose kept links hold its
+/// name cannot be read gets that name in no tool directory, not even one
+/// where the kept link is missing; once the folder reads again, the canon
+/// skill wins it as usual.
+#[test]
+fn an_unreadable_folder_keeps_its_names_from_a_canon_skill_in_every_tool_directory() {
+    let sandbox = company();
+    let company = sandbox.home().join("work/company");
+    let linked = sandbox.canon().join("linked/company");
+    std::fs::remove_file(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).unwrap();
+    for name in ["alpha", "notes"] {
+        write(
+            sandbox.canon().join("skills").join(name).join("SKILL.md"),
+            skill_md(name),
+        );
+    }
+    chmod(&company, 0o000);
+
+    let (code, _, stderr) = sync(&sandbox, &["sync"]);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let vacant = exists(claude.join("alpha"));
+    chmod(&company, 0o755);
+
+    assert_eq!(code, 3, "{stderr}");
+    let line = format!(
+        "warning: skill folder {} is not distributed: linked folder `company`, which cannot be read now, keeps the name",
+        sandbox.canon().join("skills/alpha").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert!(!vacant, "{stderr}");
+    for tool in [Tool::Codex, Tool::Antigravity] {
+        let dir = sandbox.tool_dir(tool);
+        assert_eq!(
+            std::fs::read_link(dir.join("alpha")).unwrap(),
+            linked.join("alpha")
+        );
+    }
+    for tool in Tool::ALL {
+        assert!(sandbox.tool_dir(tool).join("notes/SKILL.md").is_file());
+    }
+
+    let (code, _, stderr) = sync(&sandbox, &["sync"]);
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        stderr.contains("is not distributed: the skill folder skills/alpha uses the name"),
+        "{stderr}"
+    );
+    for tool in Tool::ALL {
+        assert_eq!(
+            std::fs::read_link(sandbox.tool_dir(tool).join("alpha")).unwrap(),
+            sandbox.canon().join("skills/alpha")
+        );
+    }
+}
+
 /// A path that cannot be checked because a folder on the way cannot be
 /// entered is a read error of the whole folder, never a missing one.
 #[test]

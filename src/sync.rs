@@ -724,12 +724,12 @@ pub struct Wanted {
     pub target: PathBuf,
 }
 
-/// Every distributable skill that is not `enabled = false`, in name order,
-/// then `skiman-manual`, then the linked skills of the folders `offers`
-/// accepts that no other skill holds the name of ([`Linked::names`]; `kept`
-/// from [`kept_names`]). Folders under
-/// `skills/` that are not distributable and linked skills that lose their
-/// name are added to `report.items`.
+/// Every distributable skill that is not `enabled = false` and whose name
+/// no kept link holds, in name order, then `skiman-manual`, then the
+/// linked skills of the folders `offers` accepts that no other skill holds
+/// the name of ([`Linked::names`]; `kept` from [`kept_names`]). Folders
+/// under `skills/` that are not distributable or whose name is kept, and
+/// linked skills that lose their name, are added to `report.items`.
 pub fn wanted_entries(
     repo: &Canon,
     manifest: &Manifest,
@@ -758,6 +758,20 @@ pub fn wanted_entries(
                 kind: ItemKind::InvalidSkillFolder { reason },
             }),
             None if entries.get(name).is_some_and(|e| !e.enabled) => {}
+            // A kept link holds the name until its folder or `SKILL.md`
+            // reads again: a passing failure never changes the winner.
+            None if let Some(holder) = kept.get(name) => report.items.push(Item {
+                scope: scope.clone(),
+                kind: ItemKind::Linked {
+                    what: "collision",
+                    message: format!(
+                        "skill folder {} is not distributed: {holder}",
+                        dir.display()
+                    ),
+                    attention: true,
+                },
+                path: dir,
+            }),
             None => wanted.push(Wanted {
                 name: name.clone(),
                 target: dir,

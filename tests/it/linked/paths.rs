@@ -132,8 +132,8 @@ fn overlapping_and_malformed_registrations_break_the_rules() {
 /// A table that is not well formed (an unknown key, an invalid id) is
 /// skipped, in the words `check` uses, but its path keeps the protection:
 /// sync writes nothing through a tool directory that resolves into the
-/// folder and gives an older script's link into it no adopt hint, and
-/// adopt refuses that link.
+/// folder and gives an older script's link into it no adopt hint (nor the
+/// hint for a folder skiman distributes), and adopt refuses that link.
 #[test]
 fn a_malformed_registration_still_protects_its_folder() {
     for (id, table, why) in [
@@ -174,6 +174,12 @@ fn a_malformed_registration_still_protects_its_folder() {
         );
         assert!(stderr.contains(&line), "{line}\n{stderr}");
         assert!(!stderr.contains("skiman adopt old"), "{stderr}");
+        // Nor that skiman distributes the folder: it is skipped.
+        let line = format!(
+            "warning: {} is a link into linked folder `{id}`\n",
+            claude.join("old").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
 
         let canon = crate::support::tree(sandbox.canon());
         let (code, stderr) = run(

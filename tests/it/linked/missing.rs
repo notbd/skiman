@@ -167,3 +167,24 @@ fn a_path_check_failing_with_a_permission_error_is_a_read_error() {
     }
     assert!(exists(sandbox.canon().join("linked/company")));
 }
+
+/// A link an older script made into a folder that cannot be read: sync
+/// names the folder, but not as one it distributes.
+#[test]
+fn a_link_into_a_folder_that_cannot_be_read_is_not_called_distributed() {
+    let sandbox = company();
+    let company = sandbox.home().join("work/company");
+    let old = sandbox.tool_dir(Tool::ClaudeCode).join("old-alpha");
+    std::os::unix::fs::symlink(company.join("alpha"), &old).unwrap();
+    chmod(&company, 0o111);
+
+    let (code, _, stderr) = sync(&sandbox, &["sync"]);
+    chmod(&company, 0o755);
+
+    assert_eq!(code, 3, "{stderr}");
+    let line = format!(
+        "warning: {} is a link into linked folder `company`\n",
+        old.display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+}

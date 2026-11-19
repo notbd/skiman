@@ -18,7 +18,7 @@ use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
 use crate::layout::Layout;
-use crate::linked::{self, Linked};
+use crate::linked::{self, Linked, State};
 use crate::manifest::Manifest;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
@@ -89,8 +89,10 @@ pub enum PointsInto {
     /// `skiman linked add <folder>` is a way in too.
     Registrable(PathBuf),
     /// Into a registered linked folder (`id`): adopting it would copy
-    /// linked content into the canon, so no adopt hint.
-    Linked(String),
+    /// linked content into the canon, so no adopt hint. `distributed` when
+    /// the folder was read, so skiman distributes its skills; not when it
+    /// is skipped or cannot be read.
+    Linked { id: String, distributed: bool },
 }
 
 /// The [`ItemKind::Foreign`] of the entry `name` (metadata `meta`) at
@@ -106,9 +108,10 @@ pub fn foreign(
 ) -> ItemKind {
     let real = path.canonicalize().ok();
     let into = match &real {
-        Some(real) if let Some(folder) = linked.reaches_into(real) => {
-            PointsInto::Linked(folder.id.clone())
-        }
+        Some(real) if let Some(folder) = linked.reaches_into(real) => PointsInto::Linked {
+            id: folder.id.clone(),
+            distributed: matches!(folder.state, State::Read(_)),
+        },
         Some(real)
             if meta.is_symlink()
                 && !real.starts_with(repo.root())
@@ -176,11 +179,16 @@ impl Item {
                 crate::project::shell_quote(&folder.display().to_string())
             ),
             ItemKind::Foreign {
-                into: PointsInto::Linked(id),
+                into: PointsInto::Linked { id, distributed },
                 ..
-            } => format!(
-                "{path} is a link into linked folder `{id}`, which skiman already distributes; delete it once nothing needs it"
-            ),
+            } => {
+                let hint = if *distributed {
+                    ", which skiman already distributes; delete it once nothing needs it"
+                } else {
+                    ""
+                };
+                format!("{path} is a link into linked folder `{id}`{hint}")
+            }
             ItemKind::Occupied { name, same: true } => format!(
                 "{path} is a link to the same folder as skill {name}, but skiman did not make it; deleting it is safe: rm {}",
                 crate::project::shell_quote(&path.to_string())

@@ -131,7 +131,7 @@ fn install_session_hooks(
 fn hint_not_owned(report: &sync::Report, repo: &Canon) {
     // A link into a linked folder is never adopted or imported.
     let foreign = report.items.iter().any(|item| {
-        matches!(&item.kind, ItemKind::Foreign { into, .. } if !matches!(into, sync::PointsInto::Linked(_)))
+        matches!(&item.kind, ItemKind::Foreign { into, .. } if !matches!(into, sync::PointsInto::Linked { .. }))
     });
     let refused = report
         .items

@@ -95,8 +95,8 @@ canon's and never writes into it.
   marked as a stand-in.
 - skiman never writes into a linked folder. `update`, `diff`, `remove` and
   `mv` refuse a name that is only a linked skill and name its folder.
-  `new`, `add`, `adopt`, `import` and `mv` refuse to create a skill with a
-  linked skill's name.
+  `new`, `add`, `adopt`, `import` and `mv` refuse to create a skill or a
+  group folder with a linked skill's name.
 - A name used by a skill in `skills/` and by a linked skill goes to the one
   in `skills/`; a group folder's name is taken the same way. Between two
   linked folders, the id that sorts first wins.

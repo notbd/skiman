@@ -162,8 +162,9 @@ the backup like any foreign entry; the folder itself stays as it is.
 
 The canon may already register linked folders (`skiman list` shows their
 skills, of kind `linked`). Their skills are distributed already: leave them
-out too, and give no skill in the import folder a linked skill's name. While
-a registered linked folder cannot be read, the import refuses.
+out too, and give no skill or group folder in the import folder a linked
+skill's name. While a registered linked folder cannot be read, the import
+refuses.
 
 ## Choose the canonical copy among diverged copies
 

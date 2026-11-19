@@ -126,8 +126,8 @@ agent tool and never writes into the folder.
   own `SKILL.md`, not a `[skills.<name>]` table.
 - `skiman update`, `diff`, `remove` and `mv` refuse a name that is only a
   linked skill, and name its linked folder. `skiman new`, `add`, `adopt`,
-  `import` and `mv` refuse to give a skill a linked skill's name; choose
-  another name.
+  `import` and `mv` refuse to give a skill or a group folder a linked
+  skill's name; choose another name.
 - To register a folder, run `skiman linked add <path>`. The id is the
   folder's name, or its parent's name for a folder called `skills`;
   `--id <id>` sets another. It prints the folder's skills and, for each

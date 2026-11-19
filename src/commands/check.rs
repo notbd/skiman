@@ -12,7 +12,8 @@ use std::process::Command;
 use crate::Exit;
 use crate::failure::{Failure, finish};
 use crate::git_hooks::shell_quote;
-use crate::linked::LINKED_DIR;
+use crate::linked::{LINKED_DIR, gitignore};
+use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::rules;
@@ -64,6 +65,9 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         for gap in rules::missing_info(tree.as_ref()).map_err(io)? {
             err!("warning: {gap}");
         }
+        if let Some(warning) = linked_not_ignored(&repo) {
+            err!("warning: {warning}");
+        }
     }
     // Staging the working tree cannot take a path out of the index.
     if staged
@@ -78,6 +82,28 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         out!("\n{hint}");
     }
     Ok(rules::exit_of(&report.violations))
+}
+
+/// While `[linked]` tables exist in a canon that is a git repo: that git
+/// does not ignore `linked/`, and where to add the line.
+fn linked_not_ignored(repo: &SkillRepo) -> Option<String> {
+    if Manifest::load(repo).ok()?.linked().is_empty()
+        || gitignore::check_ignore(repo.root()) != Some(false)
+    {
+        return None;
+    }
+    let path = repo.root().join(".gitignore");
+    let fix = match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_symlink() => format!(
+            "{} is a link, and git does not read a `.gitignore` that is a link: replace it with a file that holds the line `{}`",
+            path.display(),
+            gitignore::LINE
+        ),
+        _ => format!("add the line `{}` to {}", gitignore::LINE, path.display()),
+    };
+    Some(format!(
+        "git does not ignore `linked/`, so the links in it could be committed; {fix}"
+    ))
 }
 
 /// `linked` and every path under it in the git index: the staged snapshot

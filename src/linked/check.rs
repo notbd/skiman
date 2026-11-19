@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::summary::About;
-use super::{Holder, Linked, State};
+use super::{Holder, Linked};
 use crate::layout::Layout;
 use crate::manifest::Manifest;
 use crate::rules::{Violation, frontmatter, rule, skill_body};
@@ -28,28 +28,20 @@ pub fn warnings(
     let enabled = manifest.enabled_tools();
     let mut out = Vec::new();
     for folder in &linked.folders {
-        // What cannot be read now, as sync and `doctor` say it.
+        // What cannot be read now and the problems among its entries, as
+        // sync and `doctor` say them.
         out.extend(
-            super::canon::folder_items(linked, folder)
+            super::canon::folder_items(linked, folder, kept)
                 .into_iter()
                 .filter_map(|item| match item.kind {
                     ItemKind::Linked {
-                        what: "unreadable" | "unprobed",
+                        what: "unreadable" | "unprobed" | "entry",
                         message,
                         ..
                     } => Some(message),
                     _ => None,
                 }),
         );
-        let State::Read(contents) = &folder.state else {
-            continue;
-        };
-        // A single skill's sub-folders are no part of its layout.
-        if !Linked::is_single(folder, kept) {
-            for (entry, problem) in &contents.problems {
-                out.push(format!("{} {problem}", entry.display()));
-            }
-        }
         for name in Linked::skill_names(folder, kept) {
             let path = folder.skill_dir(&name).join("SKILL.md");
             let bytes = match std::fs::read(&path) {

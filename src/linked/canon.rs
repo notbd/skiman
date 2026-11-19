@@ -2,11 +2,11 @@
 //! pointing at its registered path with `~` expanded. Every link in it is
 //! skiman's, under any name; nothing else in it is.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::{Folder, Linked, State};
+use super::{Folder, Holder, Linked, State};
 use crate::fsutil::{self, absolute_lexical, temporary_of};
 use crate::sync::{Change, Item, ItemKind, Report};
 use crate::test_hook;
@@ -197,9 +197,9 @@ fn occupied(path: &Path, id: &str) -> String {
 }
 
 /// Reports every linked folder that is not read in full ([`folder_items`]).
-pub fn report_folders(linked: &Linked, report: &mut Report) {
+pub fn report_folders(linked: &Linked, kept: &BTreeMap<String, Holder>, report: &mut Report) {
     for folder in &linked.folders {
-        report.items.extend(folder_items(linked, folder));
+        report.items.extend(folder_items(linked, folder, kept));
     }
 }
 
@@ -208,7 +208,14 @@ pub fn report_folders(linked: &Linked, report: &mut Report) {
 /// keyed by its path, so a changed path is reported again), or cannot be
 /// read (exit 3); or, when it was read, each skill whose `SKILL.md` cannot
 /// be probed (exit 3) and each problem among its entries (exit unchanged).
-pub fn folder_items(linked: &Linked, folder: &Folder) -> Vec<Item> {
+/// While the folder is one skill only through `kept`
+/// ([`Linked::is_single`]), its sub-folders are none of its skills or
+/// entries: only its own `SKILL.md` is reported.
+pub fn folder_items(
+    linked: &Linked,
+    folder: &Folder,
+    kept: &BTreeMap<String, Holder>,
+) -> Vec<Item> {
     let dir = linked.dir();
     let item = |path: PathBuf, what, message, attention| Item {
         scope: dir.display().to_string(),
@@ -246,15 +253,17 @@ pub fn folder_items(linked: &Linked, folder: &Folder) -> Vec<Item> {
             true,
         )],
         State::Read(contents) => {
+            let children = !Linked::is_single(folder, kept);
             let top = contents
                 .top_unprobed
                 .iter()
                 .map(|why| (id, why, path.clone()));
-            let children = contents
+            let below = contents
                 .unprobed
                 .iter()
+                .filter(|_| children)
                 .map(|(name, why)| (name, why, folder.skill_dir(name)));
-            let unprobed = top.chain(children).map(|(name, why, dir)| {
+            let unprobed = top.chain(below).map(|(name, why, dir)| {
                 item(
                     dir,
                     "unprobed",
@@ -264,14 +273,18 @@ pub fn folder_items(linked: &Linked, folder: &Folder) -> Vec<Item> {
                     true,
                 )
             });
-            let problems = contents.problems.iter().map(|(entry, problem)| {
-                item(
-                    entry.clone(),
-                    "entry",
-                    format!("{} {problem}", entry.display()),
-                    false,
-                )
-            });
+            let problems = contents
+                .problems
+                .iter()
+                .filter(|_| children)
+                .map(|(entry, problem)| {
+                    item(
+                        entry.clone(),
+                        "entry",
+                        format!("{} {problem}", entry.display()),
+                        false,
+                    )
+                });
             unprobed.chain(problems).collect()
         }
     }

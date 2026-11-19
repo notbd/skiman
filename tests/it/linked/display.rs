@@ -204,8 +204,9 @@ Not on this machine.
 
 /// While a single skill's top-level `SKILL.md` cannot be probed and the
 /// tool directories keep its link, `list`, `overview` and `doctor` all
-/// show it as the one skill it is, still distributed, and none shows its
-/// sub-folders (`kid`, and `solo/solo`, whose summary is not the skill's).
+/// show it as the one skill it is, still distributed, and none of them or
+/// sync shows its sub-folders (`kid`, and `solo/solo`, whose summary is
+/// not the skill's).
 #[test]
 fn a_single_skill_that_cannot_be_probed_shows_as_one_skill_everywhere() {
     use std::os::unix::fs::PermissionsExt;
@@ -222,6 +223,7 @@ fn a_single_skill_that_cannot_be_probed_shows_as_one_skill_everywhere() {
     let list = sandbox.skiman().arg("list").output().unwrap();
     let overview = sandbox.skiman().arg("overview").output().unwrap();
     let doctor = sandbox.skiman().arg("doctor").output().unwrap();
+    let sync = sandbox.skiman().arg("sync").output().unwrap();
     chmod(0o755).unwrap();
 
     let linked: Vec<Vec<String>> = cells(&list.stdout, &sandbox)
@@ -247,7 +249,13 @@ fn a_single_skill_that_cannot_be_probed_shows_as_one_skill_everywhere() {
         )),
         "{doctor}"
     );
-    for out in [&overview, &doctor] {
+    let sync = String::from_utf8(sync.stderr).unwrap();
+    assert!(
+        sync.contains("linked skill solo of `solo` is not checked ("),
+        "{sync}"
+    );
+    for out in [&overview, &doctor, &sync] {
         assert!(!out.contains("kid"), "{out}");
+        assert!(!out.contains("solo/solo"), "{out}");
     }
 }

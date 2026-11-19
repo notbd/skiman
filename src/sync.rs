@@ -374,10 +374,10 @@ pub fn reconcile(
             .errors
             .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
     }
-    linked::canon::report_folders(linked, &mut report);
+    let kept = kept_names(paths, repo, manifest, linked);
+    linked::canon::report_folders(linked, &kept, &mut report);
     let offered = linked::canon::reconcile(linked, &mut report);
     let ownership = Ownership::new(paths, repo, previous_canon);
-    let kept = kept_names(paths, repo, manifest, linked);
     let offers = |id: &str| offered.contains(id);
     let wanted = match wanted_entries(repo, manifest, linked, &kept, &offers, &mut report) {
         Ok(wanted) => wanted,

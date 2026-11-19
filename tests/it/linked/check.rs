@@ -266,29 +266,39 @@ fn check_warns_about_what_cannot_be_read_without_changing_the_exit() {
     }
 }
 
-/// While a single skill's top-level `SKILL.md` cannot be probed, its
-/// sub-folders are no linked skills for `check` either, as for sync, and
-/// their layout problems (an invalid name, a dangling link) are not shown.
+/// While a single skill's top-level `SKILL.md` cannot be probed and its
+/// link is kept, its sub-folders are no linked skills for `check`, sync or
+/// `doctor`: each says only that the single skill is not checked, and none
+/// shows a sub-folder's layout problem (an invalid name, a dangling link)
+/// or a sub-folder whose `SKILL.md` cannot be probed (`hidden`).
 #[test]
-fn check_reads_no_skill_below_a_single_skill_that_cannot_be_probed() {
+fn no_command_reads_below_a_single_skill_that_cannot_be_probed() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let locked = super::unprobed_single(&sandbox);
     let solo = sandbox.home().join("work/solo");
     write(solo.join("Bad_Name/SKILL.md"), skill_md("bad"));
     std::os::unix::fs::symlink(solo.join("nowhere"), solo.join("dangling")).unwrap();
+    std::fs::create_dir(solo.join("hidden")).unwrap();
+    std::os::unix::fs::symlink(locked.join("SKILL.md"), solo.join("hidden/SKILL.md")).unwrap();
     let chmod = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
 
     chmod(0o000).unwrap();
-    let output = sandbox.skiman().arg("check").output().unwrap();
+    let outputs = ["check", "sync", "doctor"].map(|command| {
+        let output = sandbox.skiman().arg(command).output().unwrap();
+        let text =
+            String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap();
+        (command, text)
+    });
     chmod(0o755).unwrap();
 
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(
-        stderr.contains("warning: linked skill solo of `solo` is not checked ("),
-        "{stderr}"
-    );
-    for child in ["kid", "Bad_Name", "dangling"] {
-        assert!(!stderr.contains(child), "{child}\n{stderr}");
+    for (command, text) in outputs {
+        assert!(
+            text.contains("linked skill solo of `solo` is not checked ("),
+            "{command}\n{text}"
+        );
+        for child in ["kid", "Bad_Name", "dangling", "hidden"] {
+            assert!(!text.contains(child), "{command}: {child}\n{text}");
+        }
     }
 }

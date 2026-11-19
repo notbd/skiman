@@ -215,7 +215,7 @@ fn report_linked(
             };
             out!("linked folder {}: {} ({skills})", folder.id, path.display());
         }
-        for item in linked::canon::folder_items(linked, folder) {
+        for item in linked::canon::folder_items(linked, folder, kept) {
             out!("{}", item.message());
         }
     }

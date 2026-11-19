@@ -118,14 +118,24 @@ pub fn check_not_taken(
     } else if exists(repo.upstream_dir(name)) && !ours(Taken::Snapshot)? {
         Some(format!("upstream/{name} already exists"))
     } else {
-        Linked::load(home, repo)?
-            .described(name)
-            .map(|(it, _)| format!("it is {it}"))
+        None
     };
     match reason {
-        Some(reason) => Err(Failure::refused(format!(
-            "the name `{name}` is taken: {reason}"
-        ))),
+        Some(reason) => Err(taken(name, &reason)),
+        None => check_not_linked(home, repo, name),
+    }
+}
+
+/// Refuses (exit 1) a linked skill's name, as [`check_not_taken`] does:
+/// for a command that finishes a run that stopped part-way, whose own
+/// records may hold the name.
+pub fn check_not_linked(home: &Path, repo: &Canon, name: &str) -> Result<(), Failure> {
+    match Linked::load(home, repo)?.described(name) {
+        Some((it, _)) => Err(taken(name, &format!("it is {it}"))),
         None => Ok(()),
     }
+}
+
+fn taken(name: &str, reason: &str) -> Failure {
+    Failure::refused(format!("the name `{name}` is taken: {reason}"))
 }

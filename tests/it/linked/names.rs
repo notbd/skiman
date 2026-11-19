@@ -534,3 +534,27 @@ fn a_single_skill_that_cannot_be_probed_lends_no_name_to_its_sub_folders() {
         );
     }
 }
+
+/// A canon in the state a rename to a linked skill's name would leave
+/// part-way (`beta/SKILL.md` names `alpha`): `mv beta alpha` refuses the
+/// name as a normal rename does, and nothing moves.
+#[test]
+fn finishing_a_rename_refuses_a_linked_skills_name() {
+    let sandbox = Sandbox::new();
+    let company = registered(&sandbox);
+    let beta = sandbox.canon().join("skills/beta/SKILL.md");
+    write(&beta, skill_md("beta"));
+    assert_eq!(sync(&sandbox).0, 0);
+    write(&beta, skill_md("beta").replace("name: beta", "name: alpha"));
+    let before = world(&sandbox, &company);
+
+    let (code, stderr) = run(&sandbox, &["mv", "beta", "alpha"]);
+
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("the name `alpha` is taken: it is a linked skill in "),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("finishing the rename"), "{stderr}");
+    assert_eq!(world(&sandbox, &company), before);
+}

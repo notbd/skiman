@@ -96,6 +96,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     }
     if new != old {
         if half_renamed(&repo, &from, old, new)? {
+            names::check_not_linked(paths.home(), &repo, new)?;
             out!("{from}/SKILL.md already names `{new}`: finishing the rename");
         } else {
             names::check_not_taken(paths.home(), &repo, new, |_| Ok(false))?;

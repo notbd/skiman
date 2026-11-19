@@ -4,17 +4,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use super::{append_manifest, folder};
+use super::{COMPANY, append_manifest, folder, sync};
 use crate::support::{Sandbox, Tool, init, skill_md, tree, write};
-
-/// Runs `skiman sync` and returns its exit code and stderr.
-fn sync(sandbox: &Sandbox) -> (i32, String) {
-    let output = sandbox.skiman().arg("sync").output().unwrap();
-    (
-        output.status.code().unwrap(),
-        String::from_utf8(output.stderr).unwrap(),
-    )
-}
 
 fn target(sandbox: &Sandbox, name: &str) -> std::path::PathBuf {
     std::fs::read_link(sandbox.tool_dir(Tool::ClaudeCode).join(name)).unwrap()
@@ -38,7 +29,7 @@ fn a_canon_skill_enabled_or_not_wins_over_a_linked_skill() {
     }
     append_manifest(&sandbox, "\n[skills.docx]\nenabled = false\n");
     let company = folder(&sandbox, "work/company", &["pdf", "docx", "alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
 
     let (code, stderr) = sync(&sandbox);
 
@@ -80,7 +71,7 @@ fn a_group_folder_wins_over_a_linked_skill() {
         "work/company",
         &["third-party", "tstack", "alpha"],
     );
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
 
     let (code, stderr) = sync(&sandbox);
 
@@ -140,7 +131,7 @@ fn an_occupied_name_whose_link_resolves_to_the_same_folder_says_it_is_safe_to_de
     let company = folder(&sandbox, "work/company", &["alpha"]);
     let old = sandbox.tool_dir(Tool::ClaudeCode).join("alpha");
     std::os::unix::fs::symlink(company.join("alpha"), &old).unwrap();
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
 
     let (code, stderr) = sync(&sandbox);
 
@@ -172,7 +163,7 @@ fn a_foreign_link_into_a_registered_folder_gets_no_adopt_hint() {
     let dir = sandbox.tool_dir(Tool::ClaudeCode);
     std::os::unix::fs::symlink(company.join("alpha"), dir.join("old-alpha")).unwrap();
     std::os::unix::fs::symlink(other.join("beta"), dir.join("beta")).unwrap();
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
 
     let (code, stderr) = sync(&sandbox);
 
@@ -224,7 +215,7 @@ fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String) {
 /// initialised canon and syncs; returns the folder and sync's exit code.
 fn register(sandbox: &Sandbox) -> (PathBuf, i32) {
     let company = folder(sandbox, "work/company", &["alpha", "pdf"]);
-    append_manifest(sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(sandbox, COMPANY);
     (company, sync(sandbox).0)
 }
 

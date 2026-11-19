@@ -4,23 +4,15 @@
 
 use std::os::unix::fs::symlink;
 
-use super::{append_manifest, folder};
+use super::{COMPANY, append_manifest, folder, sync};
 use crate::support::{Sandbox, Tool, assert_each_kill_finishes, exists, init, read};
 
 fn company() -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
     folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     sandbox
-}
-
-fn sync(sandbox: &Sandbox) -> (i32, String) {
-    let output = sandbox.skiman().arg("sync").output().unwrap();
-    (
-        output.status.code().unwrap(),
-        String::from_utf8(output.stderr).unwrap(),
-    )
 }
 
 /// `linked` that is a link or a file is reported, and no linked skill is
@@ -102,7 +94,7 @@ fn a_sync_killed_while_it_retargets_linked_id_finishes_when_run_again() {
             init(sandbox);
             folder(sandbox, "work/company", &["alpha"]);
             folder(sandbox, "moved/company", &["alpha"]);
-            append_manifest(sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+            append_manifest(sandbox, COMPANY);
             sandbox.skiman().arg("sync").output().unwrap();
             let manifest = sandbox.canon().join("skiman.toml");
             let text = read(&manifest).replace("~/work/company", "~/moved/company");

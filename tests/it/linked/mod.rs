@@ -31,6 +31,19 @@ pub fn folder(sandbox: &Sandbox, rel: &str, names: &[&str]) -> PathBuf {
     dir
 }
 
+/// The table that registers [`folder`] `work/company` as `company`, as
+/// [`append_manifest`] adds it.
+pub const COMPANY: &str = "\n[linked.company]\npath = \"~/work/company\"\n";
+
+/// Runs `skiman sync` and returns its exit code and stderr.
+pub fn sync(sandbox: &Sandbox) -> (i32, String) {
+    let output = sandbox.skiman().arg("sync").output().unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
 /// Appends `text` to the canon's `skiman.toml`, as a user editing it by hand.
 pub fn append_manifest(sandbox: &Sandbox, text: &str) {
     let path = sandbox.canon().join("skiman.toml");

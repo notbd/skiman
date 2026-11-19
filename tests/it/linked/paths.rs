@@ -5,7 +5,7 @@
 use std::os::unix::fs::symlink;
 use std::path::Path;
 
-use super::{append_manifest, contents, folder};
+use super::{COMPANY, append_manifest, contents, folder, sync};
 use crate::support::{Sandbox, Tool, exists, init, read, skill_md, write};
 
 fn linked_add(sandbox: &Sandbox, path: &Path) -> (i32, String) {
@@ -15,14 +15,6 @@ fn linked_add(sandbox: &Sandbox, path: &Path) -> (i32, String) {
         .arg(path)
         .output()
         .unwrap();
-    (
-        output.status.code().unwrap(),
-        String::from_utf8(output.stderr).unwrap(),
-    )
-}
-
-fn sync(sandbox: &Sandbox) -> (i32, String) {
-    let output = sandbox.skiman().arg("sync").output().unwrap();
     (
         output.status.code().unwrap(),
         String::from_utf8(output.stderr).unwrap(),
@@ -218,7 +210,7 @@ fn child_links_into_home_or_a_tool_directory_are_not_distributed() {
     ] {
         symlink(target, company.join(name)).unwrap();
     }
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     let before = contents(&[&company, &independent]);
 
     let (code, stderr) = sync(&sandbox);
@@ -255,7 +247,7 @@ fn a_tool_directory_that_resolves_into_a_linked_folder_is_skipped() {
         skill_md("notes"),
     );
     let company = folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     assert_eq!(sync(&sandbox).0, 0);
     let codex = sandbox.tool_dir(Tool::Codex);
     std::fs::remove_dir_all(&codex).unwrap();
@@ -295,7 +287,7 @@ fn a_presence_directory_that_resolves_into_a_linked_folder_is_left_alone() {
         .assert()
         .code(0);
     let company = folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     assert_eq!(sync(&sandbox).0, 0);
     let claude = sandbox.presence_dir(Tool::ClaudeCode);
     std::fs::rename(&claude, company.join("claude")).unwrap();
@@ -346,7 +338,7 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let company = folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     let gitignore = sandbox.canon().join(".gitignore");
     std::fs::remove_file(&gitignore).unwrap();
     std::fs::write(company.join("gitignore"), "target\n").unwrap();
@@ -427,7 +419,7 @@ fn adopt_refuses_an_old_link_that_resolves_into_a_linked_folder() {
     let ext = sandbox.root().join("ext/tool");
     write(ext.join("SKILL.md"), skill_md("tool"));
     symlink(&ext, company.join("tool")).unwrap();
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     let claude = sandbox.tool_dir(Tool::ClaudeCode);
     symlink(company.join("alpha"), claude.join("old-alpha")).unwrap();
     symlink(&ext, claude.join("old-tool")).unwrap();
@@ -456,7 +448,7 @@ fn adopt_refuses_while_a_linked_folder_cannot_be_read() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let company = folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     write(
         sandbox.tool_dir(Tool::ClaudeCode).join("beta/SKILL.md"),
         skill_md("beta"),

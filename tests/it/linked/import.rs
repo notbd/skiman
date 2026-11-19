@@ -6,10 +6,8 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
-use super::{append_manifest, contents, folder};
+use super::{COMPANY, append_manifest, contents, folder};
 use crate::support::{Sandbox, Tool, backup_dirs, import, read, setup, skill_md, tree, write};
-
-const COMPANY: &str = "\n[linked.company]\npath = \"~/work/company\"\n";
 
 /// The canon, the machine state, every presence and tool directory, and
 /// the linked folder `company`: a refused import changes none of them.

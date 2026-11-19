@@ -1,7 +1,7 @@
 //! The `/linked/` line of the canon's `.gitignore` (spec "`.gitignore`")
 //! and the working-tree warning of `skiman check`.
 
-use super::{append_manifest, folder};
+use super::{COMPANY, append_manifest, folder};
 use crate::support::{Sandbox, init, read};
 
 fn linked_add(sandbox: &Sandbox, rel: &str) -> snapbox::cmd::OutputAssert {
@@ -103,7 +103,7 @@ fn check_warns_while_linked_is_not_ignored() {
     std::fs::write(repo.join(".gitignore"), ".skiman/\n").unwrap();
     sandbox.skiman().arg("check").assert().code(0).stderr_eq("");
 
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     sandbox
         .skiman()
         .arg("check")

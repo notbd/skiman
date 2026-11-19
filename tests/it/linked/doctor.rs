@@ -2,7 +2,7 @@
 //! problem sync would report (missing, breaking a rule, a collision,
 //! `linked/` or `linked/<id>` blocked), without changing anything.
 
-use super::{append_manifest, contents, folder};
+use super::{COMPANY, append_manifest, contents, folder};
 use crate::support::{Sandbox, init, skill_md, tree, write};
 
 fn doctor(sandbox: &Sandbox) -> String {
@@ -90,7 +90,7 @@ fn doctor_reports_linked_that_is_a_file() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     let linked = sandbox.canon().join("linked");
     std::fs::write(&linked, "x").unwrap();
 

@@ -6,7 +6,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use super::{append_manifest, folder};
+use super::{COMPANY, append_manifest, folder};
 use crate::support::{Sandbox, Tool, exists, init, read, skill_md, write};
 
 fn chmod(path: &Path, mode: u32) {
@@ -32,7 +32,7 @@ fn company() -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
     folder(&sandbox, "work/company", &["alpha", "beta"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     assert_eq!(sync(&sandbox, &["sync"]).0, 0);
     sandbox
 }

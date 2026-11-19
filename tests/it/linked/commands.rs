@@ -2,7 +2,7 @@
 
 use snapbox::str;
 
-use super::{contents, folder};
+use super::{COMPANY, contents, folder};
 use crate::support::{Sandbox, Tool, init, read, write};
 
 /// `rel` below `HOME`, as the shell expands `~/<rel>`.
@@ -39,10 +39,7 @@ linked [..]/home/.gemini/config/skills/alpha
 
 "#]]);
     let manifest = read(sandbox.canon().join("skiman.toml"));
-    assert!(
-        manifest.ends_with("\n[linked.company]\npath = \"~/work/company\"\n"),
-        "{manifest}"
-    );
+    assert!(manifest.ends_with(COMPANY), "{manifest}");
 
     std::fs::remove_file(sandbox.tool_dir(Tool::Codex).join("alpha")).unwrap();
     linked_add(&sandbox, &[&company])

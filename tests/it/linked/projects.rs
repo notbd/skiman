@@ -5,7 +5,7 @@
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 
-use super::{append_manifest, contents};
+use super::{COMPANY, append_manifest, contents};
 use crate::support::{Sandbox, Tool, exists, init, read, skill_md, write};
 
 const OLD: &str = "# old\n";
@@ -190,7 +190,7 @@ fn an_unlistable_folder_pauses_project_items_but_not_distribution() {
     let sandbox = adopted(&["AGENTS.md"], &[]);
     let company = work(&sandbox, "company");
     write(company.join("alpha/SKILL.md"), skill_md("alpha"));
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    append_manifest(&sandbox, COMPANY);
     write(
         sandbox.canon().join("skills/notes/SKILL.md"),
         skill_md("notes"),

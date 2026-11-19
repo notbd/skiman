@@ -1,7 +1,8 @@
 //! What `skiman check` on the working tree warns about linked skills (spec
-//! "Checks", user story 14): problems inside them, the names they share and
-//! a `[skills.<name>]` table that names one. Warnings only, never a
-//! violation: the canon cannot fix content it does not hold.
+//! "Checks", user story 14): problems inside them, what cannot be read
+//! now, the names they share and a `[skills.<name>]` table that names one.
+//! Warnings only, never a violation: the canon cannot fix content it does
+//! not hold.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -10,12 +11,14 @@ use super::{Holder, Linked, State};
 use crate::layout::Layout;
 use crate::manifest::Manifest;
 use crate::rules::{Violation, frontmatter, rule, skill_body};
+use crate::sync::ItemKind;
 
 /// After a frontmatter that does not parse.
 const UNPARSABLE: &str = "; Antigravity drops a skill whose frontmatter does not parse";
 
-/// Every warning, in id and then name order, then the collisions (`kept`
-/// from [`crate::sync::kept_names`]), then the `[skills.<name>]` tables.
+/// Every warning, in id and then name order (what cannot be read first),
+/// then the collisions (`kept` from [`crate::sync::kept_names`]), then the
+/// `[skills.<name>]` tables.
 pub fn warnings(
     linked: &Linked,
     manifest: &Manifest,
@@ -25,6 +28,19 @@ pub fn warnings(
     let enabled = manifest.enabled_tools();
     let mut out = Vec::new();
     for folder in &linked.folders {
+        // What cannot be read now, as sync and `doctor` say it.
+        out.extend(
+            super::canon::folder_items(linked, folder)
+                .into_iter()
+                .filter_map(|item| match item.kind {
+                    ItemKind::Linked {
+                        what: "unreadable" | "unprobed",
+                        message,
+                        ..
+                    } => Some(message),
+                    _ => None,
+                }),
+        );
         let State::Read(contents) = &folder.state else {
             continue;
         };

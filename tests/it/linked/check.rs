@@ -228,3 +228,40 @@ fn check_warns_about_linked_skills_without_changing_the_exit_status() {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("/work/"), "{stderr}");
 }
+
+/// `check` on the working tree warns, as sync and `doctor` report, about a
+/// linked skill whose `SKILL.md` cannot be probed and a linked folder that
+/// cannot be read; the exit status stays what it was.
+#[test]
+fn check_warns_about_what_cannot_be_read_without_changing_the_exit() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = super::folder(&sandbox, "work/company", &["alpha", "beta"]);
+    let acme = super::folder(&sandbox, "work/acme", &["gamma"]);
+    append_manifest(
+        &sandbox,
+        "\n[linked.acme]\npath = \"~/work/acme\"\n\n[linked.company]\npath = \"~/work/company\"\n",
+    );
+    assert_eq!(super::sync(&sandbox).0, 0);
+    let check = || sandbox.skiman().arg("check").output().unwrap();
+    let clean = check();
+    let chmod = |path: &std::path::Path, mode| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+
+    chmod(&company.join("alpha"), 0o000);
+    chmod(&acme, 0o000);
+    let output = check();
+    chmod(&company.join("alpha"), 0o755);
+    chmod(&acme, 0o755);
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), clean.status.code(), "{stderr}");
+    for line in [
+        "warning: linked skill alpha of `company` is not checked (",
+        "warning: linked folder `acme` is not read (",
+    ] {
+        assert!(stderr.contains(line), "{line}\n{stderr}");
+    }
+}

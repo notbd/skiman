@@ -683,8 +683,10 @@ pub fn installed_tools<'a>(
 
 /// The names that links [`Linked::keeper`] keeps in the installed tool
 /// directories, with what keeps each: a transient read error never hands
-/// a name to another skill. Reads the tool directories only while some
-/// link may be kept. Sync and every command that shows a winner use it.
+/// a name to another skill. A [`Holder::Single`] link in any tool
+/// directory decides the name, whatever the others hold. Reads the tool
+/// directories only while some link may be kept. Sync and every command
+/// that shows a winner use it.
 pub fn kept_names(
     paths: &Paths,
     repo: &Canon,
@@ -707,7 +709,10 @@ pub fn kept_names(
                 && let Some(holder) = linked.keeper(&target)
             {
                 let name = fsutil::temporary_of(&name).unwrap_or(&name);
-                kept.insert(name.to_string_lossy().into_owned(), holder);
+                let name = name.to_string_lossy().into_owned();
+                if !matches!(kept.get(&name), Some(Holder::Single(_))) {
+                    kept.insert(name, holder);
+                }
             }
         }
     }

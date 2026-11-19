@@ -265,6 +265,14 @@ fn commands_that_act_on_a_skill_work_on_a_canon_skill_that_collides_with_a_linke
     assert_eq!(code, 0, "{stderr}");
     assert!(!sandbox.skill_repo().join("skills/office/pdf").exists());
     assert_eq!(target(&sandbox, "pdf"), linked.join("company/pdf"));
+
+    // A leftover record under a linked skill's name is still the canon's to clean up.
+    append_manifest(&sandbox, "\n[skills.alpha]\nsummary = \"Alpha\"\n");
+    let (code, stderr) = run(&sandbox, &["remove", "alpha", "--yes"]);
+    assert_eq!(code, 0, "{stderr}");
+    let manifest = std::fs::read_to_string(sandbox.skill_repo().join("skiman.toml")).unwrap();
+    assert!(!manifest.contains("[skills.alpha]"), "{manifest}");
+    assert_eq!(target(&sandbox, "alpha"), linked.join("company/alpha"));
 }
 
 /// The commands that create a name refuse a linked skill's name, whether

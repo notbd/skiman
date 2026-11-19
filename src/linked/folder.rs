@@ -33,7 +33,7 @@ pub struct Contents {
 /// Why a whole folder cannot be read: its links and names stay as they are.
 pub type ReadError = String;
 
-/// Reads the folder at `dir` (the registered path, `~` expanded).
+/// Reads the folder at `dir`, the registered path's realpath.
 /// `breaks` says why a child link's path breaks the path rules.
 pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Contents, ReadError> {
     let cannot = |what: &Path, e: io::Error| format!("cannot read {}: {e}", what.display());
@@ -115,7 +115,11 @@ fn child_link(
         return false;
     }
     // The entry itself is the first link met; it is in the linked folder.
-    let broken = resolved.links[1..]
+    // None at all: the entry stopped being a link since it was listed.
+    let broken = resolved
+        .links
+        .get(1..)
+        .unwrap_or_default()
         .iter()
         .chain([&resolved.path])
         .find_map(|path| breaks(path));

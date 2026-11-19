@@ -84,6 +84,25 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         State::Broken(why) => return Err(Failure::refused(why.clone())),
         State::Unreadable(why) => return Err(Failure::operational(why.clone())),
     }
+    // Nor may it take the place of a registration that works now.
+    if new {
+        let current = Linked::read(home, &repo, &manifest);
+        for was in current
+            .folders
+            .iter()
+            .filter(|f| !matches!(f.state, State::Broken(_)))
+        {
+            if let Some(now) = linked.folders.iter().find(|f| f.id == was.id)
+                && let State::Broken(why) = &now.state
+            {
+                return Err(Failure::refused(format!(
+                    "{} cannot be registered as `{id}`: it would break linked folder `{}` ({why})",
+                    absolute.display(),
+                    now.id
+                )));
+            }
+        }
+    }
     let gitignore = repo.root().join(".gitignore");
     match gitignore::ignore(repo.root())? {
         gitignore::Outcome::Link => {

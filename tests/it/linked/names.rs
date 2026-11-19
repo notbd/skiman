@@ -142,6 +142,17 @@ fn a_foreign_link_into_a_registered_folder_gets_no_adopt_hint() {
     );
     assert!(stderr.contains(&line), "{line}\n{stderr}");
     assert!(!stderr.contains("adopt old-alpha"), "{stderr}");
+
+    // Nor does `init`, with or without skills in the canon.
+    std::fs::remove_file(dir.join("beta")).unwrap();
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.skill_repo())
+        .output()
+        .unwrap();
+    let init_stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!init_stderr.contains("hint:"), "{init_stderr}");
     let line = format!(
         "warning: foreign skill {} is not managed by skiman; bring it in with `skiman adopt beta --from claude-code`, or register the folder it is in with `skiman linked add {}`",
         dir.join("beta").display(),

@@ -314,3 +314,40 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     );
     assert_eq!(contents(&[&company]), before);
 }
+
+/// A new registration that would take the place of an existing one (its id
+/// sorts first and the folders overlap) is refused: the existing one keeps
+/// working and nothing is written.
+#[test]
+fn linked_add_refuses_a_folder_that_would_break_an_existing_registration() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha", "beta"]);
+    append_manifest(
+        &sandbox,
+        "\n[linked.zeta]\npath = \"~/work/company/beta\"\n",
+    );
+    assert_eq!(sync(&sandbox).0, 0);
+    let before = records(&sandbox);
+
+    let output = sandbox
+        .skiman()
+        .args(["linked", "add", "--id", "alpha"])
+        .arg(&company)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("it would break linked folder `zeta`"),
+        "{stderr}"
+    );
+    assert_eq!(records(&sandbox), before);
+    assert!(
+        sandbox
+            .tool_dir(Tool::ClaudeCode)
+            .join("zeta/SKILL.md")
+            .is_file()
+    );
+}

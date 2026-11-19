@@ -25,53 +25,39 @@ fn no_command_writes_inside_a_linked_folder() {
     write(work.join("AGENTS.md"), "# work\n");
     let before = contents(&[&company, &independent]);
     let path = |p: &std::path::Path| p.display().to_string();
-    let steps: Vec<Vec<String>> = vec![
-        vec!["linked".into(), "add".into(), path(&company)],
-        vec!["linked".into(), "add".into(), path(&company)],
-        vec!["sync".into()],
-        vec!["sync".into(), "--hook".into()],
-        vec!["check".into()],
-        vec!["doctor".into()],
-        vec!["list".into()],
-        vec!["overview".into()],
-        vec![
-            "new".into(),
-            "notes".into(),
-            "-d".into(),
-            "Takes notes".into(),
-        ],
-        vec!["project".into(), "add".into(), path(&work)],
-        vec!["project".into(), "adopt".into(), "--yes".into()],
-        vec![
-            "project".into(),
-            "adopt".into(),
-            "--yes".into(),
-            path(&company.join("AGENTS.md")),
-        ],
-        vec![
-            "project".into(),
-            "restore".into(),
-            "--yes".into(),
-            path(&work),
-        ],
-        vec![
-            "init".into(),
-            "--session-hooks".into(),
-            "claude-code".into(),
-            path(&sandbox.skill_repo()),
-        ],
-        vec![
-            "init".into(),
-            "--session-hooks".into(),
-            "none".into(),
-            path(&sandbox.skill_repo()),
-        ],
-        vec!["remove".into(), "notes".into(), "--yes".into()],
-        vec!["linked".into(), "remove".into(), "company".into()],
+    let (repo, agents) = (
+        path(&sandbox.skill_repo()),
+        path(&company.join("AGENTS.md")),
+    );
+    let (company_path, work_path) = (path(&company), path(&work));
+    // Each command and the exit it must end with, so none passes by doing nothing.
+    let steps: [(&[&str], i32); 17] = [
+        (&["linked", "add", &company_path], 0),
+        (&["linked", "add", &company_path], 0),
+        (&["sync"], 0),
+        (&["sync", "--hook"], 0),
+        (&["check"], 0),
+        (&["doctor"], 0),
+        (&["list"], 0),
+        (&["overview"], 0),
+        (&["new", "notes", "-d", "Takes notes"], 0),
+        (&["project", "add", &work_path], 0),
+        (&["project", "adopt", "--yes"], 0),
+        // Named exactly, the item that overlaps the folder is skipped.
+        (&["project", "adopt", "--yes", &agents], 1),
+        (&["project", "restore", "--yes", &work_path], 0),
+        (&["init", "--session-hooks", "claude-code", &repo], 0),
+        (&["init", "--session-hooks", "none", &repo], 0),
+        (&["remove", "notes", "--yes"], 0),
+        (&["linked", "remove", "company"], 0),
     ];
-    for args in steps {
-        let output = sandbox.skiman().args(&args).output().unwrap();
-        assert!(output.status.code().is_some(), "{args:?}: {output:?}");
+    for (args, code) in steps {
+        let output = sandbox.skiman().args(args).output().unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "skiman {args:?}: {output:?}"
+        );
         assert_eq!(
             contents(&[&company, &independent]),
             before,

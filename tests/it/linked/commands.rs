@@ -204,3 +204,26 @@ fn linked_remove_works_when_the_folder_is_gone() {
     assert!(!read(sandbox.skill_repo().join("skiman.toml")).contains("[linked"));
     assert!(std::fs::symlink_metadata(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).is_err());
 }
+
+/// A `linked add` killed right before it writes `skiman.toml` (after the
+/// `.gitignore` line) is finished by running it again.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_linked_add_killed_before_its_record_finishes_when_run_again() {
+    crate::support::assert_each_kill_finishes(
+        |sandbox| {
+            init(sandbox);
+            std::fs::write(sandbox.skill_repo().join(".gitignore"), ".skiman/\n").unwrap();
+            let company = folder(sandbox, "work/company", &["alpha"]);
+            vec![
+                "linked".to_owned(),
+                "add".to_owned(),
+                company.display().to_string(),
+            ]
+        },
+        &["linked:write:skiman.toml"],
+    );
+}

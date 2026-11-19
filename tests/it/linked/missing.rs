@@ -82,7 +82,8 @@ fn a_missing_folder_is_reported_once_its_links_go_and_come_back_with_it() {
 /// the links there. The next good sync converges.
 #[test]
 fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
-    for mode in [0o000, 0o444] {
+    // Not listed or entered; listed, not entered; entered, not listed.
+    for mode in [0o000, 0o444, 0o111] {
         let sandbox = company();
         let company = sandbox.home().join("work/company");
         let linked = sandbox.skill_repo().join("linked");

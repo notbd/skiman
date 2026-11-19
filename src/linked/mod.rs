@@ -93,7 +93,8 @@ impl Linked {
             if let State::Read(_) = folders[i].state {
                 let own = &folders[i];
                 let breaks = |p: &Path| child_breaks(p, own, &folders, &places);
-                let dir = own.path.as_ref().expect("a read folder has a path");
+                // The realpath: the first link met under it is the entry itself.
+                let dir = own.resolved.as_ref().expect("a read folder resolved");
                 let state = match folder::read(dir, &breaks) {
                     Ok(contents) => State::Read(contents),
                     Err(e) => State::Unreadable(e),

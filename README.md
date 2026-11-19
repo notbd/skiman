@@ -98,9 +98,12 @@ canon's and never writes into it.
   `new`, `add`, `adopt`, `import` and `mv` refuse to create a skill or a
   group folder with a linked skill's name.
 - skiman checks again, right before each write and after every wait for
-  your answer, that the write does not land in a linked folder; another
-  program that replaces a folder on the path with a symlink between that
-  check and the write can still redirect it.
+  your answer, that the write does not land in a linked folder. It does
+  not defend against another program that replaces a folder on the path
+  with a symlink in the milliseconds between that check and the write:
+  that would need every write made through folder handles (`openat`)
+  across the whole write protocol of
+  [ADR 0005](docs/adr/0005-no-crash-recovery-journal.md).
 - A name used by a skill in `skills/` and by a linked skill goes to the one
   in `skills/`; a group folder's name is taken the same way. Between two
   linked folders, the id that sorts first wins.

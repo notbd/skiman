@@ -197,8 +197,8 @@ fn alias_note<'a>(
 
 /// Each linked folder, and what sync would report about it: missing,
 /// breaking a rule, not read, a skill that loses its name or is withheld,
-/// and `linked/`
-/// or `linked/<id>` in the way. Nothing when no folder is registered.
+/// and `linked/` or `linked/<id>` in the way. Nothing when no folder is
+/// registered.
 fn report_linked(
     repo: &Canon,
     manifest: &Manifest,

@@ -429,8 +429,11 @@ pub fn reconcile(
                 dir,
                 real: &real,
             };
-            let names = (wanted.as_slice(), &kept);
-            reconcile_tool_dir(&tool_dir, repo, linked, names, &ownership, &mut report);
+            let names = Names {
+                wanted: &wanted,
+                kept: &kept,
+            };
+            reconcile_tool_dir(&tool_dir, repo, linked, &names, &ownership, &mut report);
             reconciled.push(real);
         }
     }
@@ -855,6 +858,13 @@ struct ToolDir<'a> {
     real: &'a Path,
 }
 
+/// The same for every tool directory in one sync: the entries it wants
+/// ([`wanted_entries`]) and the names kept links hold ([`kept_names`]).
+struct Names<'a> {
+    wanted: &'a [Wanted],
+    kept: &'a BTreeMap<String, Holder>,
+}
+
 /// Links every wanted entry in the tool directory and removes the owned
 /// entries nothing wants; owned links [`Linked::keeper`] keeps, and any
 /// owned link under a name one of them holds elsewhere (`kept`), stay
@@ -863,11 +873,12 @@ fn reconcile_tool_dir(
     tool_dir: &ToolDir,
     repo: &Canon,
     linked: &Linked,
-    (wanted, kept): (&[Wanted], &BTreeMap<String, Holder>),
+    names: &Names,
     ownership: &Ownership,
     report: &mut Report,
 ) {
     let ToolDir { tool, dir, real } = *tool_dir;
+    let Names { wanted, kept } = *names;
     let by_name: BTreeMap<&str, &Path> = wanted
         .iter()
         .map(|w| (w.name.as_str(), w.target.as_path()))

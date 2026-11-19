@@ -260,9 +260,21 @@ fn field<'m, 'a>(
         .find(|(k, _)| matches!(&k.data, YamlData::Value(Scalar::String(s)) if s == key))
 }
 
-/// Whether the node `value` of `yaml` is written in flow style (`{...}`).
+/// Whether the node `value` of `yaml` is written in flow style (`{...}`),
+/// after any node properties (an anchor `&a`, a tag `!t`) that may start
+/// its span.
 fn is_flow(yaml: &str, value: &MarkedYaml) -> bool {
-    yaml.chars().nth(value.span.start.index()) == Some('{')
+    let Some((at, _)) = yaml.char_indices().nth(value.span.start.index()) else {
+        return false;
+    };
+    let mut rest = yaml[at..].trim_start();
+    // A property runs to the next space or `{`.
+    while let Some(property) = rest.strip_prefix(['&', '!']) {
+        rest = property
+            .trim_start_matches(|c: char| !c.is_whitespace() && c != '{')
+            .trim_start();
+    }
+    rest.starts_with('{')
 }
 
 /// `text` as a double-quoted YAML string: `\`, `"` and every character

@@ -250,6 +250,52 @@ fn the_summary_lines_linked_add_prints_parse_once_applied() {
     assert!(!stderr.contains("bell"), "{stderr}");
 }
 
+/// A `metadata` flow map with an anchor or a tag is still a flow map: the
+/// advice says to rewrite it as a block map, and once applied the
+/// frontmatter parses and has its summary.
+#[test]
+fn a_flow_map_with_an_anchor_or_a_tag_gets_the_flow_map_advice() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("work/company");
+    let skills = [("anchored", "&meta "), ("tagged", "!!map ")];
+    for (name, property) in skills {
+        write(
+            dir.join(name).join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: Does {name} things.\nmetadata: {property}{{ other: \"x\" }}\n---\n"
+            ),
+        );
+    }
+
+    let output = linked_add(&sandbox, &[&dir])
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    for (name, property) in skills {
+        let path = dir.join(name).join("SKILL.md");
+        let line = format!("summary: \"Does {name} things.\"");
+        let advice = format!(
+            "{name}: `metadata` in {} is written on one line (a flow map); write it as a block map, one key per line, and add `{line}` to it",
+            path.display()
+        );
+        assert!(stdout.contains(&advice), "{advice}\n{stdout}");
+        let block = format!("metadata: {}\n  other: \"x\"\n  {line}\n", property.trim());
+        let text =
+            read(&path).replace(&format!("metadata: {property}{{ other: \"x\" }}\n"), &block);
+        std::fs::write(&path, text).unwrap();
+    }
+    let output = sandbox.skiman().arg("check").output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    for (name, _) in skills {
+        assert!(!stderr.contains(name), "{stderr}");
+    }
+}
+
 /// A literal `~/` (quoted, so the shell left it) means HOME, as for
 /// `project add`.
 #[test]

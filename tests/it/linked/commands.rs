@@ -1,0 +1,160 @@
+//! `skiman linked add` and `skiman linked remove` (spec "Commands").
+
+use snapbox::str;
+
+use super::{contents, folder};
+use crate::support::{Sandbox, Tool, init, read, write};
+
+/// `rel` below `HOME`, as the shell expands `~/<rel>`.
+fn home(sandbox: &Sandbox, rel: &str) -> String {
+    sandbox.home().join(rel).display().to_string()
+}
+
+fn linked_add(
+    sandbox: &Sandbox,
+    args: &[impl AsRef<std::ffi::OsStr>],
+) -> snapbox::cmd::OutputAssert {
+    sandbox.skiman().args(["linked", "add"]).args(args).assert()
+}
+
+#[test]
+fn linked_add_registers_the_folder_and_a_second_run_changes_no_record() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let before = contents(&[&company]);
+
+    linked_add(&sandbox, &[home(&sandbox, "work/company")])
+        .code(0)
+        .stdout_eq(str![[r#"
+registered linked folder company: ~/work/company
+its skills: alpha
+alpha has no `metadata.summary`; add these lines to the frontmatter of [..]/home/work/company/alpha/SKILL.md:
+  metadata:
+    summary: "Does alpha things"
+linked [..]/skill-repo/linked/company
+linked [..]/home/.claude/skills/alpha
+linked [..]/home/.agents/skills/alpha
+linked [..]/home/.gemini/config/skills/alpha
+
+"#]]);
+    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    assert!(
+        manifest.ends_with("\n[linked.company]\npath = \"~/work/company\"\n"),
+        "{manifest}"
+    );
+
+    std::fs::remove_file(sandbox.tool_dir(Tool::Codex).join("alpha")).unwrap();
+    linked_add(&sandbox, &[&company])
+        .code(0)
+        .stdout_eq(str![[r#"
+linked folder company is already registered: ~/work/company
+its skills: alpha
+alpha has no `metadata.summary`; add these lines to the frontmatter of [..]/home/work/company/alpha/SKILL.md:
+  metadata:
+    summary: "Does alpha things"
+linked [..]/home/.agents/skills/alpha
+
+"#]]);
+    assert_eq!(read(sandbox.skill_repo().join("skiman.toml")), manifest);
+    assert_eq!(contents(&[&company]), before);
+}
+
+#[test]
+fn the_same_id_with_another_path_is_refused() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    folder(&sandbox, "work/company", &["alpha"]);
+    folder(&sandbox, "other/company", &["beta"]);
+    linked_add(&sandbox, &[home(&sandbox, "work/company")]).code(0);
+    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+
+    linked_add(&sandbox, &[home(&sandbox, "other/company")])
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(str![[r#"
+error: skiman.toml already has [linked.company] for another path; to move that folder, change its `path` line, or run `skiman linked remove company` first
+
+"#]]);
+    assert_eq!(read(sandbox.skill_repo().join("skiman.toml")), manifest);
+}
+
+/// A folder called `skills` gets its parent's name, so `~/work/acme/skills`
+/// is `acme`.
+#[test]
+fn a_folder_called_skills_is_named_after_its_parent() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    folder(&sandbox, "work/Acme Corp/skills", &[]);
+
+    linked_add(&sandbox, &[home(&sandbox, "work/Acme Corp/skills")])
+        .code(0)
+        .stdout_eq(str![[r#"
+registered linked folder acme-corp: ~/work/Acme Corp/skills
+it holds no skill yet; the next sync links each skill added to it
+linked [..]/skill-repo/linked/acme-corp
+
+"#]]);
+}
+
+/// The lines `linked add` prints for each linked skill without a usable
+/// `metadata.summary` fit the frontmatter as it is: a `metadata` map that
+/// is there gets one line, an empty `summary` is replaced in place, and a
+/// shape where a line would make a duplicate key is named instead.
+#[test]
+fn linked_add_prints_the_summary_lines_each_skill_needs() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("work/company");
+    let skill = |name: &str, extra: &str| {
+        write(
+            dir.join(name).join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: Does {name} \"quoted\" things. And more.\n{extra}---\n\n# {name}\n"
+            ),
+        );
+    };
+    skill("plain", "");
+    skill("block", "metadata:\n    author: someone\n");
+    skill("empty", "metadata:\n  summary: \"\"\n");
+    skill("flow", "metadata: {author: someone}\n");
+    skill("number", "metadata:\n  summary: 3\n");
+    skill("scalar", "metadata: none\n");
+    skill(
+        "done",
+        "metadata:\n  summary: Already says what it is for\n",
+    );
+    write(
+        dir.join("broken/SKILL.md"),
+        "---\nname: broken\ndescription: [unclosed\n---\n",
+    );
+
+    // snapbox shows each `\` as `/`; the raw output has the YAML escapes.
+    let output = linked_add(&sandbox, &[home(&sandbox, "work/company")])
+        .code(0)
+        .stdout_eq(str![[r#"
+registered linked folder company: ~/work/company
+its skills: block, broken, done, empty, flow, number, plain, scalar
+block has no `metadata.summary`; add this line under `metadata:` in the frontmatter of [..]/home/work/company/block/SKILL.md:
+      summary: "Does block /"quoted/" things."
+broken: the frontmatter of [..]/home/work/company/broken/SKILL.md does not parse; fix the frontmatter first, then add `metadata.summary`
+empty has an empty `metadata.summary`; in the frontmatter of [..]/home/work/company/empty/SKILL.md, replace that line with:
+    summary: "Does empty /"quoted/" things."
+flow: `metadata` in [..]/home/work/company/flow/SKILL.md is written on one line (a flow map); write it as a block map, one key per line, and add `summary: "Does flow /"quoted/" things."` to it
+number: `metadata.summary` in [..]/home/work/company/number/SKILL.md is not a string; make it one, such as `summary: "Does number /"quoted/" things."`
+plain has no `metadata.summary`; add these lines to the frontmatter of [..]/home/work/company/plain/SKILL.md:
+  metadata:
+    summary: "Does plain /"quoted/" things."
+scalar: `metadata` in [..]/home/work/company/scalar/SKILL.md is not a map; make it one that holds `summary: "Does scalar /"quoted/" things."`
+...
+"#]])
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    assert!(
+        stdout.contains("\n    summary: \"Does plain \\\"quoted\\\" things.\"\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("/done/SKILL.md"), "{stdout}");
+}

@@ -15,6 +15,7 @@ use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, rewrite_atomic, write_atomic};
 use crate::git_hooks;
+use crate::linked::gitignore;
 use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -63,6 +64,14 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
         out!("created skill repo {}", path.display());
+    }
+    // A linked `.gitignore` keeps only the `.skiman/` handling above.
+    if gitignore::ignore(repo.root())? == gitignore::Outcome::Added && target == Target::Reuse {
+        out!(
+            "added {} to {}",
+            gitignore::LINE,
+            repo.root().join(".gitignore").display()
+        );
     }
     let previous_repo = UserConfig::load(&paths)
         .ok()
@@ -219,7 +228,8 @@ fn git_init(path: &Path) -> Result<(), Failure> {
 }
 
 /// `skills/`, an empty `instructions/shared.md`, `skiman.toml` listing the
-/// tools present right now, and the `.gitignore` entry for `.skiman/`.
+/// tools present right now, and the `.gitignore` entry for `.skiman/`
+/// (`init` adds the one for `linked/` next).
 fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(repo.skills_dir())?;
     let shared = repo.shared_body();

@@ -130,6 +130,30 @@ pub enum Command {
         #[command(subcommand)]
         command: ProjectCommand,
     },
+    /// Register folders of skills kept outside the canon, which skiman distributes and never writes
+    Linked {
+        #[command(subcommand)]
+        command: LinkedCommand,
+    },
+}
+
+/// `skiman linked <command>`; the logic lives in `commands::linked`.
+#[derive(Debug, Subcommand)]
+pub enum LinkedCommand {
+    /// Register a folder of skills (or one skill folder) and distribute its skills
+    Add {
+        /// The folder: one skill folder, or a folder whose child folders are skills
+        path: PathBuf,
+        /// Linked folder id, the name of `linked/<id>` in the canon [default: the folder name,
+        /// or its parent's name for a folder called `skills`]
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Stop distributing a linked folder: its table and every link it had go; its content stays
+    Remove {
+        /// The linked folder id
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -319,6 +343,10 @@ where
                 yes,
             } => commands::project::restore(paths, dry_run, yes),
             ProjectCommand::Eject { paths, yes } => commands::project::eject(paths, yes),
+        },
+        Command::Linked { command } => match command {
+            LinkedCommand::Add { path, id } => commands::linked::add(&path, id),
+            LinkedCommand::Remove { id } => commands::linked::remove(&id),
         },
     }
 }

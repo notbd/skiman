@@ -215,23 +215,47 @@ fn linked_path(id: &str, item: &Item) -> Result<String, String> {
 /// Everything else keeps its bytes, except a `projects` table written inline,
 /// which becomes a standard table (`subtable`).
 pub fn with_project(text: &str, id: &str, path: &str) -> Result<String, String> {
-    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    let mut table = Table::new();
-    table.insert("path", value(path));
-    table.decor_mut().set_prefix("\n");
-    let projects = subtable(doc.as_table_mut(), "projects").ok_or("`projects` is not a table")?;
-    projects.insert(id, Item::Table(table));
-    Ok(doc.to_string())
+    with_path_table(text, "projects", id, path)
 }
 
 /// `text` (a `skiman.toml`) without the `[projects.<id>]` table; the
 /// `[projects]` table goes too when it is left empty and implicit.
 pub fn without_project(text: &str, id: &str) -> Result<String, String> {
+    without_table(text, "projects", id)
+}
+
+/// `text` (a `skiman.toml`) with a new `[linked.<id>]` table holding `path`,
+/// as [`with_project`] adds a project root.
+pub fn with_linked(text: &str, id: &str, path: &str) -> Result<String, String> {
+    with_path_table(text, "linked", id, path)
+}
+
+/// `text` (a `skiman.toml`) without the `[linked.<id>]` table, as
+/// [`without_project`] removes a project root.
+pub fn without_linked(text: &str, id: &str) -> Result<String, String> {
+    without_table(text, "linked", id)
+}
+
+/// `text` with a new `[<section>.<id>]` table holding `path`.
+fn with_path_table(text: &str, section: &str, id: &str, path: &str) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    if let Some(projects) = doc.get_mut("projects").and_then(Item::as_table_like_mut) {
-        projects.remove(id);
-        if projects.is_empty() {
-            doc.remove("projects");
+    let mut table = Table::new();
+    table.insert("path", value(path));
+    table.decor_mut().set_prefix("\n");
+    let parent = subtable(doc.as_table_mut(), section)
+        .ok_or_else(|| format!("`{section}` is not a table"))?;
+    parent.insert(id, Item::Table(table));
+    Ok(doc.to_string())
+}
+
+/// `text` without the `[<section>.<id>]` table, and without `[<section>]`
+/// when that leaves it empty.
+fn without_table(text: &str, section: &str, id: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    if let Some(parent) = doc.get_mut(section).and_then(Item::as_table_like_mut) {
+        parent.remove(id);
+        if parent.is_empty() {
+            doc.remove(section);
         }
     }
     Ok(doc.to_string())

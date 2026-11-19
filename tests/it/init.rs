@@ -121,7 +121,7 @@ created skill repo [..]/skill-repo
 "#]]);
 
     assert!(repo.join("skills").is_dir());
-    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n/linked/\n");
     assert_eq!(read(repo.join(".git/config")), git_config);
     assert_eq!(read(repo.join(".git/HEAD")), head);
 }
@@ -234,9 +234,13 @@ fn init_on_a_reused_repo_adds_the_skiman_gitignore_entry_once() {
 
     init().stdout_eq(str![[r#"
 added .skiman/ to [..]/skill-repo/.gitignore
+added /linked/ to [..]/skill-repo/.gitignore
 ...
 "#]]);
-    assert_eq!(read(repo.join(".gitignore")), "target\n.skiman/\n");
+    assert_eq!(
+        read(repo.join(".gitignore")),
+        "target\n.skiman/\n/linked/\n"
+    );
     assert_eq!(read(repo.join("skiman.toml")), manifest);
     assert_eq!(
         sandbox.git(&repo, ["status", "--porcelain", "--untracked-files=all"]),
@@ -244,12 +248,15 @@ added .skiman/ to [..]/skill-repo/.gitignore
     );
 
     let out = init().get_output().stdout.clone();
-    assert!(!String::from_utf8_lossy(&out).contains("added .skiman/"));
-    assert_eq!(read(repo.join(".gitignore")), "target\n.skiman/\n");
+    assert!(!String::from_utf8_lossy(&out).contains("added"));
+    assert_eq!(
+        read(repo.join(".gitignore")),
+        "target\n.skiman/\n/linked/\n"
+    );
 
     std::fs::remove_file(repo.join(".gitignore")).unwrap();
     init();
-    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n/linked/\n");
 }
 
 /// A skill repo `init` reuses: `skiman.toml` in a git repo, no `.gitignore`.
@@ -281,7 +288,7 @@ fn init_swaps_in_a_new_gitignore_that_keeps_its_mode_and_leaves_a_hard_link_with
 
     init_reused(&sandbox).code(0);
 
-    assert_eq!(read(&gitignore), "target\n.skiman/\n");
+    assert_eq!(read(&gitignore), "target\n.skiman/\n/linked/\n");
     assert_eq!(
         read(&hard_link),
         "target\n",

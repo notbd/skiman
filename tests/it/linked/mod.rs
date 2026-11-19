@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::support::{Sandbox, skill_md, tree, write};
 
 mod check;
+mod commands;
 mod distribution;
 
 /// A folder of skills at `rel` below `HOME`, holding a skill for each of `names`.

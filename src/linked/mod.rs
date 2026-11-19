@@ -11,6 +11,7 @@
 
 pub mod canon;
 pub mod folder;
+pub mod gitignore;
 pub mod path;
 
 use std::collections::BTreeMap;
@@ -351,6 +352,37 @@ fn child_breaks(path: &Path, own: &Folder, all: &[Folder], places: &Places) -> O
         })
         .map(|f| format!("{} overlaps linked folder `{}`", path.display(), f.id))
 }
+
+/// The stand-in for a missing summary (ADR 0011): the first sentence of
+/// `description`, up to the first `.`, `!` or `?` followed by whitespace or
+/// the end, the first `。`, `！` or `？`, or the first line break, whichever
+/// comes first; cut to 120 characters with `…`.
+pub fn stand_in(description: &str) -> String {
+    let chars: Vec<char> = description.trim().chars().collect();
+    let mut end = chars.len();
+    for (i, c) in chars.iter().enumerate() {
+        let next_blank = chars.get(i + 1).is_none_or(|n| n.is_whitespace());
+        if matches!(c, '。' | '！' | '？') || (matches!(c, '.' | '!' | '?') && next_blank) {
+            end = i + 1;
+            break;
+        }
+        if matches!(c, '\n' | '\r') {
+            end = i;
+            break;
+        }
+    }
+    let sentence: String = chars[..end].iter().collect();
+    let sentence = sentence.trim();
+    if sentence.chars().count() > STAND_IN_MAX {
+        let cut: String = sentence.chars().take(STAND_IN_MAX - 1).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        sentence.to_owned()
+    }
+}
+
+/// The longest stand-in, in characters.
+const STAND_IN_MAX: usize = 120;
 
 /// Why `id` cannot name a linked folder; `None` when it can. An id follows
 /// the skill-name rule and is not reserved: a single-skill folder's skill

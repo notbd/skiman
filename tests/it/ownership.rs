@@ -483,6 +483,7 @@ fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_
         .code(0)
         .stdout_eq(str![[r#"
 added .skiman/ to [..]/skill-repo/.gitignore
+added /linked/ to [..]/skill-repo/.gitignore
 installed git hook [..]/skill-repo/.git/hooks/pre-commit
 installed git hook [..]/skill-repo/.git/hooks/post-commit
 installed git hook [..]/skill-repo/.git/hooks/post-merge

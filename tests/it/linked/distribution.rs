@@ -103,3 +103,216 @@ fn a_skill_added_to_or_deleted_from_the_folder_is_followed_by_the_next_sync() {
         assert!(dir.join("gamma/SKILL.md").is_file());
     }
 }
+
+/// Problems among a folder's entries are its own content's: each is
+/// reported with exit 0 and the rest of the folder, the canon's skills and
+/// the other linked folders sync as usual.
+#[test]
+fn reserved_invalid_and_dot_entries_are_not_distributed() {
+    let sandbox = two_folders();
+    let company = sandbox.home().join("work/company");
+    for name in ["managing-skills", "Bad_Name", ".hidden"] {
+        write(
+            company.join(name).join("SKILL.md"),
+            crate::support::skill_md(name),
+        );
+    }
+    write(
+        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        crate::support::skill_md("notes"),
+    );
+
+    let output = sandbox
+        .skiman()
+        .arg("sync")
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for name in ["managing-skills", "Bad_Name"] {
+        let line = format!(
+            "warning: {} linked skill folder is not distributed: ",
+            company.join(name).display()
+        );
+        assert!(stderr.contains(&line), "{stderr}");
+    }
+    assert!(!stderr.contains(".hidden"), "{stderr}");
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        for name in ["alpha", "beta", "solo", "notes"] {
+            assert!(dir.join(name).join("SKILL.md").is_file(), "{name}");
+        }
+        assert!(!exists(dir.join("Bad_Name")) && !exists(dir.join(".hidden")));
+        let managing = std::fs::read_link(dir.join("managing-skills")).unwrap();
+        assert!(
+            managing.ends_with(".skiman/managing-skills"),
+            "{managing:?}"
+        );
+    }
+}
+
+/// A child link that loops and one whose target is gone are no skills: each
+/// is reported (exit 0), and the dangling one's old link goes.
+#[test]
+fn a_looping_or_dangling_child_link_is_reported_and_not_distributed() {
+    let sandbox = two_folders();
+    let elsewhere = sandbox.root().join("elsewhere");
+    write(
+        elsewhere.join("gone/SKILL.md"),
+        crate::support::skill_md("gone"),
+    );
+    let company = sandbox.home().join("work/company");
+    std::os::unix::fs::symlink(elsewhere.join("gone"), company.join("gone")).unwrap();
+    std::os::unix::fs::symlink("loop", company.join("loop")).unwrap();
+    sandbox.skiman().arg("sync").assert().code(0);
+    assert!(
+        sandbox
+            .tool_dir(Tool::Codex)
+            .join("gone/SKILL.md")
+            .is_file()
+    );
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+
+    let output = sandbox
+        .skiman()
+        .arg("sync")
+        .assert()
+        .code(0)
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "{} is a link that loops",
+            company.join("loop").display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "{} is a dangling link to",
+            company.join("gone").display()
+        )),
+        "{stderr}"
+    );
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert!(!exists(dir.join("gone")) && !exists(dir.join("loop")));
+        assert!(dir.join("alpha/SKILL.md").is_file());
+    }
+}
+
+/// A sub-folder whose `SKILL.md` cannot be checked is never taken for
+/// absent: it keeps its link (exit 3), and the rest of the folder syncs.
+#[test]
+fn an_unreadable_sub_folder_keeps_its_link_and_needs_attention() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = two_folders();
+    sandbox.skiman().arg("sync").assert().code(0);
+    let company = sandbox.home().join("work/company");
+    write(
+        company.join("gamma/SKILL.md"),
+        crate::support::skill_md("gamma"),
+    );
+    let alpha = company.join("alpha");
+    std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let output = sandbox.skiman().arg("sync").output().unwrap();
+    std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("linked skill alpha of `company` is not checked"),
+        "{stderr}"
+    );
+    let linked = sandbox.skill_repo().join("linked/company");
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert_eq!(
+            std::fs::read_link(dir.join("alpha")).unwrap(),
+            linked.join("alpha")
+        );
+        assert!(dir.join("gamma/SKILL.md").is_file());
+    }
+}
+
+/// After `linked remove`, no link of the folder is left in the canon or in
+/// any tool directory.
+#[test]
+fn linked_remove_leaves_no_link_behind() {
+    let sandbox = two_folders();
+    sandbox.skiman().arg("sync").assert().code(0);
+    let before = contents(&[&sandbox.home().join("work")]);
+
+    sandbox
+        .skiman()
+        .args(["linked", "remove", "company"])
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+unregistered linked folder company: ~/work/company
+removed [..]/skill-repo/linked/company
+removed [..]/home/.claude/skills/alpha
+removed [..]/home/.claude/skills/beta
+removed [..]/home/.agents/skills/alpha
+removed [..]/home/.agents/skills/beta
+removed [..]/home/.gemini/config/skills/alpha
+removed [..]/home/.gemini/config/skills/beta
+
+"#]]);
+
+    assert!(!exists(sandbox.skill_repo().join("linked/company")));
+    assert!(!crate::support::read(sandbox.skill_repo().join("skiman.toml")).contains("company"));
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert!(!exists(dir.join("alpha")) && !exists(dir.join("beta")));
+        assert!(dir.join("solo/SKILL.md").is_file());
+    }
+    assert_eq!(contents(&[&sandbox.home().join("work")]), before);
+}
+
+/// A folder that moved needs only its `path` line: one link in the canon
+/// is retargeted and no tool-directory link changes, even for a single
+/// skill folder whose name changed with the move.
+#[test]
+fn a_moved_folder_needs_only_its_path_line() {
+    let sandbox = two_folders();
+    sandbox.skiman().arg("sync").assert().code(0);
+    let tool_links = || {
+        Tool::ALL
+            .iter()
+            .map(|tool| crate::support::tree(sandbox.tool_dir(*tool)))
+            .collect::<Vec<_>>()
+    };
+    let links = tool_links();
+    let home = sandbox.home();
+    std::fs::create_dir(home.join("moved")).unwrap();
+    std::fs::rename(home.join("work/company"), home.join("moved/company")).unwrap();
+    std::fs::rename(home.join("work/solo"), home.join("moved/solo-renamed")).unwrap();
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let text = crate::support::read(&manifest)
+        .replace("~/work/company", "~/moved/company")
+        .replace("~/work/solo", "~/moved/solo-renamed");
+    std::fs::write(&manifest, text).unwrap();
+
+    sandbox
+        .skiman()
+        .arg("sync")
+        .assert()
+        .code(0)
+        .stdout_eq(str![[r#"
+retargeted [..]/skill-repo/linked/company
+retargeted [..]/skill-repo/linked/solo
+
+"#]])
+        .stderr_eq("");
+
+    assert_eq!(tool_links(), links);
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert!(dir.join("alpha/SKILL.md").is_file() && dir.join("solo/SKILL.md").is_file());
+    }
+}

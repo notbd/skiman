@@ -118,7 +118,9 @@ fn a_mirror_folder_of_an_unknown_root_id_is_a_project_path_violation() {
 }
 
 /// What a removed `skill_dirs` key leaves in the mirror (ADR 0013): a
-/// skill folder outside every tool's project skill folder has no item shape.
+/// skill folder outside every tool's project skill folder has no item
+/// shape, and its files are not told to restore a configuration that is
+/// gone.
 #[test]
 fn a_former_skill_dirs_mirror_item_is_a_path_without_an_item_shape() {
     let (sandbox, _) = with_root();
@@ -126,12 +128,22 @@ fn a_former_skill_dirs_mirror_item_is_a_path_without_an_item_shape() {
         mirror(&sandbox, "work/lib/skills/tool/SKILL.md"),
         "# tool\n",
     );
+    write(
+        mirror(&sandbox, "work/lib/skills/tool/scripts/run.sh"),
+        "echo\n",
+    );
 
     let (code, stdout) = check(&sandbox);
     assert_eq!(code, 1);
+    let line = |path: &str| {
+        format!(
+            "{path}: project-path: belongs to no project item; it is left from the retired `skill_dirs` (a skill folder outside every project skill folder), so `git rm -r {path}`, and register the original folder with `skiman linked add` if it is still in use\n"
+        )
+    };
     assert_eq!(
         stdout,
-        "projects/work/lib/skills/tool/SKILL.md: project-path: belongs to no project item (an instruction file or a project skill); restore the configuration that made it one, or `git rm -r projects/work/lib/skills/tool/SKILL.md`\n"
+        line("projects/work/lib/skills/tool/SKILL.md")
+            + &line("projects/work/lib/skills/tool/scripts/run.sh")
     );
 }
 

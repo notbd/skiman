@@ -63,17 +63,39 @@ pub fn check_layout(
         }
         for stray in read_mirror_of(tree, id)?.strays {
             scan_files(tree, &stray, found)?;
-            out.insert(Violation::new(
-                &stray,
-                None,
-                rule::PROJECT_PATH,
+            let message = if in_skill_folder(tree, &entry.path, &stray)? {
+                format!(
+                    "belongs to no project item; it is left from the retired `skill_dirs` (a skill folder outside every project skill folder), so `git rm -r {stray}`, and register the original folder with `skiman linked add` if it is still in use"
+                )
+            } else {
                 format!(
                     "belongs to no project item (an instruction file or a project skill); restore the configuration that made it one, or `git rm -r {stray}`"
-                ),
-            ));
+                )
+            };
+            out.insert(Violation::new(&stray, None, rule::PROJECT_PATH, message));
         }
     }
     Ok(())
+}
+
+/// Whether the stray file `stray` lies in a folder below the mirror `base`
+/// that holds a `SKILL.md`: a skill folder that only the retired
+/// `skill_dirs` (ADR 0013) made an item, since every project skill folder
+/// has an item shape.
+fn in_skill_folder(tree: &dyn Tree, base: &str, stray: &str) -> io::Result<bool> {
+    let mut dir = stray;
+    while let Some((parent, _)) = dir.rsplit_once('/')
+        && parent.len() > base.len()
+    {
+        if matches!(
+            tree.kind(&format!("{parent}/SKILL.md"))?,
+            Some(Kind::File { .. })
+        ) {
+            return Ok(true);
+        }
+        dir = parent;
+    }
+    Ok(false)
 }
 
 /// The secret rule on every readable file at or below `path`, so content

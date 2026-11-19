@@ -6,7 +6,7 @@
 //! [`Linked::read`] reads every registration on this machine once per
 //! command; distribution, the project scope, `doctor` and the commands that
 //! move content into the canon ask it what they need: the skills, the write
-//! guard ([`Linked::blocks`]), what nothing may be moved out of
+//! guard ([`Linked::refusal`]), what nothing may be moved out of
 //! ([`Linked::reaches_into`]) and which project items overlap a folder.
 
 pub mod canon;
@@ -172,17 +172,12 @@ impl Linked {
             .find(|f| matches!(f.state, State::Unreadable(_)))
     }
 
-    /// The registered folder the project item at `path` overlaps (spec
-    /// "Project items"): [`Linked::reaches_into`] on the item's path
+    /// Why the project item at `path` is neither mirrored nor restored
+    /// (spec "Project items"): [`Linked::reaches_into`] on its path
     /// resolved link by link, so a missing item behind a chain of links is
     /// compared where the links lead.
-    pub fn overlapped_by(&self, path: &Path) -> Option<&Folder> {
-        self.reaches_into(&resolve(path).path)
-    }
-
-    /// Why the project item at `path` is neither mirrored nor restored.
     pub fn item_overlap(&self, path: &Path) -> Option<String> {
-        let folder = self.overlapped_by(path)?;
+        let folder = self.reaches_into(&resolve(path).path)?;
         Some(format!(
             "it overlaps linked folder `{}` ({}), whose content skiman never copies or writes",
             folder.id,

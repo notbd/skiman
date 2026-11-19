@@ -91,7 +91,15 @@ impl Linked {
                     folder.path = Some(path);
                     folder.state = check(&mut folder, &places, &folders);
                 }
-                Err(why) => folder.state = State::Broken(why),
+                Err(malformed) => {
+                    // Skipped, but the folder at a usable path stays protected.
+                    if let Some(written) = malformed.path {
+                        let path = expand(home, &written).expect("checked by is_path_form");
+                        folder.resolved = Some(resolve(&path).path);
+                        folder.path = Some(path);
+                    }
+                    folder.state = State::Broken(malformed.why);
+                }
             }
             folders.push(folder);
         }

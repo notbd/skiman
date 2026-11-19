@@ -169,8 +169,17 @@ pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkedEntry {
     pub id: String,
-    /// `path` as written when the table is well formed; otherwise why it is not.
-    pub path: Result<String, String>,
+    /// `path` as written when the table is well formed.
+    pub path: Result<String, Malformed>,
+}
+
+/// A `[linked.<id>]` table that is not well formed: it breaks the rules,
+/// but the folder at a usable `path` stays protected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Malformed {
+    pub why: String,
+    /// `path` as written, when it is a string of the path form.
+    pub path: Option<String>,
 }
 
 impl Manifest {
@@ -193,22 +202,27 @@ impl Manifest {
 }
 
 /// The `path` of a well-formed `[linked.<id>]` table, or what is wrong with it.
-fn linked_path(id: &str, item: &Item) -> Result<String, String> {
-    let table = item
-        .as_table_like()
-        .ok_or_else(|| format!("[linked.{id}] is not a table"))?;
-    if let Some(why) = crate::linked::invalid_id(id) {
-        return Err(why);
-    }
-    if let Some((key, _)) = table.iter().find(|(key, _)| *key != "path") {
-        return Err(format!("[linked.{id}] has the unknown key `{key}`"));
-    }
-    match table.get("path").and_then(Item::as_str) {
-        Some(path) if crate::linked::is_path_form(path) => Ok(path.to_owned()),
-        _ => Err(format!(
-            "`path` in [linked.{id}] must be a string: an absolute path or one starting with `~/`"
-        )),
-    }
+fn linked_path(id: &str, item: &Item) -> Result<String, Malformed> {
+    let table = item.as_table_like();
+    let path = table
+        .and_then(|t| t.get("path"))
+        .and_then(Item::as_str)
+        .filter(|p| crate::linked::is_path_form(p))
+        .map(str::to_owned);
+    let why = match table {
+        None => format!("[linked.{id}] is not a table"),
+        Some(_) if let Some(why) = crate::linked::invalid_id(id) => why,
+        Some(t) if let Some((key, _)) = t.iter().find(|(key, _)| *key != "path") => {
+            format!("[linked.{id}] has the unknown key `{key}`")
+        }
+        Some(_) => match path {
+            Some(path) => return Ok(path),
+            None => format!(
+                "`path` in [linked.{id}] must be a string: an absolute path or one starting with `~/`"
+            ),
+        },
+    };
+    Err(Malformed { why, path })
 }
 
 /// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.

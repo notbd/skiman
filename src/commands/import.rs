@@ -722,7 +722,7 @@ fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
         .iter()
         .map(|entry| match &entry.path {
             Ok(path) => format!("  skiman linked add {path} --id {}", entry.id),
-            Err(why) => format!("  [linked.{}]: {why}", entry.id),
+            Err(malformed) => format!("  [linked.{}]: {}", entry.id, malformed.why),
         })
         .collect();
     Err(Failure::refused(format!(

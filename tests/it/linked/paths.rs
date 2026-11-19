@@ -137,6 +137,60 @@ fn overlapping_and_malformed_registrations_break_the_rules() {
     }
 }
 
+/// A table that is not well formed (an unknown key, an invalid id) is
+/// skipped, but its path keeps the protection: sync writes nothing through
+/// a tool directory that resolves into the folder and gives an older
+/// script's link into it no adopt hint, and adopt refuses that link.
+#[test]
+fn a_malformed_registration_still_protects_its_folder() {
+    for (id, table) in [
+        (
+            "company",
+            "[linked.company]\npath = \"~/work/company\"\nnote = \"x\"\n",
+        ),
+        ("Company", "[linked.Company]\npath = \"~/work/company\"\n"),
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let company = folder(&sandbox, "work/company", &["pdf"]);
+        append_manifest(&sandbox, &format!("\n{table}"));
+        let claude = sandbox.tool_dir(Tool::ClaudeCode);
+        symlink(company.join("pdf"), claude.join("old")).unwrap();
+        let codex = sandbox.tool_dir(Tool::Codex);
+        std::fs::remove_dir_all(&codex).unwrap();
+        std::fs::create_dir(company.join("agents-skills")).unwrap();
+        symlink(company.join("agents-skills"), &codex).unwrap();
+        let before = contents(&[&company]);
+
+        let (code, stderr) = sync(&sandbox);
+
+        assert_eq!(code, 3, "{stderr}");
+        let skipped = format!("linked folder `{id}` is skipped: ");
+        assert!(stderr.contains(&skipped), "{skipped}\n{stderr}");
+        let line = format!(
+            "warning: {} resolves to {}, inside linked folder `{id}`",
+            codex.display(),
+            company.join("agents-skills").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert!(!stderr.contains("skiman adopt old"), "{stderr}");
+
+        let canon = crate::support::tree(sandbox.canon());
+        let (code, stderr) = run(
+            &sandbox,
+            &["adopt", "old", "--from", "claude-code", "--yes"],
+        );
+        assert_eq!(code, 1, "{stderr}");
+        let line = format!(
+            "{} resolves into linked folder `{id}`",
+            claude.join("old").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert_eq!(crate::support::tree(sandbox.canon()), canon);
+        assert_eq!(contents(&[&company]), before);
+    }
+}
+
 /// Child links that point at `~`, at a tool directory or at an entry of
 /// one break the path rules: each is reported and not distributed, and
 /// every tool directory syncs as usual. A child link to an independent

@@ -139,6 +139,49 @@ fn items_that_overlap_a_linked_folder_are_neither_mirrored_nor_restored() {
     assert_eq!(contents(&watched), before);
 }
 
+/// A table that is not well formed is skipped, but its path still keeps
+/// project items inside it from being mirrored or restored.
+#[test]
+fn items_inside_a_malformed_registration_are_neither_mirrored_nor_restored() {
+    let sandbox = adopted(&["AGENTS.md", "company/AGENTS.md"], &[]);
+    let company = work(&sandbox, "company");
+    write(company.join("alpha/SKILL.md"), skill_md("alpha"));
+    append_manifest(
+        &sandbox,
+        "\n[linked.company]\npath = \"~/work/company\"\nnote = \"x\"\n",
+    );
+    for rel in ["AGENTS.md", "company/AGENTS.md"] {
+        std::fs::write(work(&sandbox, rel), NEW).unwrap();
+    }
+
+    let (code, stderr) = run(&sandbox, &["sync"], &[]);
+
+    assert_eq!(code, 3, "{stderr}");
+    assert_eq!(read(mirror(&sandbox, "AGENTS.md")), NEW);
+    assert_eq!(read(mirror(&sandbox, "company/AGENTS.md")), OLD);
+    let item = work(&sandbox, "company/AGENTS.md");
+    let line = format!(
+        "{} is not synced: it overlaps linked folder `company`",
+        item.display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    let before = contents(&[&company]);
+    let (code, stderr) = run(
+        &sandbox,
+        &["project", "restore", "--yes"],
+        std::slice::from_ref(&item),
+    );
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "skip {}: it overlaps linked folder `company`",
+            item.display()
+        )),
+        "{stderr}"
+    );
+    assert_eq!(contents(&[&company]), before);
+}
+
 /// While a registered folder cannot be listed its child links are unknown:
 /// project items are not mirrored, adopted or restored, and distribution
 /// goes on.

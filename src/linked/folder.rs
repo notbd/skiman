@@ -89,7 +89,7 @@ pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Cont
         if let Some(reason) = not_eligible(&name) {
             contents.problems.push((
                 entry,
-                format!("linked skill folder is not distributed: {reason}"),
+                format!("is a linked skill folder that is not distributed: {reason}"),
             ));
             continue;
         }

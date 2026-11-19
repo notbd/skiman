@@ -132,7 +132,7 @@ fn reserved_invalid_and_dot_entries_are_not_distributed() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     for name in ["skiman-manual", "Bad_Name"] {
         let line = format!(
-            "warning: {} linked skill folder is not distributed: ",
+            "warning: {} is a linked skill folder that is not distributed: ",
             company.join(name).display()
         );
         assert!(stderr.contains(&line), "{stderr}");

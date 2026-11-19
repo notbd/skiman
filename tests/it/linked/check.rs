@@ -191,7 +191,7 @@ fn check_warns_about_linked_skills_without_changing_the_exit_status() {
             skill(&company, "delta").display()
         ),
         format!(
-            "warning: {} linked skill folder is not distributed: its name is not a valid skill name",
+            "warning: {} is a linked skill folder that is not distributed: its name is not a valid skill name",
             company.join("Bad_Name").display()
         ),
         format!(

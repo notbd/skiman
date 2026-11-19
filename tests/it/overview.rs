@@ -126,7 +126,7 @@ fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
         .stdout_eq(str![[r#"
 # Skills
 
-## In the skill repo (3)
+## In the canon (3)
 
 ### documents (1)
 
@@ -167,7 +167,7 @@ skiman lists these here and never changes them.
 
 ## Notes
 
-- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the skill repo, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
+- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the canon, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
 - Claude Code plugin kit@market 1.0: the skills path `./extra` leads outside the plugin.
 - `claude-code` also reads built-in skills that are not stored on disk; they are not listed.
 - `codex` also reads the skills of its plugins in `~/.codex/plugins`; they are not listed.

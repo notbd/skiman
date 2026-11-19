@@ -46,7 +46,7 @@ impl RepoLock {
         let configured = SkillRepo::from_config(paths)?;
         if configured.root() != repo.root() {
             return Err(Failure::operational(format!(
-                "the skill repo changed to {} while this command waited; nothing was changed, run it again",
+                "the canon changed to {} while this command waited; nothing was changed, run it again",
                 configured.root().display()
             )));
         }

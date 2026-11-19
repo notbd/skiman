@@ -529,7 +529,7 @@ fn init_with_a_foreign_skill_points_to_import_when_the_skill_repo_has_no_skills(
         .code(0)
         .stderr_eq(str![[r#"
 warning: foreign skill [..]/home/.claude/skills/theirs is not managed by skiman; bring it in with `skiman adopt theirs --from claude-code`
-hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)
+hint: the canon has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)
 
 "#]]);
 }
@@ -556,7 +556,7 @@ fn init_with_a_foreign_skill_points_to_adopt_when_the_skill_repo_has_skills() {
         .code(0)
         .stderr_eq(str![[r#"
 warning: foreign skill [..]/home/.claude/skills/theirs is not managed by skiman; bring it in with `skiman adopt theirs --from claude-code`
-hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`
+hint: the tool directories hold foreign skills; bring each one into the canon with `skiman adopt <name> --from <tool id>`
 
 "#]]);
 }

@@ -102,7 +102,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let repo_manifest = std::fs::read_to_string(repo.manifest_file()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Failure::refused(format!(
-                "{} is not an initialised skill repo (it has no skiman.toml); run `skiman init {}`",
+                "{} is not an initialised canon (it has no skiman.toml); run `skiman init {}`",
                 repo.root().display(),
                 repo.root().display()
             ))
@@ -156,7 +156,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_moving_sources(&paths, &content, &manifest, &plan)?;
 
     out!(
-        "import {} into the skill repo {}:",
+        "import {} into the canon {}:",
         content.root.display(),
         repo.root().display()
     );
@@ -164,12 +164,12 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         Some((candidate, change, todo)) => print_writes(&repo, candidate, change, todo),
         None => {
             out!(
-                "  the skill repo already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is"
+                "  the canon already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is"
             );
             let differs = config_differences(&folder_manifest, &manifest, &content);
             if !differs.is_empty() {
                 out!(
-                    "  the import folder's skiman.toml differs from the skill repo's in {}; the skill repo's are kept",
+                    "  the import folder's skiman.toml differs from the canon's in {}; the canon's are kept",
                     differs.join(", ")
                 );
             }
@@ -190,7 +190,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         };
     if changed {
         return Err(Failure::refused(
-            "the skill repo changed after the preview; nothing was changed, run the import again",
+            "the canon changed after the preview; nothing was changed, run the import again",
         ));
     }
     if Folder::hash(&folder)? != content.hash {
@@ -234,7 +234,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         out!("imported {}; {originals}", folder.display());
     } else {
         out!(
-            "the skill repo {} already held this import; {originals}",
+            "the canon {} already held this import; {originals}",
             repo.root().display()
         );
     }
@@ -636,7 +636,7 @@ fn fetched_before(
     Some(Third {
         name: name.to_owned(),
         source: source.clone(),
-        version: format!("at {commit} (as the skill repo holds it)"),
+        version: format!("at {commit} (as the canon holds it)"),
         ref_kind: recorded.ref_kind,
         snapshot,
         entry,
@@ -1324,7 +1324,7 @@ fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
         return Ok(());
     }
     Err(Failure::refused(format!(
-        "the skill repo {} holds a link, folder or special file where import needs a regular file; replace each with a regular file or move it away, nothing was changed:\n{}",
+        "the canon {} holds a link, folder or special file where import needs a regular file; replace each with a regular file or move it away, nothing was changed:\n{}",
         repo.root().display(),
         lines.join("\n")
     )))
@@ -1412,11 +1412,11 @@ fn other_shared_body(repo: &SkillRepo, folder: &Path) -> Failure {
     let theirs = folder.join(SHARED_BODY).display().to_string();
     let ours = repo.shared_body().display().to_string();
     Failure::refused(format!(
-        "refusing to import {}: the skill repo {} already holds everything this import writes except {SHARED_BODY}, which differs from the import folder's; nothing was changed.\n  \
-         If this import has run on this skill repo before (it finished or stopped part-way), make the two files the same and run it again: it finishes what is left and writes nothing else to the skill repo, whose skiman.toml stays as it is.\n    \
-         to keep the skill repo's shared body, copy {ours} over {theirs};\n    \
+        "refusing to import {}: the canon {} already holds everything this import writes except {SHARED_BODY}, which differs from the import folder's; nothing was changed.\n  \
+         If this import has run on this canon before (it finished or stopped part-way), make the two files the same and run it again: it finishes what is left and writes nothing else to the canon, whose skiman.toml stays as it is.\n    \
+         to keep the canon's shared body, copy {ours} over {theirs};\n    \
          to use the import folder's, copy {theirs} over {ours} (skiman keeps no copy of the file you overwrite).\n  \
-         If it has never run on this skill repo, empty {ours} (put what it holds into the import folder's shared body first if you want to keep it) and run it again: it imports everything, the import folder's skiman.toml included.\n  \
+         If it has never run on this canon, empty {ours} (put what it holds into the import folder's shared body first if you want to keep it) and run it again: it imports everything, the import folder's skiman.toml included.\n  \
          If you cannot tell which, do the first.",
         folder.display(),
         repo.root().display(),
@@ -1444,7 +1444,7 @@ fn repo_todo(
                 "{rel} is not a regular file: replace it with one, or move it away"
             )),
             (Held::Other(_), _) if rel.starts_with("skills/") => lines.push(format!(
-                "{rel} differs from the import folder's {rel}: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's"
+                "{rel} differs from the import folder's {rel}: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's"
             )),
             _ => {}
         }
@@ -1454,21 +1454,21 @@ fn repo_todo(
     for path in repo.layout()?.skills().iter().map(Placed::path) {
         if !imported(&path) && !tree::basename(&path).starts_with('.') {
             lines.push(format!(
-                "{path} is not in the import folder: remove it from the skill repo, or put it in the import folder"
+                "{path} is not in the import folder: remove it from the canon, or put it in the import folder"
             ));
         }
     }
     for name in names_in(&repo.root().join("upstream"))? {
         if !third(&name) {
             lines.push(format!(
-                "upstream/{name} is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put {name} in the import folder as a third-party skill"
+                "upstream/{name} is the snapshot of no third-party skill in the import folder: remove it from the canon, or put {name} in the import folder as a third-party skill"
             ));
         }
     }
     for name in Lockfile::load(repo)?.skill_names() {
         if !third(&name) {
             lines.push(format!(
-                "skiman.lock has an entry for {name}, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put {name} in the import folder as a third-party skill"
+                "skiman.lock has an entry for {name}, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put {name} in the import folder as a third-party skill"
             ));
         }
     }
@@ -1477,7 +1477,7 @@ fn repo_todo(
     }
     let lines: Vec<String> = lines.iter().map(|l| format!("  {l}")).collect();
     Err(Failure::refused(format!(
-        "the skill repo {} holds content that is not this import's; nothing was changed:\n{}",
+        "the canon {} holds content that is not this import's; nothing was changed:\n{}",
         repo.root().display(),
         lines.join("\n")
     )))

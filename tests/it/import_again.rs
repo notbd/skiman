@@ -15,7 +15,7 @@ use crate::support::{
 };
 
 /// The preview line when the skill repo already holds the import.
-const HOLDS: &str = "  the skill repo already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is\n";
+const HOLDS: &str = "  the canon already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is\n";
 
 const TOOLS: &str = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
 
@@ -58,8 +58,8 @@ fn assert_shared_body_refused(sandbox: &Sandbox, folder: &Path) {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     for text in [
         "already holds everything this import writes except instructions/shared.md",
-        "If this import has run on this skill repo before",
-        "If it has never run on this skill repo",
+        "If this import has run on this canon before",
+        "If it has never run on this canon",
         "If you cannot tell which, do the first.",
     ] {
         assert!(stderr.contains(text), "{text:?} not in {stderr}");
@@ -143,10 +143,7 @@ fn project_roots_and_enabled_set_after_an_import_are_kept_when_it_runs_again() {
 
     let stdout = run(&sandbox, &folder, 0);
     assert!(stdout.contains(HOLDS), "{stdout}");
-    assert!(
-        !stdout.contains("differs from the skill repo's"),
-        "{stdout}"
-    );
+    assert!(!stdout.contains("differs from the canon's"), "{stdout}");
     assert_eq!(read(repo.join("skiman.toml")), manifest);
     assert_eq!(backup_dirs(&sandbox), backups);
 
@@ -159,10 +156,7 @@ fn project_roots_and_enabled_set_after_an_import_are_kept_when_it_runs_again() {
         ),
     );
     let stdout = run(&sandbox, &folder, 0);
-    assert!(
-        !stdout.contains("differs from the skill repo's"),
-        "{stdout}"
-    );
+    assert!(!stdout.contains("differs from the canon's"), "{stdout}");
 
     // A skill turned off in the skill repo stays off, and the preview says so.
     let manifest = format!("{manifest}\n[skills.notes]\nenabled = false\n");
@@ -170,7 +164,7 @@ fn project_roots_and_enabled_set_after_an_import_are_kept_when_it_runs_again() {
     let stdout = run(&sandbox, &folder, 0);
     assert!(
         stdout.contains(
-            "  the import folder's skiman.toml differs from the skill repo's in [skills.notes] enabled; the skill repo's are kept\n"
+            "  the import folder's skiman.toml differs from the canon's in [skills.notes] enabled; the canon's are kept\n"
         ),
         "{stdout}"
     );
@@ -367,7 +361,7 @@ fn an_import_that_never_ran_imports_everything_once_the_skill_repos_shared_body_
     assert!(stdout.contains(HOLDS), "{stdout}");
     assert!(
         stdout.contains(
-            "  the import folder's skiman.toml differs from the skill repo's in [tools] enabled; the skill repo's are kept\n"
+            "  the import folder's skiman.toml differs from the canon's in [tools] enabled; the canon's are kept\n"
         ),
         "{stdout}"
     );
@@ -411,8 +405,8 @@ fn assert_pdf_records_refused(sandbox: &Sandbox, folder: &Path) {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     for text in [
-        "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
-        "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
+        "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the canon, or put pdf in the import folder as a third-party skill\n",
+        "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put pdf in the import folder as a third-party skill\n",
     ] {
         assert!(stderr.contains(text), "{text:?} not in {stderr}");
     }
@@ -529,7 +523,7 @@ fn a_ref_changed_by_update_after_an_import_is_kept_when_it_runs_again() {
     assert!(stdout.contains(HOLDS), "{stdout}");
     assert!(
         stdout.contains(
-            "  the import folder's skiman.toml differs from the skill repo's in [skills.pdf.source] ref; the skill repo's are kept\n"
+            "  the import folder's skiman.toml differs from the canon's in [skills.pdf.source] ref; the canon's are kept\n"
         ),
         "{stdout}"
     );

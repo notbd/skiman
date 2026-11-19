@@ -46,7 +46,7 @@ fn an_existing_regular_claude_md_stays_byte_identical_and_init_points_to_import(
         .assert()
         .code(3)
         .stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/skill-repo
 ...
 linked [..]/home/.claude/skills/skiman-manual
 linked [..]/home/.agents/skills/skiman-manual
@@ -57,7 +57,7 @@ linked [..]/home/.gemini/GEMINI.md
 "#]])
         .stderr_eq(str![[r#"
 warning: instruction file [..]/home/.claude/CLAUDE.md is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`
-hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)
+hint: the canon has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)
 
 "#]]);
     assert_eq!(std::fs::read(&claude_md).unwrap(), b"my own rules\n\xff");
@@ -186,7 +186,7 @@ fn init_with_another_skill_repo_retargets_the_instruction_links() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created skill repo [..]/other-repo
+created canon [..]/other-repo
 ...
 retargeted [..]/home/.claude/skills/skiman-manual
 retargeted [..]/home/.agents/skills/skiman-manual

@@ -142,7 +142,7 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
     let codex = sandbox.tool_dir(Tool::Codex);
     let gemini = sandbox.tool_dir(Tool::Antigravity);
     let preview = format!(
-        "import {folder} into the skill repo {repo}:
+        "import {folder} into the canon {repo}:
   add skill notes (own)
   add skill pdf (third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (commit)); files that differ from upstream:
       modified SKILL.md
@@ -307,7 +307,7 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &folder,
         1,
         &[
-            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+            "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
         ],
     );
     std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
@@ -318,7 +318,7 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &folder,
         1,
         &[
-            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
+            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the canon, or put pdf in the import folder as a third-party skill\n",
         ],
     );
     std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
@@ -332,7 +332,7 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
         &folder,
         1,
         &[
-            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
+            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put pdf in the import folder as a third-party skill\n",
         ],
     );
     std::fs::remove_file(repo.join("skiman.lock")).unwrap();
@@ -1272,7 +1272,7 @@ fn assert_refused_after_the_confirmation(sandbox: &Sandbox, folder: &Path, run: 
         for (path, value) in tree(&dir) {
             assert!(
                 !value.starts_with(&format!("link -> {}", repo.display())),
-                "{run}: {} links into the skill repo",
+                "{run}: {} links into the canon",
                 dir.join(path).display()
             );
         }
@@ -1391,7 +1391,7 @@ fn a_skill_repo_file_changed_while_the_import_fetches_refuses_the_import_and_kee
         let output = import_with_hook(&sandbox, &folder, "import:fetched", &run);
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
-            "error: the skill repo changed after the preview; nothing was changed, run the import again\n",
+            "error: the canon changed after the preview; nothing was changed, run the import again\n",
             "{rel}"
         );
         assert_eq!(output.status.code(), Some(1), "{rel}");

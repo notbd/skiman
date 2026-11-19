@@ -5,12 +5,12 @@ description: skiman's manual on where this machine's agent skills and global ins
 
 # skiman manual
 
-The skill repo is `<SKILL_REPO>`. It is a git repo that holds the canonical
+The canon is `<SKILL_REPO>`. It is a git repo that holds the canonical
 copy of every skill and of the global instructions. skiman distributes it to
 every agent tool: tool directories (`~/.claude/skills`, `~/.agents/skills`, `~/.gemini/config/skills`) and global
-instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) hold links to the skill repo.
+instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) hold links to the canon.
 
-## Skill repo layout
+## Canon layout
 
 - `skills/<group>/<name>/` or `skills/<name>/`: every skill. A folder
   under `skills/` without a `SKILL.md` that holds only folders is a group
@@ -32,10 +32,10 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
 
 ## Rules for every operation
 
-- Make every change in the skill repo.
+- Make every change in the canon.
   Never create a folder in a tool directory, and never edit what is there: a
   new folder there is a foreign skill no agent tool shares, and an edit to a
-  copy there is lost from the skill repo.
+  copy there is lost from the canon.
 - Pass flags so that skiman never prompts. Exit code 2 means a flag is
   missing; the message lists the flags to add.
 - Exit codes: 0 success; 1 refused (a rule violation or bad input, the message
@@ -45,7 +45,7 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
   ones it wrote.
 - A write command that stopped part-way (killed, or exit 4) finishes when
   you run the same command again. If running it again is refused because
-  its skill repo part is done, `skiman sync` finishes it. After an update
+  its canon part is done, `skiman sync` finishes it. After an update
   finished that way, look at the skill's diff before you commit it.
 - After editing files by hand, run `skiman check`. It reports every rule
   violation with file and line. A skill needs `SKILL.md` with YAML frontmatter
@@ -57,7 +57,7 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
 
 1. Run `skiman new <name> -d "<what it does and when to use it>" --group
    <group>`. It creates `<SKILL_REPO>/skills/<group>/<name>/SKILL.md` and
-   links it into every agent tool. Pick a group the skill repo already has
+   links it into every agent tool. Pick a group the canon already has
    (`ls <SKILL_REPO>/skills`); a new group needs the user's approval.
    Without `--group` the skill sits in no group.
 2. Write the body in that `SKILL.md` below the frontmatter, and any further
@@ -114,7 +114,7 @@ reports the size limit of the enabled agent tools.
    With a single name, `--ref <branch|tag|commit>` switches what it follows.
    `--dry-run` first shows each new version, the files it would change
    (scripts and executables flagged) and any conflicts, and changes nothing
-   in the skill repo; show that to the user before updating a skill they
+   in the canon; show that to the user before updating a skill they
    have not reviewed.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
    it in `<SKILL_REPO>/skills/<name>/`:
@@ -192,7 +192,7 @@ copies every change made in the project into it at each sync.
 
 ## Import an existing setup
 
-Run `skiman import --guide` and follow the guide it prints. The skill repo
+Run `skiman import --guide` and follow the guide it prints. The canon
 may hold only skills the import folder holds too, with the same content.
 
 ## See the state

@@ -245,7 +245,7 @@ impl Current {
 fn refuse_unresolved(repo: &SkillRepo, skill: &str, name: &str) -> Result<(), Failure> {
     let tree = WorkingTree::new(repo.root());
     let conflicts = rules::unresolved_conflicts(&tree, name)
-        .map_err(|e| Failure::operational(format!("cannot read the skill repo: {e}")))?;
+        .map_err(|e| Failure::operational(format!("cannot read the canon: {e}")))?;
     if conflicts.is_empty() {
         return Ok(());
     }

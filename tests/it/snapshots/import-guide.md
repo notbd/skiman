@@ -1,29 +1,29 @@
 # Import guide for skiman <VERSION>
 
 This guide is for an agent. You read the user's existing setup and prepare an
-import folder: a folder laid out exactly like the skill repo should look after
+import folder: a folder laid out exactly like the canon should look after
 the import. skiman then checks it with its everyday rules, shows the user a
-preview, copies it into the skill repo and takes over the tool directories and
+preview, copies it into the canon and takes over the tool directories and
 global instruction files, moving every original it replaces into a backup.
 
-You write only the import folder, plus temporary folders outside the skill
-repo when you need them; step 6 of "Extract the shared body" is the one
+You write only the import folder, plus temporary folders outside the
+canon when you need them; step 6 of "Extract the shared body" is the one
 exception. The user's existing files stay where they are; skiman moves them
 during the import.
 
 ## Before you start
 
-- The skill repo must exist (`skiman init <path>`). It may already hold
+- The canon must exist (`skiman init <path>`). It may already hold
   skills, but only ones the import folder holds too, with the same content
   (a skill adopted earlier, or one an interrupted import wrote). Any other
   entry in `skills/` or `upstream/` (names starting with `.` do not count)
   and any other entry in `skiman.lock` make `skiman import` refuse, naming
   each.
-- The default import folder is `<skill repo>/.skiman/import/`; any other path
+- The default import folder is `<canon>/.skiman/import/`; any other path
   works too.
-- The import writes the skill repo's `instructions/shared.md`, `skiman.toml`
+- The import writes the canon's `instructions/shared.md`, `skiman.toml`
   and `skiman.lock`. One that already holds what the import writes stays; one
-  that differs goes to the backup first. When the skill repo's shared body
+  that differs goes to the backup first. When the canon's shared body
   already holds instructions, see step 6 of "Extract the shared body".
 - The existing setup lives in these locations (`~` is the home folder):
 
@@ -43,11 +43,11 @@ during the import.
   - any folder containing `.claude-plugin/plugin.json`
 - Follow symlinks to find where content really lives. Several entries can
   point to the same folder.
-- No tool directory may be a link into the skill repo (such as
-  `~/.claude/skills -> <skill repo>/skills`) or into an entry the import
+- No tool directory may be a link into the canon (such as
+  `~/.claude/skills -> <canon>/skills`) or into an entry the import
   moves (such as `~/.agents/skills -> ~/.claude/skills/bundle/skills`, where
   `bundle` is a foreign skill). Ask the user to replace such a link with a
-  real folder first. Otherwise the import can move the skill repo's own
+  real folder first. Otherwise the import can move the canon's own
   skills to the backup, or leave that tool directory dangling.
 
 ## The import folder
@@ -70,8 +70,8 @@ the import folder holds neither.
 One folder per skill, holding the files as the user should have them after the
 import, including the user's local modifications to third-party skills. A
 folder directly under `skills/` without a `SKILL.md` is a group folder: every
-folder in it is a skill of that group (`skills/<group>/<name>/`), and the skill
-repo gets the same layout. Groups nest: a folder in a group folder that holds
+folder in it is a skill of that group (`skills/<group>/<name>/`), and the
+canon gets the same layout. Groups nest: a folder in a group folder that holds
 only folders and no `SKILL.md` is a group folder too. Each group folder's name
 follows the skill name rule and is no skill's name. Put skills in groups only as the user
 wants them grouped. Every skill passes the everyday rules:
@@ -103,7 +103,7 @@ wants them grouped. Every skill passes the everyday rules:
 
 Leave out a third-party skill's `.gitignore`, `.gitattributes` and
 `.gitmodules`: skiman does not install them from its upstream, and in the
-skill repo they would act on the skill repo's git.
+canon they would act on the canon's git.
 
 ### instructions/shared.md
 
@@ -116,7 +116,7 @@ rule of the skills applies to it too.
 ### skiman.toml
 
 ```toml
-[tools]                     # optional; without it the skill repo keeps its own
+[tools]                     # optional; without it the canon keeps its own
 enabled = ["claude-code", "codex", "antigravity"]
 
 [skills.notes]              # optional for an own skill
@@ -140,12 +140,12 @@ fingerprint = "sha256:<hash of the matched text>"
 - Fill `summary`, `origin` and `installed` only with what the user
   says or the existing setup shows; leave out what you would have to guess.
 - Unknown keys are an error. Leave out `ref_kind`; skiman derives it.
-- skiman keeps the skill repo's project scope: every `[projects.<id>]` table
+- skiman keeps the canon's project scope: every `[projects.<id>]` table
   whose id the folder does not define, and every `[[secrets.allow]]` entry for
   a path under `projects/`. A project root the folder adds must not contain,
-  or lie inside, a root the skill repo already has; otherwise skiman skips
+  or lie inside, a root the canon already has; otherwise skiman skips
   both roots, and `skiman sync` and `skiman doctor` name them.
-- skiman keeps the skill repo's linked folders too: every `[linked.<id>]`
+- skiman keeps the canon's linked folders too: every `[linked.<id>]`
   table stays. The import folder's `skiman.toml` holds no `[linked]` table
   (see "Skill folders kept elsewhere").
 
@@ -160,7 +160,7 @@ you left out; after the import, the user registers each one with
 they are, as linked skills. The links to it in the tool directories go to
 the backup like any foreign entry; the folder itself stays as it is.
 
-The skill repo may already register linked folders (`skiman list` shows their
+The canon may already register linked folders (`skiman list` shows their
 skills, of kind `linked`). Their skills are distributed already: leave them
 out too, and give no skill in the import folder a linked skill's name. While
 a registered linked folder cannot be read, the import refuses.
@@ -191,7 +191,7 @@ folder holds exactly one canonical copy per skill.
 
 1. Read each agent tool's global instruction file (see the table above),
    following links, and every file it imports with an `@path` line. When the
-   skill repo's `instructions/shared.md` holds instructions, it is one more
+   canon's `instructions/shared.md` holds instructions, it is one more
    source.
 2. Replace each `@path` import with the text it imports.
 3. Write each instruction that applies to every agent tool once into
@@ -202,8 +202,8 @@ folder holds exactly one canonical copy per skill.
    whether to keep it in the shared body or leave it out. This version of
    skiman has no tool-specific instructions; the originals stay in the backup.
 5. Check the size against the smallest limit among the enabled agent tools.
-6. When the skill repo's `instructions/shared.md` held instructions, copy it
-   to a file outside the skill repo, then empty it right before the import
+6. When the canon's `instructions/shared.md` held instructions, copy it
+   to a file outside the canon, then empty it right before the import
    runs. Left as it is, it would be replaced and kept only in the backup, or
    the import would refuse (see "When the shared bodies differ").
    If the import then does not run (the user declines at the preview, or it
@@ -218,7 +218,7 @@ folder holds exactly one canonical copy per skill.
    record, a source URL in its files). Every other skill is an own skill and
    gets no `source` table.
 2. For a git upstream, find the commit the user's copy came from: clone the
-   upstream into a temporary folder outside the skill repo and pick the commit
+   upstream into a temporary folder outside the canon and pick the commit
    whose folder at `path` differs least from the user's copy.
 3. Pin it with `ref = "<40-hex sha>"`, the full 40-character commit. skiman
    fetches each upstream at its declared ref, and the preview shows every file
@@ -240,9 +240,9 @@ folder holds exactly one canonical copy per skill.
 
 1. Ask the user to run `skiman import <folder>` in a terminal. skiman checks
    the folder, fetches every upstream and shows the preview: the skills to
-   add (`keep` for one the skill repo already holds as the import folder
+   add (`keep` for one the canon already holds as the import folder
    does), the files of each third-party skill that differ from its upstream
-   and the upstream files it does not install, the skill repo files it
+   and the upstream files it does not install, the canon files it
    replaces, and every entry it moves to the backup. The user confirms
    there. Run `skiman import <folder> --yes` yourself only when the user
    tells you to import without the preview.
@@ -253,7 +253,7 @@ folder holds exactly one canonical copy per skill.
      place because it is not a skill. Follow each warning, then run
      `skiman sync`. This is not a failure.
    - 1: refused; nothing changed. A problem in the import folder is named
-     with its file and line: fix the folder. A problem in the skill repo is
+     with its file and line: fix the folder. A problem in the canon is
      named with the ways to go on; for a `skiman.lock` that is not valid
      TOML, delete that file. Then run the import again.
    - 2: there is no terminal and no `--yes`.
@@ -264,15 +264,15 @@ folder holds exactly one canonical copy per skill.
 
 Running the same command again finishes an import that stopped part-way;
 skiman keeps no record of a run. Each run works the whole import out again
-from what is on disk: it keeps what the skill repo already holds as the
+from what is on disk: it keeps what the canon already holds as the
 import writes it, writes the rest, and moves each original still in place.
 
 - Each run shows the preview again, and moves its originals to a new folder
   in the backups folder the preview names. The originals of an interrupted
   import are spread over these folders. The folder printed after
   `moved tmp leftovers to` holds copies skiman had staged, not originals.
-- Until the skill repo holds every piece of the import, a run fetches the
-  upstreams again, except a git upstream the skill repo already holds as
+- Until the canon holds every piece of the import, a run fetches the
+  upstreams again, except a git upstream the canon already holds as
   declared: the same `url`, `path` and `ref` in its `skiman.toml`, and a
   `skiman.lock` entry with that `ref` and a commit. That one stays at the
   commit: its snapshot is `upstream/<name>` when that matches the entry,
@@ -281,55 +281,55 @@ import writes it, writes the rest, and moves each original still in place.
   a commit (a branch, a tag, the default branch, a local folder) may bring
   newer content: the preview shows the new commit, and the old snapshot
   goes to the backup.
-- The skill repo holds the whole import when it has exactly the import
+- The canon holds the whole import when it has exactly the import
   folder's skills, each the same, the same sources (`url` and `path`), the
   snapshots and `skiman.lock` that go with them, and the same shared body (a
   missing one, or one of nothing but spaces, tabs and line breaks, is empty,
   and two empty ones are the same). Then a run fetches nothing and writes
-  nothing to the skill repo; it moves the originals still in place. This
+  nothing to the canon; it moves the originals still in place. This
   can be true on the first run too: the skills adopted earlier and both
   shared bodies empty.
 - From then on, changes to the import folder's `skiman.toml` other than a
-  source's `url` or `path` do not reach the skill repo. The preview names a
-  `[tools] enabled`, `enabled` or `ref` that differs from the skill repo's
-  and keeps the skill repo's. Change those in the skill repo's `skiman.toml`
+  source's `url` or `path` do not reach the canon. The preview names a
+  `[tools] enabled`, `enabled` or `ref` that differs from the canon's
+  and keeps the canon's. Change those in the canon's `skiman.toml`
   and run `skiman sync`; for a `ref`, run `skiman update <name> --ref <ref>`.
-- When the skill repo no longer holds the whole import for another reason
+- When the canon no longer holds the whole import for another reason
   than the shared body (a skill removed from it, a skill added to the import
   folder or a source's `url` or `path` changed there, `skiman.lock`
   deleted), a run is a full import again: the shared body and `skiman.toml`
-  become the import folder's (the skill repo's project roots and linked
+  become the import folder's (the canon's project roots and linked
   folders stay), the old ones go to the backup, and the preview shows it.
-- A skill in the skill repo that changed since the import wrote it (for
+- A skill in the canon that changed since the import wrote it (for
   example through its link in a session), or one the import folder does not
   hold, is refused and named with the two ways to go on.
 
 ### When the shared bodies differ
 
-When the skill repo holds everything the import writes except the shared
+When the canon holds everything the import writes except the shared
 body (exactly the import's skills, each the same, the same sources, and the
 snapshots and `skiman.lock` that go with them), but its
 `instructions/shared.md` holds something other than the import folder's,
-the import refuses. Go on by whether this import has run on this skill repo
+the import refuses. Go on by whether this import has run on this canon
 before:
 
 - It has (it finished, or stopped part-way): copy the file to keep over the
   other one, then run it again. That run finishes what is left without
-  fetching and writes nothing else to the skill repo. skiman keeps no copy
+  fetching and writes nothing else to the canon. skiman keeps no copy
   of the file you overwrite.
 - It never has (the skills came from `skiman new`, `adopt` or `add`, or the
-  import folder holds no skills): empty the skill repo's file, after putting
+  import folder holds no skills): empty the canon's file, after putting
   what it holds into the import folder's shared body if the user wants to
   keep it, then run it again. That run imports everything, the import
   folder's `skiman.toml` included.
-- When you cannot tell, copy. Emptying the file on a skill repo the import
-  has run on imports everything again: the skill repo's `skiman.toml`
+- When you cannot tell, copy. Emptying the file on a canon the import
+  has run on imports everything again: the canon's `skiman.toml`
   becomes the import folder's again, dropping the `enabled`, `[tools]` and
   `ref` changes made since, and an upstream whose `ref` changed since is
   fetched again at the import folder's `ref` while the skill stays as it
   was (`skiman diff` then shows the difference as local modifications). If
   that run cannot fetch an upstream, it stops with the shared body empty:
-  copy the shared body you want back into the skill repo and run it again.
+  copy the shared body you want back into the canon and run it again.
 
 ### Known limits
 
@@ -342,8 +342,8 @@ before:
   links a skill of that name there. Of two copies of one original in the
   backups folder, the one with more files is whole. Delete a part left in a
   tool directory, then run `skiman sync`.
-- A link in a tool directory to another skill's folder in the skill repo
-  (`notes -> <skill repo>/skills/pdf`) dangles until the import writes that
+- A link in a tool directory to another skill's folder in the canon
+  (`notes -> <canon>/skills/pdf`) dangles until the import writes that
   skill: the first run leaves it in place, and running again moves it to
   the backup.
 - skiman compares paths byte for byte. A link in a tool directory whose
@@ -352,5 +352,5 @@ before:
   interrupted import: move it to the backup by hand, then run `skiman sync`.
   A local source whose `url` has other letter case than the disk can lose
   the link it is reached through to the backup; `skiman update` then fails
-  for it until its `url` in the skill repo's and the import folder's
+  for it until its `url` in the canon's and the import folder's
   `skiman.toml` names the real folder.

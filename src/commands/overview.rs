@@ -44,7 +44,7 @@ const STAND_IN_NOTE: &str = "A summary in italics stands in for a missing `metad
 const MANUAL_SUMMARY: &str = "How to change skills and global instructions with skiman";
 /// What a day marked `(git)` means.
 const GIT_DAY_NOTE: &str = "An installed day marked (git) is the day of the latest commit that added \
-     the skill's SKILL.md to the skill repo, which can be later than the real install; \
+     the skill's SKILL.md to the canon, which can be later than the real install; \
      `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.";
 
 pub fn run() -> Exit {
@@ -113,7 +113,7 @@ fn overview() -> Result<Exit, Failure> {
     let found = elsewhere::find(&paths, &repo);
 
     out!("# Skills\n");
-    out!("## In the skill repo ({count})\n");
+    out!("## In the canon ({count})\n");
     for (group, rows) in &groups {
         out!("### {} ({})\n", cell(group), rows.len());
         table(&REPO_HEADER, rows);

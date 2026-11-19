@@ -46,7 +46,7 @@ fn doctor() -> Result<Exit, Failure> {
     let root = repo.root().display().to_string();
     let io = |e| Failure::operational(format!("cannot read {root}: {e}"));
 
-    out!("skill repo: {root}");
+    out!("canon: {root}");
     if config.binary.exists() {
         out!("recorded binary: {}", config.binary.display());
     } else {
@@ -420,7 +420,7 @@ fn report_skill_repo(repo: &SkillRepo) -> std::io::Result<()> {
 }
 
 /// Every entry of `.skiman/tmp/`: a tmp leftover, or in use by the command
-/// that holds the repo lock.
+/// that holds the canon lock.
 fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
     let mut leftovers = match std::fs::read_dir(repo.tmp_dir()) {
         Ok(read) => read
@@ -437,7 +437,7 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
     for path in leftovers {
         if in_use {
             out!(
-                "{} is in use: another skiman command holds the repo lock",
+                "{} is in use: another skiman command holds the canon lock",
                 path.display()
             );
         } else {
@@ -461,7 +461,7 @@ fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
         return;
     }
     if let Some(operation) = pgit::operation_in_progress(repo.root()) {
-        out!("project items: not synced while the skill repo {operation}");
+        out!("project items: not synced while the canon {operation}");
     }
     let synced = Synced::load(paths);
     let tree = WorkingTree::new(repo.root());

@@ -97,7 +97,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
     out!("registered project root {id}: {}", dir.display());
     out!(
-        "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the skill repo is pushed; see what it holds with: {} --dry-run",
+        "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the canon is pushed; see what it holds with: {} --dry-run",
         repo.root().display(),
         command("adopt", std::slice::from_ref(&dir))
     );
@@ -129,7 +129,7 @@ impl Context {
         let lock = RepoLock::wait(&paths, &repo)?;
         if let Some(operation) = operation_in_progress(repo.root()) {
             return Err(Failure::operational(format!(
-                "the skill repo {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
+                "the canon {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
             )));
         }
         let manifest = Manifest::load(&repo)?;
@@ -668,7 +668,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     }
     for (path, rule) in ignored(ctx.repo.root(), &written) {
         err!(
-            "warning: git ignores {path} in the skill repo ({rule}), so it never gets history; change that rule"
+            "warning: git ignores {path} in the canon ({rule}), so it never gets history; change that rule"
         );
     }
     ctx.finish(&mut synced, &backups, exit, &failed)
@@ -1040,7 +1040,7 @@ fn remove_empty_parents(path: &Path, stop: &Path) {
 // ---------------------------------------------------------------- paths
 
 fn io_failure(e: std::io::Error) -> Failure {
-    Failure::operational(format!("cannot read the skill repo: {e}"))
+    Failure::operational(format!("cannot read the canon: {e}"))
 }
 
 fn cwd_absolute(path: &Path) -> Result<PathBuf, Failure> {

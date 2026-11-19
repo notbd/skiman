@@ -116,7 +116,7 @@ fn init_on_a_clone_of_an_empty_repo_creates_the_layout_and_keeps_its_git_folder(
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/skill-repo
 ...
 "#]]);
 
@@ -162,7 +162,7 @@ fn init_on_a_non_empty_folder_without_skiman_toml_is_refused_and_changes_nothing
         .code(1)
         .stdout_eq("")
         .stderr_eq(str![[r#"
-error: [..]/skill-repo is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing skill repo
+error: [..]/skill-repo is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing canon
 
 "#]]);
 

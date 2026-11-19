@@ -180,7 +180,7 @@ pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), Str
         ));
     }
     if dir.starts_with(repo.root()) {
-        return Err(format!("{} is inside the skill repo", dir.display()));
+        return Err(format!("{} is inside the canon", dir.display()));
     }
     for tool in TOOLS {
         let presence = tool.presence_dir(home);

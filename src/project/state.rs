@@ -134,7 +134,7 @@ impl Evaluated {
             ),
             State::Blocked(_) => "fix it in the project".to_owned(),
             State::MirrorInvalid(_) => format!(
-                "fix {} in the skill repo (`skiman check` lists the rules)",
+                "fix {} in the canon (`skiman check` lists the rules)",
                 item.mirror_rel()
             ),
             State::Occupied(_) => format!("move it away, or stop managing it: {}", cmd("eject")),
@@ -217,7 +217,7 @@ pub fn check_rules(repo: &SkillRepo, item: &Item, content: &Content) -> Result<(
             base,
             None,
             rules::rule::PROJECT_PATH,
-            format!("cannot read the skill repo: {e}"),
+            format!("cannot read the canon: {e}"),
         )]),
     }
 }

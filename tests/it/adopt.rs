@@ -84,7 +84,7 @@ linked [..]/home/.gemini/config/skills/notes
     assert!(is_executable(copy.join("scripts/run.sh")));
     assert!(
         !exists(copy.join(".DS_Store")),
-        "never copied into the skill repo"
+        "never copied into the canon"
     );
     assert!(
         !exists(copy.join(".git")),

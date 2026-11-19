@@ -20,10 +20,7 @@ impl SkillRepo {
     /// The skill repo at `path`, which must exist.
     pub fn at(path: &Path) -> Result<SkillRepo, Failure> {
         let root = path.canonicalize().map_err(|e| {
-            Failure::operational(format!(
-                "skill repo {} is not reachable: {e}",
-                path.display()
-            ))
+            Failure::operational(format!("canon {} is not reachable: {e}", path.display()))
         })?;
         Ok(SkillRepo { root })
     }

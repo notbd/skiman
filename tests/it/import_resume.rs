@@ -447,7 +447,7 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
         stdout.contains(&format!(
-            "(third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (as the skill repo holds it))"
+            "(third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (as the canon holds it))"
         )),
         "{stdout}"
     );
@@ -525,7 +525,7 @@ fn a_branch_that_moved_after_a_kill_before_the_snapshot_keeps_the_locked_commit(
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains(&format!("at {commit} (as the skill repo holds it)")),
+        stdout.contains(&format!("at {commit} (as the canon holds it)")),
         "{stdout}"
     );
     let repo = sandbox.skill_repo();
@@ -629,8 +629,8 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
-            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's\n",
+            "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
         ],
     );
     assert!(!stderr.contains("upstream/pdf"), "{stderr}");
@@ -680,8 +680,8 @@ fn during_the_takeover_hand_edits_to_skiman_toml_are_kept_and_a_changed_skill_re
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
-            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's\n",
+            "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
         ],
     );
     std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
@@ -838,8 +838,8 @@ fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_t
         &sandbox,
         &other,
         &[
-            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
-            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
+            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the canon, or put pdf in the import folder as a third-party skill\n",
+            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put pdf in the import folder as a third-party skill\n",
         ],
     );
 }
@@ -867,7 +867,7 @@ fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_o
             &sandbox,
             &folder,
             &[
-                "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+                "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
             ],
         );
         sandbox
@@ -905,7 +905,7 @@ fn after_a_kill_a_skill_changed_through_its_link_refuses_the_run_with_both_ways_
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's\n",
         ],
     );
     write(&linked, &notes);

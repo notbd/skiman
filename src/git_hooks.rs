@@ -162,7 +162,7 @@ fn script(name: &str, binary: &Path) -> String {
     let binary = shell_quote(&binary.to_string_lossy());
     let body = if name == PRE_COMMIT {
         "if [ ! -x \"$skiman\" ]; then\n\
-         \techo \"skiman: $skiman does not exist, so the commit is rejected; install skiman, then run \\`skiman init <skill repo>\\` again\" >&2\n\
+         \techo \"skiman: $skiman does not exist, so the commit is rejected; install skiman, then run \\`skiman init <canon>\\` again\" >&2\n\
          \texit 1\n\
          fi\n\
          exec \"$skiman\" check --staged\n"
@@ -170,7 +170,7 @@ fn script(name: &str, binary: &Path) -> String {
         "if [ -x \"$skiman\" ]; then\n\
          \t\"$skiman\" sync --hook\n\
          else\n\
-         \techo \"skiman: $skiman does not exist, so the agent tools were not updated; install skiman, then run \\`skiman init <skill repo>\\` again\" >&2\n\
+         \techo \"skiman: $skiman does not exist, so the agent tools were not updated; install skiman, then run \\`skiman init <canon>\\` again\" >&2\n\
          fi\n\
          exit 0\n"
     };

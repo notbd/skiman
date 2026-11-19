@@ -471,7 +471,7 @@ pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
 }
 
 fn unreadable(e: io::Error) -> Failure {
-    Failure::operational(format!("cannot read the skill repo: {e}"))
+    Failure::operational(format!("cannot read the canon: {e}"))
 }
 
 /// The refusing half of [`validate_write`], without the violations

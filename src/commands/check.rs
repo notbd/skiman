@@ -29,7 +29,7 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     let repo = SkillRepo::from_config(&paths)?;
     if staged && let Some(other) = hook_of_another_repo(&repo) {
         out!(
-            "skiman: {} is not the skill repo ({}), so its skiman pre-commit hook checks nothing",
+            "skiman: {} is not the canon ({}), so its skiman pre-commit hook checks nothing",
             other.display(),
             repo.root().display()
         );
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn the_printed_line_gives_git_a_root_with_spaces_and_quotes_unchanged() {
-        let root = Path::new("/tmp/skill repo/it's \"mine\"");
+        let root = Path::new("/tmp/my canon/it's \"mine\"");
         let hint = hint_text(root, "skiman.toml skills");
         let line = hint
             .lines()

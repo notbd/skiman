@@ -81,7 +81,7 @@ fn skiman_manual_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten()
     let content = std::fs::read_to_string(&skill_md).unwrap();
     assert!(content.starts_with("---\nname: skiman-manual\ndescription: "));
     assert!(
-        content.contains(&format!("The skill repo is `{}`.", repo.display())),
+        content.contains(&format!("The canon is `{}`.", repo.display())),
         "{content}"
     );
     let inode = std::fs::metadata(&skill_md).unwrap().ino();
@@ -801,7 +801,7 @@ fn a_command_that_waited_while_the_skill_repo_was_switched_writes_nothing() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(&format!(
-            "the skill repo changed to {}",
+            "the canon changed to {}",
             other.canonicalize().unwrap().display()
         )),
         "{stderr}"

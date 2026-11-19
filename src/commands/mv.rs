@@ -65,7 +65,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     let Some(from) = folder(old) else {
         let done = match folder(new) {
             Some(placed) if new != old => format!(
-                "; {} is a skill folder: if `skiman mv {old} {new}` stopped part-way, it got through the skill repo, and `skiman sync` finishes the rest",
+                "; {} is a skill folder: if `skiman mv {old} {new}` stopped part-way, it got through the canon, and `skiman sync` finishes the rest",
                 placed.path()
             ),
             _ => String::new(),
@@ -204,8 +204,7 @@ impl Plan {
     /// repo as it will be is printed as a warning.
     fn validate(&self, repo: &SkillRepo) -> Result<(), Failure> {
         let working_tree = WorkingTree::new(repo.root());
-        let io =
-            |e: std::io::Error| Failure::operational(format!("cannot read the skill repo: {e}"));
+        let io = |e: std::io::Error| Failure::operational(format!("cannot read the canon: {e}"));
         let mut files = Vec::new();
         let mut executable = BTreeSet::new();
         let upstream = |name: &str| format!("upstream/{name}");

@@ -64,8 +64,8 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         guarded = ignore_machine_state(&repo, paths.home())?;
     } else {
         write_layout(&repo, paths.home())
-            .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
-        out!("created skill repo {}", path.display());
+            .map_err(|e| Failure::operational(format!("cannot create the canon: {e}")))?;
+        out!("created canon {}", path.display());
     }
     // A linked `.gitignore` keeps only the `.skiman/` handling above.
     if gitignore::ignore(repo.root())? == gitignore::Outcome::Added && target == Target::Reuse {
@@ -139,13 +139,13 @@ fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
         .any(|item| item.kind == ItemKind::RefusedLocation);
     if (foreign || refused) && !has_skills(repo) {
         err!(
-            "hint: the skill repo has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
+            "hint: the canon has no skills yet and the tool directories or instruction locations hold content skiman does not own; bring your existing setup in with `skiman import` (see `skiman import --guide`)"
         );
         return;
     }
     if foreign {
         err!(
-            "hint: the tool directories hold foreign skills; bring each one into the skill repo with `skiman adopt <name> --from <tool id>`"
+            "hint: the tool directories hold foreign skills; bring each one into the canon with `skiman adopt <name> --from <tool id>`"
         );
     }
     if refused {
@@ -225,7 +225,7 @@ fn inspect(path: &Path) -> Result<Target, Failure> {
             Ok(Target::CreateInRepo)
         }
         Some(_) => Err(Failure::refused(format!(
-            "{} is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing skill repo",
+            "{} is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing canon",
             path.display()
         ))),
     }

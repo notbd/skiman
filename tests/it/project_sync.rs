@@ -635,7 +635,7 @@ fn a_mirror_skill_holding_a_symlink_is_invalid_and_the_project_left_alone() {
     assert_eq!(stdout_of(&out), "", "an invalid mirror is not replaced");
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("fix projects/work/proj/.claude/skills/x in the skill repo"),
+        stderr.contains("fix projects/work/proj/.claude/skills/x in the canon"),
         "{stderr}"
     );
     assert_eq!(read(skill.join("SKILL.md")), "edited in the project\n");
@@ -658,7 +658,7 @@ fn a_mirror_file_that_is_a_symlink_is_invalid() {
 
     assert_eq!(out.status.code(), Some(3));
     assert!(
-        stderr_of(&out).contains("fix projects/work/proj/AGENTS.md in the skill repo"),
+        stderr_of(&out).contains("fix projects/work/proj/AGENTS.md in the canon"),
         "{}",
         stderr_of(&out)
     );
@@ -718,7 +718,7 @@ fn assert_paused(enter: impl FnOnce(&Sandbox, &Path), phrase: &str) {
     assert_eq!(
         stderr,
         format!(
-            "warning: the skill repo {phrase}, so project items are not synced; finish that, then run `skiman sync`\n"
+            "warning: the canon {phrase}, so project items are not synced; finish that, then run `skiman sync`\n"
         )
     );
     assert_sides(&sandbox, &dir, "proj/AGENTS.md", Some("v2\n"), Some("v1\n"));
@@ -930,7 +930,7 @@ fn a_mirror_skill_without_skill_md_is_invalid() {
 
     assert_eq!(out.status.code(), Some(3));
     assert!(
-        stderr_of(&out).contains("fix projects/work/proj/.claude/skills/x in the skill repo"),
+        stderr_of(&out).contains("fix projects/work/proj/.claude/skills/x in the canon"),
         "{}",
         stderr_of(&out)
     );

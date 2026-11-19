@@ -56,7 +56,7 @@ pub fn reconcile(
             repo.root().join(MIRROR_DIR),
             "paused",
             format!(
-                "the skill repo {operation}, so project items are not synced; finish that, then run `skiman sync`"
+                "the canon {operation}, so project items are not synced; finish that, then run `skiman sync`"
             ),
             false,
         ));

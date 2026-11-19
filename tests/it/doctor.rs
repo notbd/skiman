@@ -73,12 +73,12 @@ fn doctor_reports_a_healthy_setup() {
         .code(0)
         .stdout_eq(format!(
             "\
-skill repo: {repo}
+canon: {repo}
 recorded binary: {BINARY}
 git: version [..]
 git hooks: installed in {repo}/.git/hooks
 session-start hook for claude-code: installed in {home}/.claude/settings.json
-session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks
+session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the canon's git hooks
 session-start hook for antigravity: installed in {home}/.gemini/config/hooks.json
 claude-code: installed; tool directory {home}/.claude/skills; instruction file {home}/.claude/CLAUDE.md
 codex: installed; tool directory {home}/.agents/skills; instruction file {home}/.codex/AGENTS.md
@@ -177,7 +177,7 @@ fn doctor_reports_each_problem_in_one_place() {
     let out = doctor(&sandbox);
     let r = repo.display();
     for line in [
-        format!("skill repo: {r}"),
+        format!("canon: {r}"),
         format!(
             "recorded binary: {} no longer exists; the git hooks and session-start hooks call it, so run `skiman init {r}` again with the skiman you use now",
             gone_binary.display()
@@ -327,7 +327,7 @@ fn doctor_shows_tmp_content_as_in_use_while_the_repo_lock_is_held() {
     assert_line(
         &out,
         &format!(
-            "{} is in use: another skiman command holds the repo lock",
+            "{} is in use: another skiman command holds the canon lock",
             staged.display()
         ),
     );

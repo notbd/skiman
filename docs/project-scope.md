@@ -12,8 +12,8 @@ that their own git repo does not track. They have no history and no backup.
 
 The user registers one or more folders (project roots). skiman finds every
 project instruction file and project skill under them and keeps a copy of
-each in the skill repo (the mirror). The project files stay real files and
-stay where they are; the mirror follows them automatically, so the skill repo
+each in the canon (the mirror). The project files stay real files and
+stay where they are; the mirror follows them automatically, so the canon
 holds their history once the user commits it. The project is written only when the user asks, and
 whatever skiman replaces on either side goes to a backup first.
 
@@ -21,8 +21,8 @@ whatever skiman replaces on either side goes to a backup first.
 |---|---|
 | Register one or more folders | `skiman project add`, `[projects.<id>]` |
 | Recursive, exhaustive scan | Discovery |
-| Lay the results out elegantly in the skill repo | Mirror layout |
-| Copy into the skill repo, keep the original working | Copy mode, `adopt` |
+| Lay the results out elegantly in the canon | Mirror layout |
+| Copy into the canon, keep the original working | Copy mode, `adopt` |
 | Local edits skiman did not see | Sync and the state table |
 | New providers, models, harnesses are easy to add | Tool table |
 | Easy, lossless migration to another tool | Project files stay real files; plain mirror |
@@ -32,7 +32,7 @@ whatever skiman replaces on either side goes to a backup first.
 Two decisions came out of measuring the real tools against two earlier drafts:
 
 1. **Copy, not links.** The first draft replaced each project file with a symlink into
-   the skill repo, like global skills. That breaks how these files are edited
+   the canon, like global skills. That breaks how these files are edited
    (`docs/project-scope-evidence.md`): Claude Code does not edit a symlinked
    `AGENTS.md` (it treats the target as outside the working directory),
    resolves `@` imports in a symlinked `CLAUDE.md` against the target folder,
@@ -40,7 +40,7 @@ Two decisions came out of measuring the real tools against two earlier drafts:
    (nobody edits `~/.claude/skills/x` in place), so links stay right there;
    project folders are where people and agents edit, so they keep real files.
 2. **One automatic direction.** The second draft also wrote mirror changes back to the
-   project at every sync. A routine `git restore .` in the skill repo then
+   project at every sync. A routine `git restore .` in the canon then
    overwrote project content that existed nowhere else, and a conflicted
    `git pull` could write conflict markers into a project. Now sync only
    copies project → mirror; mirror → project happens only through
@@ -66,7 +66,7 @@ Claude Code uses "local" for personal uncommitted files (`CLAUDE.local.md`).
 - **Project item**: the unit skiman copies: one project instruction file or
   one project skill folder.
 - **Mirror** (镜像): `projects/<root id>/<path relative to the root>` in the
-  skill repo: the recorded copy of a project item.
+  canon: the recorded copy of a project item.
 - **Anchor**: the project folder an item belongs to: the item's path without
   its pattern (`proj` for `proj/AGENTS.md` and `proj/.claude/skills/x`).
 - **Synced hash** (同步 hash): per machine, the content hash both sides had
@@ -124,19 +124,19 @@ exclude = ["_archive", "项目甲/草稿"]
   `restore`, `sync`, `doctor`; `eject` maps a path to its root lexically,
   after expanding `~`, so a root that is gone can still be ejected), because
   `skiman.toml` is edited by hand and shared. A root must be an existing folder, and must not be: `HOME`, `/`
-  or an ancestor of `HOME`; inside the skill repo (containing it is fine,
+  or an ancestor of `HOME`; inside the canon (containing it is fine,
   discovery skips it); inside or containing any tool's presence directory;
   overlapping another root (all compared by realpath). A failing root is
   reported once and skipped.
 - `project add <path> [--id <id>]` also refuses a taken or invalid id, and
-  prints that the root's project files will be stored in the skill repo (and
-  pushed wherever the skill repo is pushed).
+  prints that the root's project files will be stored in the canon (and
+  pushed wherever the canon is pushed).
 - `skiman check` checks the syntax (`unknown-key`, `toml-value`).
 
 ### Mirror layout and machine state
 
 ```
-skill repo/
+canon/
   skills/  upstream/  instructions/shared.md  skiman.toml   (unchanged)
   projects/
     work/                                       [projects.work]
@@ -167,7 +167,7 @@ conflicts, and items missing on disk show as row 9.
 Walks each root with `read_dir` and `lstat`, never following a directory
 symlink. It never enters `.git`, `node_modules`, a linked git worktree (a
 folder whose `.git` is a file pointing into `…/worktrees/`), an `exclude`
-entry, a `.skiman-swap-*` folder, the skill repo or skiman's state
+entry, a `.skiman-swap-*` folder, the canon or skiman's state
 directory. Skill folders are not entered. A symlink at an item location (an alias such
 as `CLAUDE.md -> AGENTS.md`, a link to a global skill) is not a candidate
 and is not reported.
@@ -196,7 +196,7 @@ roots.
 
 | # | Condition | Sync does | Exit |
 |---|---|---|---|
-| 1 | The skill repo is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned; a `.git` file is followed to the worktree's git dir) | skip every project item; one notice | 0 |
+| 1 | The canon is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned; a `.git` file is followed to the worktree's git dir) | skip every project item; one notice | 0 |
 | 2 | Root fails validation or its folder is absent | skip the root; one warning | 0 |
 | 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path has no item shape (one copied from a folder a retired `skill_dirs` key named, say; shape only: a skill folder that lost its `SKILL.md` still has the shape and falls to row 5) | skip, drop its S (`check` reports the path) | 0 |
 | 4 | M absent, S set, D is not a regular item of its kind | drop S | 0 |
@@ -232,8 +232,8 @@ tree.
 ### Writing: one protocol for every replace
 
 Used by sync row 13, `adopt` and `restore` (`eject` only moves the mirror to a
-backup and drops the synced hash), and by the write commands of the skill
-repo (`src/staging.rs`). Every temporary entry lives in a staging folder on
+backup and drops the synced hash), and by the write commands of the
+canon (`src/staging.rs`). Every temporary entry lives in a staging folder on
 the destination's filesystem, one per replace: `<repo>/.skiman/swap/<ts>/`
 for the mirror, `<anchor>/.skiman-swap-<ts>/` for the project (holding a
 `.gitignore` of `*` while it exists, so a project repo never picks it up).
@@ -329,7 +329,7 @@ locks, staging, backups under machine state.
 ### Local edits skiman did not see
 
 - **Edited in the project** (an agent, an editor, `sed`): the next sync
-  copies it into the mirror; `git diff` in the skill repo shows it; the
+  copies it into the mirror; `git diff` in the canon shows it; the
   previous mirror content is in a backup.
 - **Edited in the mirror, or the mirror reset by git** (`git restore`,
   `git pull` from another machine): row 14, reported; nothing is written to
@@ -347,7 +347,7 @@ locks, staging, backups under machine state.
   per anchor); the moved folder holds real files, unmanaged until
   adopted. `eject <old path>` plus `adopt <new path>` in one commit keeps the
   history (`git log --follow` follows identical content across the move).
-- **The skill repo mid-merge, mid-rebase, detached for `git checkout <sha>`
+- **The canon mid-merge, mid-rebase, detached for `git checkout <sha>`
   or `git bisect`**: project sync pauses (row 1), so no project content is
   copied into an old checkout and nothing half-merged moves anywhere.
 - **Another machine**: sync there copies nothing into the project; `restore
@@ -386,7 +386,7 @@ locks, staging, backups under machine state.
 
 ### Decisions made for the user
 
-- Mirrors live in the skill repo, not a second store: one source of truth,
+- Mirrors live in the canon, not a second store: one source of truth,
   checked by the same rules and hooks. The user already keeps work-related
   instructions there. Registering a root is an explicit act, and
   `project add` says where content goes.
@@ -415,7 +415,7 @@ locks, staging, backups under machine state.
 1. `project add` and root validation: every refusal, also for a hand-edited
    `skiman.toml`.
 2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, `exclude` (name, path),
-   skill repo and state dir skipped; alias links ignored.
+   canon and state dir skipped; alias links ignored.
 3. Gates: tracked file, skill with one tracked file, git failure, secret,
    symlink inside a skill, missing `SKILL.md`, git conflict markers; a skill
    without frontmatter `name` is adopted.
@@ -432,7 +432,7 @@ locks, staging, backups under machine state.
    project content in a backup; nothing replaced under a folder; a path the
    project repo tracks is not written; a failing step 4 or 5 keeps the
    original; leftover staging folder handling; a folder restore does not undo a
-   deletion; every project command refuses during a skill repo merge.
+   deletion; every project command refuses during a canon merge.
 7. Eject: item, folder, root (table removed), with mirror or project gone.
 8. Check: `project-path`, a retired `skill_dirs` key, the gate 2 rules (a skill
    without frontmatter `name` passes).

@@ -547,7 +547,7 @@ fn filter_drivers_hook_templates_and_fsmonitor_from_the_users_git_config_never_r
     for dir in ["skills/pdf", "upstream/pdf"] {
         assert!(
             !repo.join(dir).join(".gitattributes").exists(),
-            "the upstream's .gitattributes would apply to the skill repo"
+            "the upstream's .gitattributes would apply to the canon"
         );
     }
     assert!(

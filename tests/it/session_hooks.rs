@@ -134,13 +134,13 @@ fn session_hooks_claude_code_and_codex_adds_one_claude_code_entry_and_keeps_ever
     init(&sandbox, "claude-code,codex")
         .code(0)
         .stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/skill-repo
 ...
 added the session-start hook entry to [..]/home/.claude/settings.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 
 "#]])
         .stderr_eq(str![[r#"
-warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json
+warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the canon's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json
 
 "#]]);
 
@@ -157,7 +157,7 @@ warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman s
     init(&sandbox, "claude-code,codex")
         .code(0)
         .stdout_eq("")
-        .stderr_eq("warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json\n");
+        .stderr_eq("warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the canon's git hooks; skiman adds no entry to [..]/home/.codex/hooks.json\n");
     assert_eq!(
         std::fs::read(claude_settings(&sandbox)).unwrap(),
         settings_bytes
@@ -343,7 +343,7 @@ fn session_hooks_none_removes_only_skimans_entries() {
     write_json(&codex_hooks(&sandbox), &codex);
 
     init(&sandbox, "none").code(0).stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/skill-repo
 ...
 removed the session-start hook entries from [..]/home/.claude/settings.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 removed the session-start hook entries from [..]/home/.codex/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
@@ -457,7 +457,7 @@ fn with_a_terminal_init_previews_the_exact_entry_and_declining_changes_nothing()
     );
     assert!(
         shown.contains(&format!(
-            "warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks; skiman adds no entry to {}\n",
+            "warning: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the canon's git hooks; skiman adds no entry to {}\n",
             codex_hooks(&sandbox).display()
         )),
         "{shown}"
@@ -592,7 +592,7 @@ fn session_hooks_antigravity_adds_a_named_skiman_hook_and_keeps_every_other_entr
     write_json(&antigravity_hooks(&sandbox), &antigravity_user_hooks());
 
     init(&sandbox, "antigravity").code(0).stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/skill-repo
 ...
 added the session-start hook entry to [..]/home/.gemini/config/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 
@@ -634,7 +634,7 @@ fn session_hooks_none_removes_only_skimans_antigravity_handlers() {
     write_json(&antigravity_hooks(&sandbox), &hooks);
 
     init(&sandbox, "none").code(0).stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/skill-repo
 ...
 removed the session-start hook entries from [..]/home/.gemini/config/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 

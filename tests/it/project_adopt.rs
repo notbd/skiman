@@ -855,7 +855,7 @@ fn a_root_that_holds_the_skill_repo_skips_it() {
     assert_eq!(read(mirrored.join("proj/AGENTS.md")), "p\n");
     assert!(
         !mirrored.join("skills").exists(),
-        "the skill repo is never discovered"
+        "the canon is never discovered"
     );
 }
 
@@ -926,7 +926,7 @@ fn the_warning_about_a_mirror_git_ignores_shows_a_non_ascii_path_as_it_is() {
 
     assert!(
         stderr.contains(&format!(
-            "warning: git ignores projects/work/美国/AGENTS.md in the skill repo (.gitignore:{}:projects/work/美国/), so it never gets history; change that rule\n",
+            "warning: git ignores projects/work/美国/AGENTS.md in the canon (.gitignore:{}:projects/work/美国/), so it never gets history; change that rule\n",
             rules.lines().count()
         )),
         "{stderr}"

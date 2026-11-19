@@ -55,7 +55,7 @@ fn skiman_manual_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
     let repo = sandbox.skill_repo().display().to_string();
-    assert!(content.contains(&format!("The skill repo is `{repo}`.")));
+    assert!(content.contains(&format!("The canon is `{repo}`.")));
 
     snapbox::assert_data_eq!(
         content.replace(&repo, "<SKILL_REPO>"),
@@ -71,10 +71,7 @@ fn skiman_manual_covers_every_everyday_operation() {
     let content = materialised(&sandbox);
     let repo = sandbox.skill_repo().display().to_string();
     let required = [
-        (
-            "find the skill repo",
-            format!("The skill repo is `{repo}`."),
-        ),
+        ("find the canon", format!("The canon is `{repo}`.")),
         ("create", "skiman new <name> -d".to_owned()),
         (
             "write the body",
@@ -93,7 +90,7 @@ fn skiman_manual_covers_every_everyday_operation() {
             "wait for approval",
             "wait for the user's approval".to_owned(),
         ),
-        ("edit in the skill repo", format!("{repo}/skills/<name>/")),
+        ("edit in the canon", format!("{repo}/skills/<name>/")),
         ("update", "skiman update".to_owned()),
         ("resolve conflicts", "<<<<<<< local (skiman)".to_owned()),
         ("remove", "skiman remove <name> --yes".to_owned()),

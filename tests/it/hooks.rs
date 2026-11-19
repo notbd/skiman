@@ -308,7 +308,7 @@ fn with_the_recorded_binary_missing_pre_commit_rejects_and_the_post_hooks_exit_0
         .assert()
         .code(1)
         .stderr_eq(str![[r#"
-skiman: [..]/bin/skiman does not exist, so the commit is rejected; install skiman, then run `skiman init <skill repo>` again
+skiman: [..]/bin/skiman does not exist, so the commit is rejected; install skiman, then run `skiman init <canon>` again
 
 "#]]);
 
@@ -319,7 +319,7 @@ skiman: [..]/bin/skiman does not exist, so the commit is rejected; install skima
             .code(0)
             .stdout_eq("")
             .stderr_eq(str![[r#"
-skiman: [..]/bin/skiman does not exist, so the agent tools were not updated; install skiman, then run `skiman init <skill repo>` again
+skiman: [..]/bin/skiman does not exist, so the agent tools were not updated; install skiman, then run `skiman init <canon>` again
 
 "#]]);
     }
@@ -464,7 +464,7 @@ fn a_commit_in_a_previous_skill_repo_is_not_blocked_by_its_leftover_hook() {
         .assert()
         .success()
         .stderr_eq(str![[r#"
-skiman: [..]/skill-repo is not the skill repo ([..]/second-repo), so its skiman pre-commit hook checks nothing
+skiman: [..]/skill-repo is not the canon ([..]/second-repo), so its skiman pre-commit hook checks nothing
 ...
 "#]]);
     assert_eq!(

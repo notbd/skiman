@@ -106,7 +106,7 @@ fn add_writes_a_tilde_path_and_an_id_from_the_folder_name() {
         stdout.contains(&format!(
             "{}/projects/acme-corp/",
             sandbox.skill_repo().display()
-        )) && stdout.contains("pushed wherever the skill repo is pushed"),
+        )) && stdout.contains("pushed wherever the canon is pushed"),
         "add says where the project files will be stored: {stdout}"
     );
     // Registering copies nothing yet, and the written table passes `check`.
@@ -239,7 +239,7 @@ fn add_refuses_the_skill_repo_and_folders_inside_it() {
     let sandbox = initialised();
     let repo = sandbox.skill_repo();
     for dir in [repo.clone(), repo.join("skills")] {
-        assert_refused(&sandbox, add_cmd(&sandbox, dir), "is inside the skill repo");
+        assert_refused(&sandbox, add_cmd(&sandbox, dir), "is inside the canon");
     }
 }
 

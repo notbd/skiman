@@ -10,7 +10,8 @@
 //!   secret violations in a list.
 //!
 //! [`warnings_all`] returns what is printed as a warning but never fails:
-//! the shared body at 80 % of its size limit. [`missing_info`] returns the
+//! the shared body at 80 % of its size limit, and a skill body that an
+//! enabled tool cuts. [`missing_info`] returns the
 //! skills without a summary, group folder or origin, which only `skiman check`
 //! prints (every write command prints [`warnings_all`]).
 //!
@@ -24,6 +25,7 @@ mod project;
 mod secrets;
 mod shared_body;
 mod skill;
+pub mod skill_body;
 mod skill_info;
 
 use std::collections::BTreeSet;
@@ -79,6 +81,9 @@ pub mod rule {
     pub const SKILL_INFO: &str = "skill-info";
     /// `linked` or a path under it in the git index (`skiman check` only).
     pub const LINKED_TRACKED: &str = "linked-tracked";
+    /// A skill body that an enabled tool cuts without a message: a warning,
+    /// never a violation.
+    pub const SKILL_BODY_SIZE: &str = "skill-body-size";
 }
 
 /// The frontmatter rules on a skill's `SKILL.md`.
@@ -443,7 +448,9 @@ pub fn allow_hint(violations: &[Violation]) -> Option<String> {
 /// Warnings on everything in `tree`, sorted by path and line.
 pub fn warnings_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     let mut out = BTreeSet::new();
-    shared_body::warnings(tree, &config::Records::read(tree)?, &mut out)?;
+    let records = config::Records::read(tree)?;
+    shared_body::warnings(tree, &records, &mut out)?;
+    skill_body::warnings(tree, &records, &mut out)?;
     Ok(out.into_iter().collect())
 }
 

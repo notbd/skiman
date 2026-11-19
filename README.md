@@ -89,6 +89,17 @@ start a Codex session, or rely on the skill repo's git hooks, which run it
 after each commit, merge, checkout and rebase there. Evidence:
 [docs/phase1-results.md](docs/phase1-results.md).
 
+For Antigravity, `--session-hooks antigravity` adds a hook named `skiman`
+to `~/.gemini/config/hooks.json`. Antigravity runs it when a conversation
+starts, at its first prompt, but after it has read the skills for that
+prompt: a skill the hook links is there from the next prompt (with `agy -p`,
+from the next run), and a resumed conversation does not run it. So after you
+add or rename a skill, run `skiman sync` before you start an Antigravity
+session that needs it from the first prompt. What the hook reports goes only
+to Antigravity's log. Antigravity also cuts a skill's body after 24000 bytes
+without a message, so while it is enabled skiman warns about a longer one.
+Evidence: [docs/project-scope-evidence.md](docs/project-scope-evidence.md).
+
 ## Verify the install
 
 1. Run `skiman --version`.

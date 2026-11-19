@@ -419,10 +419,17 @@ fn the_entry_command_runs_when_the_binary_path_has_a_space() {
 /// What `init` shows before asking, for the entry in `settings`.
 fn preview(settings: &Path) -> String {
     format!(
-        "skiman can add this session-start hook entry to `hooks.SessionStart` in {}, so a new or resumed session refreshes distribution:\n{}\n",
+        "skiman can add this session-start hook entry to `hooks.SessionStart` of {}, so starting a session refreshes distribution:\n{}\n",
         settings.display(),
         serde_json::to_string_pretty(&skiman_group()).unwrap()
     )
+}
+
+/// The terminal tests preview Claude Code's entry alone.
+fn without_antigravity() -> Sandbox {
+    Sandbox::builder()
+        .tool(Tool::Antigravity, ToolSetup::Absent)
+        .build()
 }
 
 fn init_pty(sandbox: &Sandbox) -> crate::support::Pty {
@@ -434,7 +441,7 @@ fn init_pty(sandbox: &Sandbox) -> crate::support::Pty {
 
 #[test]
 fn with_a_terminal_init_previews_the_exact_entry_and_declining_changes_nothing() {
-    let sandbox = Sandbox::new();
+    let sandbox = without_antigravity();
     write_json(&claude_settings(&sandbox), &user_settings());
     let before = std::fs::read(claude_settings(&sandbox)).unwrap();
 
@@ -462,7 +469,7 @@ fn with_a_terminal_init_previews_the_exact_entry_and_declining_changes_nothing()
 
 #[test]
 fn with_a_terminal_accepting_the_preview_writes_the_entry() {
-    let sandbox = Sandbox::new();
+    let sandbox = without_antigravity();
     write_json(&claude_settings(&sandbox), &user_settings());
 
     let mut pty = init_pty(&sandbox);
@@ -529,7 +536,7 @@ fn init_through_a_renamed_link_keeps_one_entry_and_none_through_it_removes_it() 
 
 #[test]
 fn with_a_terminal_a_change_made_to_the_settings_while_the_question_is_open_is_kept() {
-    let sandbox = Sandbox::new();
+    let sandbox = without_antigravity();
     write_json(&claude_settings(&sandbox), &user_settings());
 
     let mut pty = init_pty(&sandbox);
@@ -544,5 +551,175 @@ fn with_a_terminal_a_change_made_to_the_settings_while_the_question_is_open_is_k
     assert_eq!(
         read_json(&claude_settings(&sandbox)),
         with_skiman_group(changed)
+    );
+}
+
+fn antigravity_hooks(sandbox: &Sandbox) -> PathBuf {
+    sandbox.home().join(".gemini/config/hooks.json")
+}
+
+/// Antigravity's `hooks.json`: named hooks, each with flat handler lists.
+fn antigravity_user_hooks() -> Value {
+    json!({
+        "welcome": {
+            "SessionStart": [{ "type": "command", "command": "./welcome.sh" }]
+        },
+        "lint": {
+            "enabled": false,
+            "PostToolUse": [{
+                "matcher": "run_command",
+                "hooks": [{ "type": "command", "command": "./lint.sh", "timeout": 5 }]
+            }]
+        }
+    })
+}
+
+/// The named hook skiman adds to Antigravity's `hooks.json`.
+fn antigravity_skiman_hook() -> Value {
+    json!({
+        "SessionStart": [{
+            "type": "command",
+            "command": format!("{} sync --hook", env!("CARGO_BIN_EXE_skiman")),
+            "timeout": 10
+        }]
+    })
+}
+
+#[test]
+fn session_hooks_antigravity_adds_a_named_skiman_hook_and_keeps_every_other_entry() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(antigravity_hooks(&sandbox).parent().unwrap()).unwrap();
+    write_json(&antigravity_hooks(&sandbox), &antigravity_user_hooks());
+
+    init(&sandbox, "antigravity").code(0).stdout_eq(str![[r#"
+created skill repo [..]/skill-repo
+...
+added the session-start hook entry to [..]/home/.gemini/config/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
+
+"#]]);
+    let mut expected = antigravity_user_hooks();
+    expected["skiman"] = antigravity_skiman_hook();
+    assert_eq!(read_json(&antigravity_hooks(&sandbox)), expected);
+    assert!(!claude_settings(&sandbox).exists());
+
+    // A second run changes nothing.
+    let bytes = std::fs::read(antigravity_hooks(&sandbox)).unwrap();
+    init(&sandbox, "antigravity").code(0);
+    assert_eq!(std::fs::read(antigravity_hooks(&sandbox)).unwrap(), bytes);
+}
+
+#[test]
+fn session_hooks_antigravity_creates_hooks_json_when_it_is_missing() {
+    let sandbox = Sandbox::new();
+
+    init(&sandbox, "antigravity").code(0);
+
+    assert_eq!(
+        read_json(&antigravity_hooks(&sandbox)),
+        json!({ "skiman": antigravity_skiman_hook() })
+    );
+}
+
+#[test]
+fn session_hooks_none_removes_only_skimans_antigravity_handlers() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(antigravity_hooks(&sandbox).parent().unwrap()).unwrap();
+    let mut hooks = antigravity_user_hooks();
+    hooks["skiman"] = antigravity_skiman_hook();
+    // An older skiman handler that a user moved into their own named hook.
+    hooks["welcome"]["SessionStart"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "type": "command", "command": "/old/bin/skiman sync --hook" }));
+    write_json(&antigravity_hooks(&sandbox), &hooks);
+
+    init(&sandbox, "none").code(0).stdout_eq(str![[r#"
+created skill repo [..]/skill-repo
+...
+removed the session-start hook entries from [..]/home/.gemini/config/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
+
+"#]]);
+    assert_eq!(
+        read_json(&antigravity_hooks(&sandbox)),
+        antigravity_user_hooks()
+    );
+}
+
+#[test]
+fn a_hooks_json_with_a_foreign_hook_named_skiman_is_left_alone_and_init_exits_4() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(antigravity_hooks(&sandbox).parent().unwrap()).unwrap();
+    let hooks = json!({ "skiman": { "Stop": [{ "command": "./mine.sh" }] } });
+    write_json(&antigravity_hooks(&sandbox), &hooks);
+    let bytes = std::fs::read(antigravity_hooks(&sandbox)).unwrap();
+
+    init(&sandbox, "antigravity").code(4).stderr_eq(str![[r#"
+error: [..]/home/.gemini/config/hooks.json: the hook named `skiman` is not skiman's, so skiman did not change it; add this entry to the top level by hand:
+{
+  "skiman": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "[..] sync --hook",
+        "timeout": 10
+      }
+    ]
+  }
+}
+
+"#]]);
+    assert_eq!(std::fs::read(antigravity_hooks(&sandbox)).unwrap(), bytes);
+}
+
+#[test]
+fn session_hooks_none_leaves_a_settings_file_of_another_shape_alone_and_exits_0() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(claude_settings(&sandbox).parent().unwrap()).unwrap();
+    write_json(
+        &claude_settings(&sandbox),
+        &json!({ "hooks": { "SessionStart": "boot.sh" } }),
+    );
+    std::fs::create_dir_all(antigravity_hooks(&sandbox).parent().unwrap()).unwrap();
+    write_json(&antigravity_hooks(&sandbox), &json!({ "version": 1 }));
+    let claude = std::fs::read(claude_settings(&sandbox)).unwrap();
+    let antigravity = std::fs::read(antigravity_hooks(&sandbox)).unwrap();
+
+    init(&sandbox, "none").code(0);
+
+    assert_eq!(std::fs::read(claude_settings(&sandbox)).unwrap(), claude);
+    assert_eq!(
+        std::fs::read(antigravity_hooks(&sandbox)).unwrap(),
+        antigravity
+    );
+}
+
+#[test]
+fn with_a_terminal_init_previews_every_tools_entry_and_accepting_writes_them() {
+    let sandbox = Sandbox::new();
+    write_json(&claude_settings(&sandbox), &user_settings());
+
+    let mut pty = init_pty(&sandbox);
+    let shown = pty.expect("Add these entries? [y/N] ").replace('\r', "");
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 0, "{rest}");
+    assert!(
+        shown.contains(&preview(&claude_settings(&sandbox))),
+        "{shown}"
+    );
+    let antigravity_preview = format!(
+        "skiman can add this session-start hook entry to the top level of {}, so starting a session refreshes distribution:\n{}\n",
+        antigravity_hooks(&sandbox).display(),
+        serde_json::to_string_pretty(&json!({ "skiman": antigravity_skiman_hook() })).unwrap()
+    );
+    assert!(shown.contains(&antigravity_preview), "{shown}");
+    assert_eq!(
+        read_json(&claude_settings(&sandbox)),
+        with_skiman_group(user_settings())
+    );
+    assert_eq!(
+        read_json(&antigravity_hooks(&sandbox)),
+        json!({ "skiman": antigravity_skiman_hook() })
     );
 }

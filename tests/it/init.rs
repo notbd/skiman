@@ -204,10 +204,14 @@ fn init_refuses_an_unknown_session_hooks_value_as_a_usage_error() {
 
     sandbox
         .skiman()
-        .args(["init", "--session-hooks", "antigravity"])
+        .args(["init", "--session-hooks", "claude-code,vscode"])
         .arg(sandbox.skill_repo())
         .assert()
-        .code(2);
+        .code(2)
+        .stderr_eq(str![[r#"
+error: invalid value 'claude-code,vscode' for '--session-hooks <ids|none>': `vscode` is not an agent tool with session-start hooks (use `none` or a comma-separated list of: claude-code, codex, antigravity)
+...
+"#]]);
 
     assert!(!sandbox.skill_repo().exists());
 }

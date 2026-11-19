@@ -61,7 +61,7 @@ fn assert_line(stdout: &str, line: &str) {
 #[test]
 fn doctor_reports_a_healthy_setup() {
     let sandbox = Sandbox::new();
-    init(&sandbox, "claude-code");
+    init(&sandbox, "claude-code,antigravity");
     let repo = sandbox.skill_repo();
     let home = sandbox.home();
     let home = home.display();
@@ -79,6 +79,7 @@ git: version [..]
 git hooks: installed in {repo}/.git/hooks
 session-start hook for claude-code: installed in {home}/.claude/settings.json
 session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks
+session-start hook for antigravity: installed in {home}/.gemini/config/hooks.json
 claude-code: installed; tool directory {home}/.claude/skills; instruction file {home}/.claude/CLAUDE.md
 codex: installed; tool directory {home}/.agents/skills; instruction file {home}/.codex/AGENTS.md
 antigravity: installed; tool directory {home}/.gemini/config/skills; instruction file {home}/.gemini/GEMINI.md
@@ -394,4 +395,59 @@ fn list_diff_and_doctor_change_nothing() {
         sandbox.skiman_confined().args(args).assert().code(0);
         assert_eq!(world(&sandbox), before, "skiman {args:?} changed a file");
     }
+}
+
+#[test]
+fn doctor_names_each_instruction_file_antigravity_loads_on_top_of_the_shared_body() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let gemini = sandbox.presence_dir(Tool::Antigravity);
+    write(gemini.join("AGENTS.md"), "# extra\n");
+    write(gemini.join("config/AGENTS.md"), "# extra\n");
+
+    let out = doctor(&sandbox);
+    for rel in ["AGENTS.md", "config/AGENTS.md"] {
+        assert_line(
+            &out,
+            &format!(
+                "{} exists, so antigravity also loads it on top of {}",
+                gemini.join(rel).display(),
+                gemini.join("GEMINI.md").display()
+            ),
+        );
+    }
+    assert!(
+        !out.contains("config/GEMINI.md"),
+        "a file that does not exist is not named:\n{out}"
+    );
+}
+
+#[test]
+fn doctor_reports_antigravitys_session_start_hook_missing_and_different() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let r = sandbox.skill_repo();
+    let hooks = sandbox.home().join(".gemini/config/hooks.json");
+
+    assert_line(
+        &doctor(&sandbox),
+        &format!(
+            "session-start hook for antigravity: not installed in {}; add it with `skiman init {} --session-hooks antigravity`",
+            hooks.display(),
+            r.display()
+        ),
+    );
+
+    write(
+        &hooks,
+        r#"{"skiman": {"SessionStart": [{"type": "command", "command": "/old/skiman sync --hook"}]}}"#,
+    );
+    assert_line(
+        &doctor(&sandbox),
+        &format!(
+            "session-start hook for antigravity: {} holds a skiman hook that differs from what `skiman init` writes now; rewrite it with `skiman init {} --session-hooks antigravity`",
+            hooks.display(),
+            r.display()
+        ),
+    );
 }

@@ -249,7 +249,7 @@ fn parse_session_hooks(value: &str) -> Result<String, String> {
     }
     let hookable: Vec<&str> = TOOLS
         .iter()
-        .filter(|tool| tool.session_hook_file.is_some())
+        .filter(|tool| tool.session_hook.is_some())
         .map(|tool| tool.id)
         .collect();
     for id in value.split(',') {

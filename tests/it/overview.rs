@@ -171,6 +171,8 @@ skiman lists these here and never changes them.
 - Claude Code plugin kit@market 1.0: the skills path `./extra` leads outside the plugin.
 - `claude-code` also reads built-in skills that are not stored on disk; they are not listed.
 - `codex` also reads the skills of its plugins in `~/.codex/plugins`; they are not listed.
+- `antigravity` also reads the skills in `~/.gemini/skills`; they are not listed.
+- `antigravity` also reads the skills in `~/.gemini/antigravity-cli/skills`; they are not listed.
 
 "#]])
         .stderr_eq("");

@@ -49,6 +49,9 @@ pub struct AgentTool {
     /// Files (relative to `HOME`) the tool loads instead of the instruction
     /// file when they exist; `doctor` reports them.
     pub instruction_overrides: &'static [&'static str],
+    /// Files (relative to `HOME`) the tool loads on top of the instruction
+    /// file when they exist; `doctor` reports them.
+    pub instruction_additions: &'static [&'static str],
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
     pub managed_elsewhere: &'static [ManagedElsewhere],
@@ -95,6 +98,7 @@ pub const TOOLS: &[AgentTool] = &[
         tool_dir: ".claude/skills",
         instruction_file: ".claude/CLAUDE.md",
         instruction_overrides: &[],
+        instruction_additions: &[],
         instruction_size_limit: None,
         managed_elsewhere: &[
             ManagedElsewhere::Path(".claude/skills/synced"),
@@ -135,6 +139,7 @@ pub const TOOLS: &[AgentTool] = &[
         instruction_file: ".codex/AGENTS.md",
         // Codex reads `AGENTS.override.md` instead of `AGENTS.md` when it exists.
         instruction_overrides: &[".codex/AGENTS.override.md"],
+        instruction_additions: &[],
         instruction_size_limit: Some(32768),
         managed_elsewhere: &[
             ManagedElsewhere::RealpathUnder(".codex/plugins"),
@@ -165,12 +170,22 @@ pub const TOOLS: &[AgentTool] = &[
         tool_dir: ".gemini/config/skills",
         instruction_file: ".gemini/GEMINI.md",
         instruction_overrides: &[],
+        // agy 1.5.12 loads all four global locations together.
+        instruction_additions: &[
+            ".gemini/AGENTS.md",
+            ".gemini/config/GEMINI.md",
+            ".gemini/config/AGENTS.md",
+        ],
         // Bytes, inclusive: phase 1 measured 24000 loads whole, 24001 is
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
         managed_elsewhere: &[],
         skills_elsewhere: &[],
-        skills_not_listed: &[],
+        // agy 1.5.12 also loads these two folders (`docs/project-scope-evidence.md`).
+        skills_not_listed: &[
+            "the skills in `~/.gemini/skills`",
+            "the skills in `~/.gemini/antigravity-cli/skills`",
+        ],
         reserved_names: &[],
         session_hook_file: None,
         session_hook_unavailable: None,

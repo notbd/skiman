@@ -3,8 +3,8 @@
 //! the git hooks and session-start hooks, each agent tool's locations and
 //! aliasing, then every entry skiman does not own (foreign entries on every
 //! run, occupied paths, dangling links, managed-elsewhere content), refused
-//! instruction locations and override files, unresolved conflicts, leftover
-//! records and tmp leftovers.
+//! instruction locations, override and added instruction files, unresolved
+//! conflicts, leftover records and tmp leftovers.
 //!
 //! Read-only: never writes to the skill repo, its `.skiman/` folder, tool
 //! directories or machine state, and never takes the repo lock for longer
@@ -331,6 +331,17 @@ fn report_instruction_locations(
             if std::fs::symlink_metadata(&file).is_ok() {
                 out!(
                     "{} exists, so {} loads it instead of {}; move it away to use the shared body",
+                    file.display(),
+                    tool.id,
+                    path.display()
+                );
+            }
+        }
+        for rel in tool.instruction_additions {
+            let file = home.join(rel);
+            if std::fs::symlink_metadata(&file).is_ok() {
+                out!(
+                    "{} exists, so {} also loads it on top of {}",
                     file.display(),
                     tool.id,
                     path.display()

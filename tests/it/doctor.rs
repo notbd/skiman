@@ -395,3 +395,28 @@ fn list_diff_and_doctor_change_nothing() {
         assert_eq!(world(&sandbox), before, "skiman {args:?} changed a file");
     }
 }
+
+#[test]
+fn doctor_names_each_instruction_file_antigravity_loads_on_top_of_the_shared_body() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let gemini = sandbox.presence_dir(Tool::Antigravity);
+    write(gemini.join("AGENTS.md"), "# extra\n");
+    write(gemini.join("config/AGENTS.md"), "# extra\n");
+
+    let out = doctor(&sandbox);
+    for rel in ["AGENTS.md", "config/AGENTS.md"] {
+        assert_line(
+            &out,
+            &format!(
+                "{} exists, so antigravity also loads it on top of {}",
+                gemini.join(rel).display(),
+                gemini.join("GEMINI.md").display()
+            ),
+        );
+    }
+    assert!(
+        !out.contains("config/GEMINI.md"),
+        "a file that does not exist is not named:\n{out}"
+    );
+}

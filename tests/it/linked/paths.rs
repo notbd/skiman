@@ -606,6 +606,49 @@ fn init_refuses_the_target_of_a_child_link() {
     );
 }
 
+/// While a registered folder cannot be read, its child links are unknown,
+/// so `init` refuses any new canon before creating anything; `init` of the
+/// current canon itself goes ahead.
+#[test]
+fn init_refuses_a_new_canon_while_a_linked_folder_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &[]);
+    let outside = sandbox.home().join("work/outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink("../outside", company.join("side")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let config = sandbox.config_home().join("skiman");
+    let before = crate::support::tree(&config);
+    let init_at = |target: &Path| {
+        sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(target)
+            .output()
+            .unwrap()
+    };
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let refused = init_at(&outside);
+    let reused = init_at(&sandbox.canon());
+    chmod(0o755).unwrap();
+
+    let stderr = String::from_utf8(refused.stderr).unwrap();
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("linked folder `company` cannot be read now"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    assert_eq!(crate::support::tree(&config), before);
+    let stderr = String::from_utf8(reused.stderr).unwrap();
+    assert_ne!(reused.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("cannot be read now, so"), "{stderr}");
+}
+
 /// `init` reads the registrations under the lock: a folder registered
 /// while it waited for the lock is protected too.
 #[test]

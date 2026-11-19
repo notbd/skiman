@@ -9,6 +9,8 @@ use crate::rules::frontmatter::split;
 /// What a linked skill's frontmatter says about it for a person.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct About {
+    /// `name`, when it is a string.
+    pub name: Option<String>,
     /// `metadata.summary`, when it is a string with more than whitespace.
     pub summary: Option<String>,
     /// `description`, when it is a string.
@@ -28,6 +30,7 @@ impl About {
             _ => None,
         };
         Some(About {
+            name: string(fields, "name"),
             summary: summary.filter(|s| !s.trim().is_empty()),
             description: string(fields, "description"),
         })

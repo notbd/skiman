@@ -10,6 +10,7 @@
 //! ([`Linked::reaches_into`]) and which project items overlap a folder.
 
 pub mod canon;
+pub mod check;
 pub mod folder;
 pub mod gitignore;
 pub mod path;

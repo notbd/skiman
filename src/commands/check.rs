@@ -1,7 +1,7 @@
 //! `skiman check [--staged]`: report every rule violation in the working tree
 //! of the skill repo, or in its staged snapshot, on stdout, and warnings on
 //! stderr; on the working tree, also each skill that lacks a summary, a group
-//! folder or an origin (a warning). When the staged snapshot breaks a rule
+//! folder or an origin, and what is wrong with linked skills (warnings). When the staged snapshot breaks a rule
 //! that the working tree passes, a hint says so and prints a line that
 //! stages the working tree.
 //! Read-only; takes no lock.
@@ -12,7 +12,7 @@ use std::process::Command;
 use crate::Exit;
 use crate::failure::{Failure, finish};
 use crate::git_hooks::shell_quote;
-use crate::linked::{LINKED_DIR, gitignore};
+use crate::linked::{self, LINKED_DIR, Linked, gitignore};
 use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -65,6 +65,9 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         for gap in rules::missing_info(tree.as_ref()).map_err(io)? {
             err!("warning: {gap}");
         }
+        for warning in linked_warnings(&paths, &repo)? {
+            err!("warning: {warning}");
+        }
         if let Some(warning) = linked_not_ignored(&repo) {
             err!("warning: {warning}");
         }
@@ -82,6 +85,16 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         out!("\n{hint}");
     }
     Ok(rules::exit_of(&report.violations))
+}
+
+/// What the linked skills on this machine warrant a warning for; nothing
+/// when `skiman.toml` does not parse (that is a violation already).
+fn linked_warnings(paths: &Paths, repo: &SkillRepo) -> Result<Vec<String>, Failure> {
+    let Ok(manifest) = Manifest::load(repo) else {
+        return Ok(Vec::new());
+    };
+    let linked = Linked::read(paths.home(), repo, &manifest);
+    Ok(linked::check::warnings(&linked, &manifest, &repo.layout()?))
 }
 
 /// While `[linked]` tables exist in a canon that is a git repo: that git

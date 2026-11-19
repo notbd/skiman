@@ -366,17 +366,20 @@ pub fn reconcile(
         }
     };
     let frozen = linked.frozen();
+    let targets = write_targets(home, manifest);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
-    for tool in installed_tools(home, manifest) {
-        let dir = tool.tool_dir(home);
-        let through = linked::written_through(&dir);
-        if reconciled.contains(&through) || guarded(linked, &dir, &through, &mut report) {
-            reconciled.push(through);
+    for target in targets
+        .iter()
+        .filter(|t| t.place == Place::ToolDir && t.links)
+    {
+        let (tool, dir, through) = (target.tool, &target.path, &target.lands);
+        if reconciled.contains(through) || guarded(linked, dir, through, &mut report) {
+            reconciled.push(through.clone());
             continue;
         }
         // The tool directory itself may be missing; its parent chain is never replaced.
-        if let Err(e) = std::fs::create_dir_all(&dir) {
+        if let Err(e) = std::fs::create_dir_all(dir) {
             report
                 .errors
                 .push(format!("cannot create {}: {e}", dir.display()));
@@ -394,7 +397,7 @@ pub fn reconcile(
         if !reconciled.contains(&real) {
             let tool_dir = ToolDir {
                 tool,
-                dir: &dir,
+                dir,
                 real: &real,
             };
             reconcile_tool_dir(
@@ -409,24 +412,88 @@ pub fn reconcile(
             reconciled.push(real);
         }
     }
-    let enabled = manifest.enabled_tools();
-    for tool in TOOLS
+    for target in targets
         .iter()
-        .filter(|t| !enabled.iter().any(|id| id == t.id))
+        .filter(|t| t.place == Place::ToolDir && !t.links)
     {
-        let dir = tool.tool_dir(home);
-        let Ok(real) = dir.canonicalize() else {
-            continue;
-        };
-        if !reconciled.contains(&real) && !guarded(linked, &dir, &real, &mut report) {
-            remove_owned_entries(&dir, &real, &ownership, &mut report);
+        let (dir, real) = (&target.path, &target.lands);
+        if !reconciled.contains(real) && !guarded(linked, dir, real, &mut report) {
+            remove_owned_entries(dir, real, &ownership, &mut report);
         }
-        reconciled.push(real);
+        reconciled.push(real.clone());
     }
     let sweep = output == Output::Normal;
-    let context = (repo, manifest, linked, &ownership);
-    reconcile_instruction_locations(home, context, sweep, &mut report);
+    let context = (repo, linked, &ownership);
+    reconcile_instruction_locations(&targets, context, sweep, &mut report);
     report
+}
+
+/// A tool directory or an instruction location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    ToolDir,
+    Instructions,
+}
+
+/// A place outside the canon that sync writes in (spec "Write targets never
+/// reach into a linked folder").
+#[derive(Debug)]
+pub struct WriteTarget {
+    pub tool: &'static AgentTool,
+    pub place: Place,
+    /// The tool is installed and enabled, so sync links there; otherwise
+    /// sync only removes its own links.
+    pub links: bool,
+    /// As the tool names it.
+    pub path: PathBuf,
+    /// Where a write there lands, as the write guard compares it.
+    pub lands: PathBuf,
+}
+
+/// Every place sync writes in under `manifest`, in the order it writes
+/// them: each installed tool's directory, each other known tool's that
+/// exists, then the same for instruction locations (one whose parent does
+/// not resolve is left out for a tool that is not enabled). Sync and
+/// import's check before any write both use this list.
+pub fn write_targets(home: &Path, manifest: &Manifest) -> Vec<WriteTarget> {
+    let enabled = manifest.enabled_tools();
+    let installed: Vec<&'static AgentTool> = installed_tools(home, manifest).collect();
+    let others = || {
+        TOOLS
+            .iter()
+            .filter(|t| !enabled.iter().any(|id| id == t.id))
+    };
+    let target = |tool, place, links, path, lands| WriteTarget {
+        tool,
+        place,
+        links,
+        path,
+        lands,
+    };
+    let mut targets = Vec::new();
+    for &tool in &installed {
+        let dir = tool.tool_dir(home);
+        let lands = linked::written_through(&dir);
+        targets.push(target(tool, Place::ToolDir, true, dir, lands));
+    }
+    for tool in others() {
+        let dir = tool.tool_dir(home);
+        if let Ok(real) = dir.canonicalize() {
+            targets.push(target(tool, Place::ToolDir, false, dir, real));
+        }
+    }
+    for &tool in &installed {
+        let path = home.join(tool.instruction_file);
+        let lands = linked::location(&path);
+        targets.push(target(tool, Place::Instructions, true, path, lands));
+    }
+    for tool in others() {
+        let path = home.join(tool.instruction_file);
+        if let Ok(location) = instruction_location(&path) {
+            targets.push(target(tool, Place::Instructions, false, path, location));
+        }
+    }
+    targets
 }
 
 /// Links the shared body to every installed tool's instruction location and
@@ -435,8 +502,8 @@ pub fn reconcile(
 /// with the file name (the file itself is not followed), so aliased locations
 /// are reconciled once and a link from one location to another is not owned.
 fn reconcile_instruction_locations(
-    home: &Path,
-    (repo, manifest, linked, ownership): (&Canon, &Manifest, &Linked, &Ownership),
+    targets: &[WriteTarget],
+    (repo, linked, ownership): (&Canon, &Linked, &Ownership),
     sweep: bool,
     report: &mut Report,
 ) {
@@ -444,11 +511,13 @@ fn reconcile_instruction_locations(
     let mut reconciled = Vec::new();
     // Locations inside a linked folder: never written, never swept.
     let mut refused = Vec::new();
-    for tool in installed_tools(home, manifest) {
-        let path = home.join(tool.instruction_file);
-        let lands = linked::location(&path);
-        if refused.contains(&lands) || guarded(linked, &path, &lands, report) {
-            refused.push(lands);
+    for to in targets
+        .iter()
+        .filter(|t| t.place == Place::Instructions && t.links)
+    {
+        let (path, lands) = (to.path.clone(), &to.lands);
+        if refused.contains(lands) || guarded(linked, &path, lands, report) {
+            refused.push(lands.clone());
             continue;
         }
         let location = match instruction_location(&path) {
@@ -503,15 +572,11 @@ fn reconcile_instruction_locations(
         }
         reconciled.push(location);
     }
-    let enabled = manifest.enabled_tools();
-    for tool in TOOLS
+    for to in targets
         .iter()
-        .filter(|t| !enabled.iter().any(|id| id == t.id))
+        .filter(|t| t.place == Place::Instructions && !t.links)
     {
-        let path = home.join(tool.instruction_file);
-        let Ok(location) = instruction_location(&path) else {
-            continue;
-        };
+        let (path, location) = (to.path.clone(), to.lands.clone());
         if reconciled.contains(&location) || refused.contains(&location) {
             continue;
         }

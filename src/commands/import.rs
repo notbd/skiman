@@ -41,7 +41,7 @@ use crate::fetch::Cache;
 use crate::git::Prompts;
 use crate::import_guide;
 use crate::layout::{Layout, Placed};
-use crate::linked::{self, Linked, State};
+use crate::linked::{Linked, State};
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::manifest::{self, Manifest, SkillEntry, SourceRecord};
 use crate::ownership::{Entry, Ownership};
@@ -736,9 +736,9 @@ fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
 /// (the canon's, which the import keeps). Refuses (exit 1) while one cannot
 /// be read, since what leads into it is unknown; when a skill folder or a
 /// group folder of the import folder uses a linked skill's name; and when
-/// an installed tool's tool directory or instruction location resolves
-/// into a linked folder, as sync compares them (spec "Write targets never
-/// reach into a linked folder").
+/// a place the closing sync writes ([`sync::write_targets`], its cleanup of
+/// tools that are not enabled included) resolves into a linked folder
+/// (spec "Write targets never reach into a linked folder").
 fn linked_folders(
     paths: &Paths,
     repo: &Canon,
@@ -784,16 +784,10 @@ fn linked_folders(
             lines.join("\n")
         )));
     }
-    let home = paths.home();
-    let lines: Vec<String> = sync::installed_tools(home, manifest)
-        .flat_map(|tool| {
-            let (dir, file) = (tool.tool_dir(home), home.join(tool.instruction_file));
-            [
-                linked.refusal(&dir, &linked::written_through(&dir)),
-                linked.refusal(&file, &linked::location(&file)),
-            ]
-        })
-        .flatten()
+    // Every place the closing sync writes, its cleanup included.
+    let lines: Vec<String> = sync::write_targets(paths.home(), manifest)
+        .iter()
+        .filter_map(|t| linked.refusal(&t.path, &t.lands))
         .map(|why| format!("  {why}"))
         .collect();
     if !lines.is_empty() {

@@ -275,3 +275,21 @@ fn import_moves_no_instruction_location_that_holds_a_linked_folder() {
     }
     assert!(!backup.keys().any(|p| p.starts_with("codex/AGENTS.md")));
 }
+
+/// A tool directory that resolves into a registered folder refuses the
+/// import before any write even when the import disables that tool: the
+/// closing sync would still remove skiman's links there.
+#[test]
+fn a_disabled_tools_directory_that_resolves_into_a_linked_folder_refuses_the_import() {
+    let sandbox = Sandbox::new();
+    let setup = setup(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::rename(&claude, company.join("claude-skills")).unwrap();
+    symlink(company.join("claude-skills"), &claude).unwrap();
+    let manifest = setup.folder.join("skiman.toml");
+    std::fs::write(&manifest, read(&manifest).replace("\"claude-code\", ", "")).unwrap();
+
+    assert_refused(&sandbox, &setup.folder, "inside linked folder `company`");
+}

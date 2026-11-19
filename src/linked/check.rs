@@ -17,7 +17,8 @@ use crate::sync::ItemKind;
 const UNPARSABLE: &str = "; Antigravity drops a skill whose frontmatter does not parse";
 
 /// Every warning, in id and then name order (what cannot be read first),
-/// then the collisions (`kept` from [`crate::sync::kept_names`]), then the
+/// then the collisions and the skill folders a kept link withholds (`kept`
+/// from [`crate::sync::kept_names`]), then the
 /// `[skills.<name>]` tables.
 pub fn warnings(
     linked: &Linked,
@@ -84,6 +85,7 @@ pub fn warnings(
     }
     let (_, collisions) = linked.names(layout, kept, |_| true);
     out.extend(collisions.iter().map(|c| c.message()));
+    out.extend(super::withheld(layout, kept).iter().map(|w| w.message()));
     for name in manifest.skills().keys() {
         if layout.find(name).is_none()
             && let Some((folder, _)) = linked.skill(name, kept)

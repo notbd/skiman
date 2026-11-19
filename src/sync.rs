@@ -429,7 +429,8 @@ pub fn reconcile(
                 dir,
                 real: &real,
             };
-            reconcile_tool_dir(&tool_dir, repo, linked, &wanted, &ownership, &mut report);
+            let names = (wanted.as_slice(), &kept);
+            reconcile_tool_dir(&tool_dir, repo, linked, names, &ownership, &mut report);
             reconciled.push(real);
         }
     }
@@ -725,11 +726,12 @@ pub struct Wanted {
 }
 
 /// Every distributable skill that is not `enabled = false` and whose name
-/// no kept link holds, in name order, then `skiman-manual`, then the
-/// linked skills of the folders `offers` accepts that no other skill holds
-/// the name of ([`Linked::names`]; `kept` from [`kept_names`]). Folders
-/// under `skills/` that are not distributable or whose name is kept, and
-/// linked skills that lose their name, are added to `report.items`.
+/// no kept link holds ([`linked::withheld`]), in name order, then
+/// `skiman-manual`, then the linked skills of the folders `offers` accepts
+/// that no other skill holds the name of ([`Linked::names`]; `kept` from
+/// [`kept_names`]). Folders under `skills/` that are not distributable or
+/// are withheld, and linked skills that lose their name, are added to
+/// `report.items`.
 pub fn wanted_entries(
     repo: &Canon,
     manifest: &Manifest,
@@ -741,6 +743,7 @@ pub fn wanted_entries(
     let entries = manifest.skills();
     let scope = repo.skills_dir().display().to_string();
     let layout = Layout::read(&WorkingTree::new(repo.root()))?;
+    let withheld = linked::withheld(&layout, kept);
     let mut wanted = Vec::new();
     for placed in layout.skills() {
         let (name, dir) = (&placed.name, repo.root().join(placed.path()));
@@ -758,20 +761,17 @@ pub fn wanted_entries(
                 kind: ItemKind::InvalidSkillFolder { reason },
             }),
             None if entries.get(name).is_some_and(|e| !e.enabled) => {}
-            // A kept link holds the name until its folder or `SKILL.md`
-            // reads again: a passing failure never changes the winner.
-            None if let Some(holder) = kept.get(name) => report.items.push(Item {
-                scope: scope.clone(),
-                kind: ItemKind::Linked {
-                    what: "collision",
-                    message: format!(
-                        "skill folder {} is not distributed: {holder}",
-                        dir.display()
-                    ),
-                    attention: true,
-                },
-                path: dir,
-            }),
+            None if let Some(withheld) = withheld.iter().find(|w| w.path == placed.path()) => {
+                report.items.push(Item {
+                    scope: scope.clone(),
+                    kind: ItemKind::Linked {
+                        what: "collision",
+                        message: withheld.message(),
+                        attention: true,
+                    },
+                    path: dir,
+                })
+            }
             None => wanted.push(Wanted {
                 name: name.clone(),
                 target: dir,
@@ -851,13 +851,14 @@ struct ToolDir<'a> {
 }
 
 /// Links every wanted entry in the tool directory and removes the owned
-/// entries nothing wants; owned links [`Linked::keeper`] keeps stay
+/// entries nothing wants; owned links [`Linked::keeper`] keeps, and any
+/// owned link under a name one of them holds elsewhere (`kept`), stay
 /// exactly as they are and keep their name.
 fn reconcile_tool_dir(
     tool_dir: &ToolDir,
     repo: &Canon,
     linked: &Linked,
-    wanted: &[Wanted],
+    (wanted, kept): (&[Wanted], &BTreeMap<String, Holder>),
     ownership: &Ownership,
     report: &mut Report,
 ) {
@@ -878,7 +879,8 @@ fn reconcile_tool_dir(
         let want = name.to_str().and_then(|n| by_name.get_key_value(n));
         let entry = ownership.classify(real, &name, &meta);
         if let Entry::Owned(current) = &entry
-            && linked.keeper(current).is_some()
+            && (linked.keeper(current).is_some()
+                || name.to_str().is_some_and(|n| kept.contains_key(n)))
         {
             if let Some((name, _)) = want {
                 handled.insert(*name);

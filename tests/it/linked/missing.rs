@@ -140,41 +140,62 @@ fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
 
 /// A canon skill that appears while the folder whose kept links hold its
 /// name cannot be read gets that name in no tool directory, not even one
-/// where the kept link is missing; once the folder reads again, the canon
-/// skill wins it as usual.
+/// where the kept link is missing, and wins it over no other linked skill;
+/// skiman's link to it that is already there stays. Sync, `check` and
+/// `doctor` say why. Once the folder reads again, the canon skill wins the
+/// name as usual.
 #[test]
 fn an_unreadable_folder_keeps_its_names_from_a_canon_skill_in_every_tool_directory() {
     let sandbox = company();
     let company = sandbox.home().join("work/company");
     let linked = sandbox.canon().join("linked/company");
-    std::fs::remove_file(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).unwrap();
+    let acme = folder(&sandbox, "work/acme", &["alpha"]);
+    append_manifest(&sandbox, "\n[linked.acme]\npath = \"~/work/acme\"\n");
     for name in ["alpha", "notes"] {
         write(
             sandbox.canon().join("skills").join(name).join("SKILL.md"),
             skill_md(name),
         );
     }
+    let canon_alpha = sandbox.canon().join("skills/alpha");
+    let (claude, antigravity) = (
+        sandbox.tool_dir(Tool::ClaudeCode),
+        sandbox.tool_dir(Tool::Antigravity),
+    );
+    std::fs::remove_file(claude.join("alpha")).unwrap();
+    std::fs::remove_file(antigravity.join("alpha")).unwrap();
+    std::os::unix::fs::symlink(&canon_alpha, antigravity.join("alpha")).unwrap();
     chmod(&company, 0o000);
 
     let (code, _, stderr) = sync(&sandbox, &["sync"]);
-    let claude = sandbox.tool_dir(Tool::ClaudeCode);
     let vacant = exists(claude.join("alpha"));
+    let said = ["check", "doctor"].map(|command| {
+        let output = sandbox.skiman().arg(command).output().unwrap();
+        String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap()
+    });
     chmod(&company, 0o755);
 
     assert_eq!(code, 3, "{stderr}");
-    let line = format!(
-        "warning: skill folder {} is not distributed: linked folder `company`, which cannot be read now, keeps the name",
-        sandbox.canon().join("skills/alpha").display()
+    let kept = "linked folder `company`, which cannot be read now, keeps the name";
+    let withheld = format!("skill folder skills/alpha is not distributed: {kept}");
+    let lost = format!(
+        "linked skill alpha in {} is not distributed: {kept}",
+        acme.join("alpha").display()
     );
-    assert!(stderr.contains(&line), "{line}\n{stderr}");
-    assert!(!vacant, "{stderr}");
-    for tool in [Tool::Codex, Tool::Antigravity] {
-        let dir = sandbox.tool_dir(tool);
-        assert_eq!(
-            std::fs::read_link(dir.join("alpha")).unwrap(),
-            linked.join("alpha")
-        );
+    for out in [&stderr, &said[0], &said[1]] {
+        assert!(out.contains(&withheld), "{withheld}\n{out}");
+        assert!(out.contains(&lost), "{lost}\n{out}");
+        assert!(!out.contains("skills/alpha uses the name"), "{out}");
     }
+    assert!(!vacant, "{stderr}");
+    assert_eq!(
+        std::fs::read_link(sandbox.tool_dir(Tool::Codex).join("alpha")).unwrap(),
+        linked.join("alpha")
+    );
+    assert_eq!(
+        std::fs::read_link(antigravity.join("alpha")).unwrap(),
+        canon_alpha
+    );
     for tool in Tool::ALL {
         assert!(sandbox.tool_dir(tool).join("notes/SKILL.md").is_file());
     }
@@ -185,6 +206,46 @@ fn an_unreadable_folder_keeps_its_names_from_a_canon_skill_in_every_tool_directo
         stderr.contains("is not distributed: the skill folder skills/alpha uses the name"),
         "{stderr}"
     );
+    for tool in Tool::ALL {
+        assert_eq!(
+            std::fs::read_link(sandbox.tool_dir(tool).join("alpha")).unwrap(),
+            canon_alpha
+        );
+    }
+}
+
+/// The same for a linked skill whose `SKILL.md` cannot be probed: its kept
+/// link holds the name against a new canon skill until it can be.
+#[test]
+fn an_unprobed_skill_keeps_its_name_from_a_canon_skill() {
+    let sandbox = company();
+    let locked = sandbox.home().join("work/locked");
+    write(locked.join("SKILL.md"), skill_md("alpha"));
+    let top = sandbox.home().join("work/company/alpha/SKILL.md");
+    std::fs::remove_file(&top).unwrap();
+    std::os::unix::fs::symlink(locked.join("SKILL.md"), &top).unwrap();
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_file(claude.join("alpha")).unwrap();
+    write(
+        sandbox.canon().join("skills/alpha/SKILL.md"),
+        skill_md("alpha"),
+    );
+    chmod(&locked, 0o000);
+
+    let (code, _, stderr) = sync(&sandbox, &["sync"]);
+    let vacant = exists(claude.join("alpha"));
+    chmod(&locked, 0o755);
+
+    assert_eq!(code, 3, "{stderr}");
+    let line = "skill folder skills/alpha is not distributed: linked skill alpha of `company`, whose SKILL.md cannot be read now, keeps the name";
+    assert!(stderr.contains(line), "{stderr}");
+    assert!(!vacant, "{stderr}");
+    assert_eq!(
+        std::fs::read_link(sandbox.tool_dir(Tool::Codex).join("alpha")).unwrap(),
+        sandbox.canon().join("linked/company/alpha")
+    );
+
+    assert_eq!(sync(&sandbox, &["sync"]).0, 3);
     for tool in Tool::ALL {
         assert_eq!(
             std::fs::read_link(sandbox.tool_dir(tool).join("alpha")).unwrap(),

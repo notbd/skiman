@@ -196,7 +196,8 @@ fn alias_note<'a>(
 }
 
 /// Each linked folder, and what sync would report about it: missing,
-/// breaking a rule, not read, a skill that loses its name, and `linked/`
+/// breaking a rule, not read, a skill that loses its name or is withheld,
+/// and `linked/`
 /// or `linked/<id>` in the way. Nothing when no folder is registered.
 fn report_linked(
     repo: &Canon,
@@ -223,6 +224,9 @@ fn report_linked(
     let (_, collisions) = linked.names(&layout, kept, |_| true);
     for collision in collisions {
         out!("{}", collision.message());
+    }
+    for withheld in linked::withheld(&layout, kept) {
+        out!("{}", withheld.message());
     }
     for problem in linked::canon::problems(linked) {
         out!("{problem}");

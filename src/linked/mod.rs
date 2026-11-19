@@ -358,26 +358,28 @@ impl Linked {
     /// The linked skills to distribute, one per name, in id and then name
     /// order, and the ones that are not distributed because another skill
     /// holds their name (spec "Names and collisions"). Only folders `offers`
-    /// accepts take part. Every skill folder under `skills/` (`layout`)
-    /// holds its name, enabled or not, and so does every group folder (ADR
-    /// 0009); then the names `kept` by the links [`Linked::keeper`] keeps;
-    /// then the folder whose id sorts first. A skill whose `SKILL.md`
-    /// cannot be probed holds a name only through `kept`, so it never
-    /// takes a name it did not hold; nor do the sub-folders of a single
-    /// skill whose top-level `SKILL.md` cannot be probed
-    /// ([`Linked::skill_names`]).
+    /// accepts take part. The names `kept` by the links [`Linked::keeper`]
+    /// keeps come first ([`withheld`]); then every skill folder under
+    /// `skills/` (`layout`) holds its name, enabled or not, and so does
+    /// every group folder (ADR 0009); then the folder whose id sorts
+    /// first. A skill whose `SKILL.md` cannot be probed holds a name only
+    /// through `kept`, so it never takes a name it did not hold; nor do the
+    /// sub-folders of a single skill whose top-level `SKILL.md` cannot be
+    /// probed ([`Linked::skill_names`]).
     pub fn names(
         &self,
         layout: &Layout,
         kept: &BTreeMap<String, Holder>,
         offers: impl Fn(&str) -> bool,
     ) -> (Vec<(String, PathBuf)>, Vec<Collision>) {
-        let mut taken = kept.clone();
+        let mut taken = BTreeMap::new();
         let mut wanted = Vec::new();
         let mut collisions = Vec::new();
         for folder in self.folders.iter().filter(|f| offers(&f.id)) {
             for name in Linked::skill_names(folder, kept) {
-                let holder = if let Some(placed) = layout.find(&name) {
+                let holder = if let Some(holder) = kept.get(&name) {
+                    Some(holder.clone())
+                } else if let Some(placed) = layout.find(&name) {
                     Some(Holder::Canon(placed.path()))
                 } else if let Some(group) = layout.group_named(&name) {
                     Some(Holder::Group(format!("skills/{group}")))
@@ -478,6 +480,40 @@ pub enum Shown {
     /// Its linked skills in name order, each with what holds its name when
     /// it is not distributed.
     Skills(Vec<(String, Option<Holder>)>),
+}
+
+/// A skill folder under `skills/` that is not distributed: a link `kept`
+/// for a linked folder or skill that cannot be read now holds its name
+/// (spec "Sync"), so a passing failure never changes who holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Withheld {
+    /// Relative to the canon.
+    pub path: String,
+    pub holder: Holder,
+}
+
+impl Withheld {
+    pub fn message(&self) -> String {
+        format!(
+            "skill folder {} is not distributed: {}",
+            self.path, self.holder
+        )
+    }
+}
+
+/// Every skill folder under `skills/` (`layout`) whose name `kept` holds,
+/// in layout order: sync, `check` and `doctor` report each.
+pub fn withheld(layout: &Layout, kept: &BTreeMap<String, Holder>) -> Vec<Withheld> {
+    layout
+        .skills()
+        .iter()
+        .filter_map(|placed| {
+            Some(Withheld {
+                path: placed.path(),
+                holder: kept.get(&placed.name)?.clone(),
+            })
+        })
+        .collect()
 }
 
 /// A linked skill that is not distributed: another skill holds its name.

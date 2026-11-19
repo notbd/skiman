@@ -114,7 +114,7 @@ impl Linked {
         }
         Linked {
             folders,
-            dir: repo.root().join(LINKED_DIR),
+            dir: repo.linked_dir(),
             places,
         }
     }

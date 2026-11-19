@@ -11,7 +11,7 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, write_atomic};
-use crate::linked::{self, Folder, LINKED_DIR, Linked, State, gitignore};
+use crate::linked::{self, Folder, Linked, State, gitignore};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::root;
@@ -262,7 +262,7 @@ fn run_remove(id: &str) -> Result<Exit, Failure> {
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
     let manifest = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     let Some(entry) = manifest.linked().into_iter().find(|e| e.id == id) else {
-        let link = repo.root().join(LINKED_DIR).join(id);
+        let link = repo.linked_dir().join(id);
         let hint = if std::fs::symlink_metadata(&link).is_ok() {
             format!(
                 "; {} is left from an earlier registration, and `skiman sync` removes it",

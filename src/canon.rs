@@ -74,6 +74,11 @@ impl Canon {
         self.root.join("upstream").join(name)
     }
 
+    /// `linked/`: a link to each linked folder (`crate::linked`).
+    pub fn linked_dir(&self) -> PathBuf {
+        self.root.join(crate::linked::LINKED_DIR)
+    }
+
     /// `instructions/shared.md`: the shared body.
     pub fn shared_body(&self) -> PathBuf {
         self.root.join("instructions/shared.md")

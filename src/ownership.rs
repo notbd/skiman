@@ -77,7 +77,7 @@ impl Ownership {
             manual_dir: repo.manual_dir(),
             retired_manual_dir: repo.retired_manual_dir(),
             shared_body: repo.shared_body(),
-            linked_dir: repo.root().join(crate::linked::LINKED_DIR),
+            linked_dir: repo.linked_dir(),
             previous_repo,
             managed_paths,
             managed_under,

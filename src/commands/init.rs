@@ -106,6 +106,17 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
             repo.root().join(".gitignore").display()
         );
     }
+    // The user config names `path`: when a link on it was re-pointed since
+    // the check, it no longer leads to the canon made, so it is not saved.
+    let now = linked::written_through(&path);
+    if now != place {
+        return Err(Failure::refused(format!(
+            "{} now leads to {}, not to {} where the canon was made; the user config is not written, run `skiman init` again",
+            path.display(),
+            now.display(),
+            place.display()
+        )));
+    }
     let binary = invoked_binary(&cwd);
     UserConfig {
         repo: path,

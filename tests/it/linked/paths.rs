@@ -566,7 +566,9 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
 
 /// A new canon path through a link to a plain folder, re-pointed into a
 /// registered folder right after `init` checked it: the canon is made
-/// where it was checked, and the registered folder stays byte for byte.
+/// where it was checked, the user config is not pointed through the
+/// re-pointed link (it still names the current canon), and neither `init`
+/// nor the next `sync` writes into the registered folder.
 #[test]
 #[cfg_attr(
     not(debug_assertions),
@@ -576,11 +578,14 @@ fn init_makes_the_canon_where_it_checked_the_path() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let company = folder(&sandbox, "work/company", &["alpha"]);
+    std::fs::create_dir(company.join("next")).unwrap();
     append_manifest(&sandbox, COMPANY);
     let plain = sandbox.home().join("plain");
     std::fs::create_dir(&plain).unwrap();
     let through = sandbox.home().join("through");
     symlink(&plain, &through).unwrap();
+    let config = sandbox.config_home().join("skiman");
+    let config_before = crate::support::tree(&config);
     let before = contents(&[&company]);
     let run = format!(
         "rm '{0}' && ln -s '{1}' '{0}'",
@@ -598,8 +603,17 @@ fn init_makes_the_canon_where_it_checked_the_path() {
         .unwrap();
 
     let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!("{}", through.join("next").display()))
+            && stderr.contains("user config is not written"),
+        "{stderr}"
+    );
     assert_eq!(contents(&[&company]), before, "{stderr}");
     assert!(plain.join("next/skiman.toml").is_file(), "{stderr}");
+    assert_eq!(crate::support::tree(&config), config_before);
+    let (_, stderr) = sync(&sandbox);
+    assert_eq!(contents(&[&company]), before, "{stderr}");
 }
 
 /// A settings file that is a link into a registered folder when `init`

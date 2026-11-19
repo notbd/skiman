@@ -73,7 +73,7 @@ A folder outside the canon, registered in `skiman.toml` as `[linked.<id>]`: one 
 _Avoid_: source, mount, external folder
 
 **Agent tool** (工具):
-A program that reads skills or global instruction files, such as Claude Code, Codex or Cursor.
+A program that reads skills or global instruction files, such as Claude Code, Codex or Antigravity.
 _Avoid_: client, host, agent, IDE
 
 **Tool directory** (工具目录):

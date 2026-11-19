@@ -576,31 +576,60 @@ fn names_kept_for_an_unreadable_folder_stay_taken() {
     let up = sandbox.upstream("acme/alpha");
     up.write("SKILL.md", skill_md("alpha"));
     up.commit("v1");
+    // Foreign folders to adopt: one under the kept name in one tool directory.
+    let antigravity = sandbox.tool_dir(Tool::Antigravity);
+    std::fs::remove_file(antigravity.join("alpha")).unwrap();
+    write(antigravity.join("alpha/SKILL.md"), skill_md("alpha"));
+    write(antigravity.join("delta/SKILL.md"), skill_md("delta"));
     let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
     chmod(0o000).unwrap();
     let before = world(&sandbox, &company);
 
+    let kept = "linked folder `company`, which cannot be read now, keeps the name";
+    // `adopt` refuses first: what in the tool directories leads into the
+    // folder is unknown.
+    let unknown = "linked folder `company` cannot be read now, so skiman cannot tell";
     let mut refused = Vec::new();
-    for args in [
-        &["new", "alpha", "-d", "Replacement"][..],
-        &["add", "acme/alpha", "--yes"],
-        &["mv", "beta", "alpha"],
-        &["new", "foo", "-d", "Does foo things", "--group", "alpha"],
-        &["mv", "beta", "--group", "alpha"],
+    for (args, why) in [
+        (&["new", "alpha", "-d", "Replacement"][..], kept),
+        (&["add", "acme/alpha", "--yes"], kept),
+        (&["mv", "beta", "alpha"], kept),
+        (
+            &["new", "foo", "-d", "Does foo things", "--group", "alpha"],
+            kept,
+        ),
+        (&["mv", "beta", "--group", "alpha"], kept),
+        (
+            &["adopt", "alpha", "--from", "antigravity", "--yes"],
+            unknown,
+        ),
+        (
+            &[
+                "adopt",
+                "delta",
+                "--from",
+                "antigravity",
+                "--yes",
+                "--group",
+                "alpha",
+            ],
+            kept,
+        ),
     ] {
-        refused.push((args, run(&sandbox, args), world(&sandbox, &company)));
+        let outcome = run(&sandbox, args);
+        refused.push((args, why, outcome, world(&sandbox, &company)));
     }
     let free = run(&sandbox, &["new", "gamma", "-d", "Does gamma things"]);
     chmod(0o755).unwrap();
 
-    let kept = "linked folder `company`, which cannot be read now, keeps the name";
-    for (args, (code, stderr), after) in refused {
+    for (args, why, (code, stderr), after) in refused {
         assert_eq!(code, 1, "{args:?}: {stderr}");
-        assert!(stderr.contains(kept), "{args:?}: {stderr}");
+        assert!(stderr.contains(why), "{args:?}: {stderr}");
         assert_eq!(after, before, "{args:?}");
     }
     assert_eq!(free.0, 3, "{}", free.1);
     assert!(sandbox.canon().join("skills/gamma/SKILL.md").is_file());
+    std::fs::remove_dir_all(antigravity.join("alpha")).unwrap();
     assert_eq!(sync(&sandbox).0, 0);
     assert!(!sandbox.canon().join("skills/alpha").exists());
     for tool in Tool::ALL {

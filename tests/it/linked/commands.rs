@@ -91,9 +91,9 @@ fn the_same_folder_written_another_way_is_the_same_registration() {
     sandbox.skiman().arg("sync").assert().code(0);
     let manifest = read(sandbox.canon().join("skiman.toml"));
     let link = sandbox.tool_dir(Tool::Codex).join("alpha");
-    std::fs::remove_file(&link).unwrap();
 
     for given in [company.display().to_string(), "~/work/company/.".to_owned()] {
+        std::fs::remove_file(&link).unwrap();
         linked_add(&sandbox, &[given]).code(0);
         assert_eq!(
             std::fs::read_link(&link).unwrap(),

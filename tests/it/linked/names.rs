@@ -685,3 +685,38 @@ fn commands_check_the_group_again_after_waiting_for_input() {
         assert!(delta.join("SKILL.md").is_file(), "{args:?}");
     }
 }
+
+/// A single skill whose top-level `SKILL.md` cannot be probed while the
+/// tool directories keep its `<id>` link stays one skill for naming too:
+/// its sub-folder `kid` is no linked skill, so `remove kid` finds no skill
+/// and `new kid` makes one in the canon; the `solo` link stays as it was
+/// and the name `solo` stays taken.
+#[test]
+fn a_single_skill_that_cannot_be_probed_holds_no_sub_folder_names() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let locked = super::unprobed_single(&sandbox);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let removed = run(&sandbox, &["remove", "kid", "--yes"]);
+    let made = run(&sandbox, &["new", "kid", "-d", "Local skill"]);
+    let solo = run(&sandbox, &["new", "solo", "-d", "Local skill"]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(removed.0, 1, "{}", removed.1);
+    assert!(removed.1.contains("there is no skill kid"), "{}", removed.1);
+    assert_eq!(made.0, 3, "{}", made.1);
+    assert!(
+        made.1
+            .contains("linked skill solo of `solo` is not checked"),
+        "{}",
+        made.1
+    );
+    assert!(sandbox.canon().join("skills/kid/SKILL.md").is_file());
+    assert_eq!(solo.0, 1, "{}", solo.1);
+    assert!(solo.1.contains("the name `solo` is taken"), "{}", solo.1);
+    assert_eq!(
+        target(&sandbox, "solo"),
+        sandbox.canon().join("linked/solo")
+    );
+}

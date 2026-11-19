@@ -770,10 +770,11 @@ fn linked_folders(
             path = parent;
         }
     }
+    let kept = sync::kept_names(paths, repo, manifest, &linked);
     let lines: Vec<String> = folders
         .iter()
         .filter_map(|(path, name)| {
-            let (it, _) = linked.described(name)?;
+            let (it, _) = linked.described(name, &kept)?;
             Some(format!("  {path}: it is {it}"))
         })
         .collect();

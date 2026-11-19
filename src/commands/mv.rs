@@ -23,7 +23,6 @@ use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
 use crate::fsutil::read_text;
 use crate::layout::skill_path;
-use crate::linked::Linked;
 use crate::lockfile::{self, Lockfile};
 use crate::manifest::{self, Manifest};
 use crate::names;
@@ -70,7 +69,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
             ),
             _ => String::new(),
         };
-        let why = match Linked::load(paths.home(), &repo)?.edited_elsewhere(old) {
+        let why = match names::edited_elsewhere(&paths, &repo, &Manifest::load(&repo)?, old) {
             Some((why, _)) => why,
             None => format!("{} is not a skill folder", layout.path(old)),
         };

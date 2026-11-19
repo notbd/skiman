@@ -158,11 +158,27 @@ enum LinkedName {
 fn linked_name(paths: &Paths, repo: &Canon, name: &str) -> Result<Option<LinkedName>, Failure> {
     let manifest = Manifest::load(repo)?;
     let linked = Linked::read(paths.home(), repo, &manifest);
-    if let Some((it, _)) = linked.described(name) {
+    let mut kept = sync::kept_names(paths, repo, &manifest, &linked);
+    if let Some((it, _)) = linked.described(name, &kept) {
         return Ok(Some(LinkedName::Skill(it)));
     }
-    let mut kept = sync::kept_names(paths, repo, &manifest, &linked);
     Ok(kept.remove(name).map(LinkedName::Kept))
+}
+
+/// Why a command that acts on a skill in the canon refuses `name`, which
+/// is a linked skill ([`Linked::edited_elsewhere`] with the names sync
+/// keeps), and the linked folder's id. Call it when nothing in the canon
+/// has the name.
+pub fn edited_elsewhere(
+    paths: &Paths,
+    repo: &Canon,
+    manifest: &Manifest,
+    name: &str,
+) -> Option<(String, String)> {
+    let linked = Linked::read(paths.home(), repo, manifest);
+    let kept = sync::kept_names(paths, repo, manifest, &linked);
+    let (why, id) = linked.edited_elsewhere(name, &kept)?;
+    Some((why, id.to_owned()))
 }
 
 fn taken(name: &str, reason: &str) -> Failure {

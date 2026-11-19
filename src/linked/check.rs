@@ -91,7 +91,7 @@ pub fn warnings(
     out.extend(collisions.iter().map(|c| c.message()));
     for name in manifest.skills().keys() {
         if layout.find(name).is_none()
-            && let Some((folder, _)) = linked.skill(name)
+            && let Some((folder, _)) = linked.skill(name, kept)
         {
             out.push(format!(
                 "[skills.{name}] in skiman.toml names linked skill {name} of linked folder `{}`; a linked skill has no table (its summary is `metadata.summary` in its own SKILL.md), so remove it",

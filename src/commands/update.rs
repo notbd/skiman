@@ -48,10 +48,10 @@ use crate::fetch::{Cache, RefKind, ResolvedRef};
 use crate::fsutil::read_text;
 use crate::git::Prompts;
 use crate::layout::skill_path;
-use crate::linked::Linked;
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::manifest::{self, Manifest, SourceRecord};
 use crate::merge::{Conflict, ConflictKind, MergeRepo, Outcome};
+use crate::names;
 use crate::path_safety::{self, Content};
 use crate::paths::Paths;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
@@ -70,7 +70,7 @@ pub fn run(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Exit {
 
 /// What every skill's write shares, under the canon lock.
 struct Context<'a> {
-    home: &'a Path,
+    paths: &'a Paths,
     repo: &'a Canon,
     lock: CanonLock,
     /// One backup folder for the command: tmp leftovers and old folders.
@@ -119,7 +119,7 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
         None
     } else {
         Some(Context {
-            home: paths.home(),
+            paths: &paths,
             repo: &repo,
             lock: CanonLock::wait(&paths, &repo)?,
             backups: Backups::new(&paths),
@@ -185,7 +185,7 @@ struct Current {
 impl Current {
     /// Reads the skill's records; refuses (exit 1) a skill that cannot be
     /// updated, before anything is fetched.
-    fn read(home: &Path, repo: &Canon, name: &str) -> Result<Current, Failure> {
+    fn read(paths: &Paths, repo: &Canon, name: &str) -> Result<Current, Failure> {
         let manifest_text = read_text(&repo.manifest_file())?.unwrap_or_default();
         let manifest = Manifest::parse(&manifest_text)
             .map_err(|e| Failure::refused(format!("{}: {e}", repo.manifest_file().display())))?;
@@ -196,9 +196,7 @@ impl Current {
                 format!(
                     "{skill} has no [skills.{name}.source] table in skiman.toml, so it is an own skill; only third-party skills are updated"
                 )
-            } else if let Some((why, _)) =
-                Linked::read(home, repo, &manifest).edited_elsewhere(name)
-            {
+            } else if let Some((why, _)) = names::edited_elsewhere(paths, repo, &manifest, name) {
                 why
             } else {
                 format!("there is no skill named {name}")
@@ -295,7 +293,7 @@ fn prepare(
     // Read without the lock: another command may be writing the skill.
     // Under the lock the records are whole: a refusal then is real, and
     // records read there are checked again by `update_to` like any others.
-    let current = Current::read(paths.home(), repo, name).or_else(|_| {
+    let current = Current::read(paths, repo, name).or_else(|_| {
         test_hook::at(name, "read-again");
         let _lock = CanonLock::wait(paths, repo)?;
         // A replace stopped between its two renames left the path empty and
@@ -322,7 +320,7 @@ fn prepare(
                 out!("{line}");
             }
         }
-        Current::read(paths.home(), repo, name)
+        Current::read(paths, repo, name)
     })?;
     let mut target = fetch(paths, prompts, name, &current, git_ref)?;
     // A snapshot that does not match the lock is replaced on either path.
@@ -492,7 +490,7 @@ fn report(skill: &Prepared, plan: &Plan, up_to_date: bool, dry_run: bool) {
 fn update_to(context: &mut Context, skill: &Prepared) -> Result<Exit, Failure> {
     let Prepared { name, merge, .. } = skill;
     let repo = context.repo;
-    let current = Current::read(context.home, repo, name)?;
+    let current = Current::read(context.paths, repo, name)?;
     let hash = |dir: &Path| Snapshot::from_folder(dir).map(|folder| folder.tree_hash());
     let unchanged = (&current.source, &current.entry)
         == (&skill.current.source, &skill.current.entry)

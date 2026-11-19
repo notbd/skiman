@@ -143,8 +143,10 @@ impl Linked {
 
     /// The linked skill `name`: the first folder, in id order, that holds a
     /// skill of that name (one whose `SKILL.md` cannot be probed included),
-    /// and the skill's folder. Distributed or not.
-    pub fn skill(&self, name: &str) -> Option<(&Folder, PathBuf)> {
+    /// and the skill's folder. Distributed or not. While a folder is one
+    /// skill only through `kept` ([`Linked::is_single`]), its sub-folders
+    /// are no linked skills here either.
+    pub fn skill(&self, name: &str, kept: &BTreeMap<String, Holder>) -> Option<(&Folder, PathBuf)> {
         self.folders.iter().find_map(|folder| {
             let State::Read(contents) = &folder.state else {
                 return None;
@@ -153,7 +155,7 @@ impl Linked {
             if folder.id == name && (contents.single || contents.top_unprobed.is_some()) {
                 return Some((folder, folder.path.clone().unwrap_or_default()));
             }
-            let holds = !contents.single
+            let holds = !Linked::is_single(folder, kept)
                 && contents
                     .skills
                     .iter()
@@ -165,8 +167,8 @@ impl Linked {
 
     /// The linked skill `name` as messages name it, "a linked skill in <its
     /// folder>, in linked folder `<id>`", and the linked folder's id.
-    pub fn described(&self, name: &str) -> Option<(String, &str)> {
-        let (folder, dir) = self.skill(name)?;
+    pub fn described(&self, name: &str, kept: &BTreeMap<String, Holder>) -> Option<(String, &str)> {
+        let (folder, dir) = self.skill(name, kept)?;
         Some((
             format!(
                 "a linked skill in {}, in linked folder `{}`",
@@ -180,8 +182,12 @@ impl Linked {
     /// Why a command that acts on a skill in the canon refuses `name`, which
     /// is a linked skill (call it when nothing in the canon has the name),
     /// and the linked folder's id.
-    pub fn edited_elsewhere(&self, name: &str) -> Option<(String, &str)> {
-        let (it, id) = self.described(name)?;
+    pub fn edited_elsewhere(
+        &self,
+        name: &str,
+        kept: &BTreeMap<String, Holder>,
+    ) -> Option<(String, &str)> {
+        let (it, id) = self.described(name, kept)?;
         Some((
             format!("{name} is {it}; it is edited there, and skiman never changes it"),
             id,

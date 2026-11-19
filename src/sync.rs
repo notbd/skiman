@@ -16,6 +16,7 @@ use crate::Exit;
 use crate::failure::Failure;
 use crate::fsutil;
 use crate::layout::Layout;
+use crate::linked::{self, Linked};
 use crate::managing_skills;
 use crate::manifest::Manifest;
 use crate::names;
@@ -65,6 +66,13 @@ pub enum ItemKind {
         message: String,
         attention: bool,
     },
+    /// A report on a linked folder, a linked skill or `<canon>/linked`
+    /// (`crate::linked`), named and judged as [`ItemKind::Project`].
+    Linked {
+        what: &'static str,
+        message: String,
+        attention: bool,
+    },
 }
 
 impl Item {
@@ -77,6 +85,9 @@ impl Item {
             ItemKind::RefusedLocation => "refused-location",
             ItemKind::Project { what, .. } => {
                 return format!("project-{what} {}", self.path.display());
+            }
+            ItemKind::Linked { what, .. } => {
+                return format!("linked-{what} {}", self.path.display());
             }
         };
         format!("{kind} {}", self.path.display())
@@ -97,7 +108,7 @@ impl Item {
             ItemKind::RefusedLocation => format!(
                 "instruction file {path} is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`"
             ),
-            ItemKind::Project { message, .. } => message.clone(),
+            ItemKind::Project { message, .. } | ItemKind::Linked { message, .. } => message.clone(),
         }
     }
 }
@@ -136,6 +147,10 @@ impl Report {
                         attention: true,
                         ..
                     }
+                    | ItemKind::Linked {
+                        attention: true,
+                        ..
+                    }
             )
         }) {
             Exit::NeedsAttention
@@ -164,7 +179,8 @@ pub fn run_with(
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let mut report = reconcile(paths, repo, &manifest, previous_repo, output);
+            let linked = Linked::read(paths.home(), repo, &manifest);
+            let mut report = reconcile(paths, repo, &manifest, &linked, previous_repo, output);
             crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
             report
         }
@@ -221,15 +237,16 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
     }
 }
 
-/// Materialises `managing-skills`, then makes every installed tool's tool
-/// directory hold an owned link for every wanted entry, removes owned entries
-/// nothing wants, and removes owned entries from tool directories of known
-/// tools that are not enabled. Then does the same for instruction locations
-/// and the shared body.
+/// Materialises `managing-skills` and links each linked folder into the
+/// canon, then makes every installed tool's tool directory hold an owned
+/// link for every wanted entry, removes owned entries nothing wants, and
+/// removes owned entries from tool directories of known tools that are not
+/// enabled. Then does the same for instruction locations and the shared body.
 pub fn reconcile(
     paths: &Paths,
     repo: &SkillRepo,
     manifest: &Manifest,
+    linked: &Linked,
     previous_repo: Option<PathBuf>,
     output: Output,
 ) -> Report {
@@ -241,7 +258,12 @@ pub fn reconcile(
             repo.managing_skills_dir().display()
         ));
     }
-    let wanted = match wanted_entries(repo, manifest, &mut report) {
+    linked::canon::report_folders(linked, &mut report);
+    let offered = linked::canon::reconcile(linked, &mut report);
+    let ownership = Ownership::new(paths, repo, previous_repo);
+    let kept = kept_names(home, manifest, linked, &ownership);
+    let offers = |id: &str| offered.contains(id);
+    let wanted = match wanted_entries(repo, manifest, linked, &kept, &offers, &mut report) {
         Ok(wanted) => wanted,
         Err(e) => {
             report
@@ -250,7 +272,7 @@ pub fn reconcile(
             return report;
         }
     };
-    let ownership = Ownership::new(paths, repo, previous_repo);
+    let frozen = linked.frozen();
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
     for tool in installed_tools(home, manifest) {
@@ -272,7 +294,12 @@ pub fn reconcile(
             }
         };
         if !reconciled.contains(&real) {
-            reconcile_tool_dir(tool, &dir, &real, &wanted, &ownership, &mut report);
+            let tool_dir = ToolDir {
+                tool,
+                dir: &dir,
+                real: &real,
+            };
+            reconcile_tool_dir(&tool_dir, &wanted, &frozen, &ownership, &mut report);
             reconciled.push(real);
         }
     }
@@ -420,22 +447,64 @@ pub fn installed_tools<'a>(
         .filter(move |tool| enabled.iter().any(|id| id == tool.id) && tool.is_present(home))
 }
 
+/// The names that links of unreadable linked folders keep in the installed
+/// tool directories, with the folder's id: a transient read error never
+/// hands a name to another skill. Reads the tool directories only while a
+/// folder cannot be read.
+fn kept_names(
+    home: &Path,
+    manifest: &Manifest,
+    linked: &Linked,
+    ownership: &Ownership,
+) -> BTreeMap<String, String> {
+    let mut kept = BTreeMap::new();
+    if !linked
+        .folders
+        .iter()
+        .any(|f| matches!(f.state, linked::State::Unreadable(_)))
+    {
+        return kept;
+    }
+    for tool in installed_tools(home, manifest) {
+        let dir = tool.tool_dir(home);
+        let Ok(real) = dir.canonicalize() else {
+            continue;
+        };
+        for (name, meta) in read_entries(&dir, &mut Report::default()) {
+            if let Entry::Owned(target) = ownership.classify(&real, &name, &meta)
+                && let Some(id) = linked.keeper(&target)
+            {
+                let name = fsutil::temporary_of(&name).unwrap_or(&name);
+                kept.insert(name.to_string_lossy().into_owned(), id.to_owned());
+            }
+        }
+    }
+    kept
+}
+
 /// One entry sync wants in every installed tool directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wanted {
     pub name: String,
     /// The exact absolute link target: `<repo realpath>/skills/<n>`,
-    /// `<repo realpath>/skills/<group>/<n>` or
-    /// `<repo realpath>/.skiman/managing-skills`.
+    /// `<repo realpath>/skills/<group>/<n>`,
+    /// `<repo realpath>/.skiman/managing-skills`, or for a linked skill
+    /// `<repo realpath>/linked/<id>/<n>` or `<repo realpath>/linked/<id>`.
     pub target: PathBuf,
 }
 
 /// Every distributable skill that is not `enabled = false`, in name order,
-/// then `managing-skills`. Folders under `skills/` that are not
-/// distributable are added to `report.items`.
+/// then `managing-skills`, then the linked skills of the folders `offers`
+/// accepts that no other skill holds the name of ([`Linked::names`]; `kept`
+/// are the names links of unreadable folders keep). Folders under
+/// `skills/` that are not distributable and linked skills that lose their
+/// name are added to `report.items`.
 pub fn wanted_entries(
     repo: &SkillRepo,
     manifest: &Manifest,
+    linked: &Linked,
+    kept: &BTreeMap<String, String>,
+    offers: &dyn Fn(&str) -> bool,
     report: &mut Report,
 ) -> std::io::Result<Vec<Wanted>> {
     let entries = manifest.skills();
@@ -468,6 +537,23 @@ pub fn wanted_entries(
         name: managing_skills::NAME.to_owned(),
         target: repo.managing_skills_dir(),
     });
+    let (offered, collisions) = linked.names(&layout, kept, offers);
+    wanted.extend(
+        offered
+            .into_iter()
+            .map(|(name, target)| Wanted { name, target }),
+    );
+    for collision in collisions {
+        report.items.push(Item {
+            scope: linked.dir().display().to_string(),
+            path: collision.dir.clone(),
+            kind: ItemKind::Linked {
+                what: "collision",
+                message: collision.message(),
+                attention: true,
+            },
+        });
+    }
     Ok(wanted)
 }
 
@@ -505,15 +591,24 @@ fn read_entries(dir: &Path, report: &mut Report) -> Vec<(OsString, std::fs::Meta
     })
 }
 
-/// `dir` is the tool directory as spelled for `tool`, `real` its realpath.
+/// A tool directory of `tool`: `dir` as spelled, `real` its realpath.
+struct ToolDir<'a> {
+    tool: &'a AgentTool,
+    dir: &'a Path,
+    real: &'a Path,
+}
+
+/// Links every wanted entry in the tool directory and removes the owned
+/// entries nothing wants; owned links to a `frozen` target (or below it)
+/// stay exactly as they are and keep their name.
 fn reconcile_tool_dir(
-    tool: &AgentTool,
-    dir: &Path,
-    real: &Path,
+    tool_dir: &ToolDir,
     wanted: &[Wanted],
+    frozen: &[PathBuf],
     ownership: &Ownership,
     report: &mut Report,
 ) {
+    let ToolDir { tool, dir, real } = *tool_dir;
     let by_name: BTreeMap<&str, &Path> = wanted
         .iter()
         .map(|w| (w.name.as_str(), w.target.as_path()))
@@ -530,7 +625,16 @@ fn reconcile_tool_dir(
     for (name, meta) in read_entries(dir, report) {
         let path = dir.join(&name);
         let want = name.to_str().and_then(|n| by_name.get_key_value(n));
-        match (ownership.classify(real, &name, &meta), want) {
+        let entry = ownership.classify(real, &name, &meta);
+        if let Entry::Owned(current) = &entry
+            && frozen.iter().any(|f| current.starts_with(f))
+        {
+            if let Some((name, _)) = want {
+                handled.insert(*name);
+            }
+            continue;
+        }
+        match (entry, want) {
             (Entry::Owned(current), Some((name, target))) => {
                 handled.insert(*name);
                 if current != *target {

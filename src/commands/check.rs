@@ -12,11 +12,11 @@ use std::process::Command;
 use crate::Exit;
 use crate::failure::{Failure, finish};
 use crate::git_hooks::shell_quote;
+use crate::linked::LINKED_DIR;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::rules;
 use crate::staged::{self, StagedTree};
-use crate::linked::LINKED_DIR;
 use crate::tree::{Kind, Tree, WorkingTree};
 
 pub fn run(staged: bool) -> Exit {

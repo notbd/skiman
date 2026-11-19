@@ -36,6 +36,8 @@ pub struct Ownership {
     skills_dir: PathBuf,
     managing_skills_dir: PathBuf,
     shared_body: PathBuf,
+    /// `<canon>/linked`: links to `<id>/<name>` or `<id>` in it are owned.
+    linked_dir: PathBuf,
     /// Realpath of the skill repo `init` just switched away from: links under
     /// it are owned for that one sync.
     previous_repo: Option<PathBuf>,
@@ -73,6 +75,7 @@ impl Ownership {
             skills_dir: repo.skills_dir(),
             managing_skills_dir: repo.managing_skills_dir(),
             shared_body: repo.shared_body(),
+            linked_dir: repo.root().join(crate::linked::LINKED_DIR),
             previous_repo,
             managed_paths,
             managed_under,
@@ -146,7 +149,14 @@ impl Ownership {
                     .take_while(|d| *d != self.skills_dir)
                     .all(|d| std::fs::symlink_metadata(d.join("SKILL.md")).is_err())
         };
-        (target.file_name() == Some(name) && target.parent().is_some_and(in_skills))
+        // A linked skill: `linked/<id>/<name>`, or `linked/<id>` for a
+        // folder that is one skill (ADR 0010).
+        let in_linked =
+            |dir: &Path| dir == self.linked_dir || dir.parent() == Some(self.linked_dir.as_path());
+        (target.file_name() == Some(name)
+            && target
+                .parent()
+                .is_some_and(|d| in_skills(d) || in_linked(d)))
             || *target == self.managing_skills_dir
             || self.is_under_previous_repo(target)
     }
@@ -164,4 +174,58 @@ impl Ownership {
 pub fn link_target(real_dir: &Path, entry: &Path) -> Option<PathBuf> {
     let target = std::fs::read_link(entry).ok()?;
     Some(absolute_lexical(real_dir, &target))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    /// A canon and a tool directory holding a link `name` to `target`
+    /// (relative to the canon): what the link is.
+    fn classify(name: &str, target: &str) -> Entry {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (home, canon) = (root.join("home"), root.join("canon"));
+        let tool_dir = home.join(".claude/skills");
+        std::fs::create_dir_all(&tool_dir).unwrap();
+        std::fs::create_dir_all(&canon).unwrap();
+        symlink(canon.join(target), tool_dir.join(name)).unwrap();
+        let repo = SkillRepo::at(&canon).unwrap();
+        let ownership = Ownership::new(&Paths::under(&home), &repo, None);
+        let meta = std::fs::symlink_metadata(tool_dir.join(name)).unwrap();
+        ownership.classify(&tool_dir, OsStr::new(name), &meta)
+    }
+
+    fn owned(entry: &Entry) -> bool {
+        matches!(entry, Entry::Owned(_))
+    }
+
+    /// Both shapes of a linked skill's link are skiman's whether or not
+    /// `linked/<id>` exists, so a deleted registration's links are still found.
+    #[test]
+    fn a_link_to_a_linked_skill_is_owned_in_both_shapes() {
+        assert!(owned(&classify("pdf", "linked/company/pdf")));
+        assert!(owned(&classify("solo", "linked/solo")));
+    }
+
+    #[test]
+    fn a_link_under_a_temporary_name_of_a_linked_skill_is_owned() {
+        assert!(owned(&classify(".pdf.skiman-tmp-42", "linked/company/pdf")));
+        assert!(owned(&classify(".solo.skiman-tmp-42-1", "linked/solo")));
+    }
+
+    #[test]
+    fn no_other_target_under_linked_is_owned() {
+        for (name, target) in [
+            ("pdf", "linked/company/docx"),
+            ("solo", "linked/other"),
+            ("pdf", "linked/company/sub/pdf"),
+            ("linked", "linked"),
+            ("company", "linked/company/company/x"),
+        ] {
+            assert!(!owned(&classify(name, target)), "{name} -> {target}");
+        }
+    }
 }

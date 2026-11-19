@@ -10,7 +10,7 @@
 //! directories or machine state, and never takes the repo lock for longer
 //! than a test of whether it is held. Exit 0 whenever the diagnosis ran.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -21,6 +21,7 @@ use crate::failure::{Failure, finish};
 use crate::git;
 use crate::git_hooks::{self, Hook};
 use crate::layout::Layout;
+use crate::linked::Linked;
 use crate::manifest::Manifest;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -59,7 +60,8 @@ fn doctor() -> Result<Exit, Failure> {
     let installed: Vec<&AgentTool> = sync::installed_tools(home, &manifest).collect();
     report_session_hooks(home, &installed, &root, &config.binary);
     report_tools(home, &manifest, &installed);
-    report_entries(&paths, &repo, &manifest, &installed).map_err(io)?;
+    let linked = Linked::read(home, &repo, &manifest);
+    report_entries(&paths, &repo, &manifest, &linked, &installed).map_err(io)?;
     report_instruction_locations(&paths, &repo, &installed);
     report_skill_repo(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
@@ -197,13 +199,16 @@ fn report_entries(
     paths: &Paths,
     repo: &SkillRepo,
     manifest: &Manifest,
+    linked: &Linked,
     installed: &[&AgentTool],
 ) -> std::io::Result<()> {
     let mut ignored = sync::Report::default();
-    let wanted: BTreeSet<String> = sync::wanted_entries(repo, manifest, &mut ignored)?
-        .into_iter()
-        .map(|w| w.name)
-        .collect();
+    let none = BTreeMap::new();
+    let wanted: BTreeSet<String> =
+        sync::wanted_entries(repo, manifest, linked, &none, &|_| true, &mut ignored)?
+            .into_iter()
+            .map(|w| w.name)
+            .collect();
     let home = paths.home();
     let ownership = Ownership::new(paths, repo, None);
     let mut managed = BTreeSet::new();

@@ -506,7 +506,12 @@ impl Records {
     /// The `[linked.<id>]` tables (ADR 0010): each a table with exactly the
     /// key `path`, absolute or starting with `~/`; the id follows the skill
     /// name rule and is not a reserved name. Both modes check them.
-    fn check_linked(&self, linked: &dyn TableLike, line: Option<usize>, out: &mut BTreeSet<Violation>) {
+    fn check_linked(
+        &self,
+        linked: &dyn TableLike,
+        line: Option<usize>,
+        out: &mut BTreeSet<Violation>,
+    ) {
         let m = &self.manifest;
         for (id, item) in linked.iter() {
             let line = m.key_line(linked, id, line);

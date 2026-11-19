@@ -45,8 +45,8 @@ the commit.
 | `skiman sync` | Make every tool directory and instruction location match the canon (`--hook` from hooks). |
 | `skiman check` | Report every rule violation in the canon (`--staged` for the git index). |
 | `skiman list` | Show every skill with its kind, source, version and state. |
-| `skiman overview` | Show every skill on this machine as Markdown: by group with summary, source and install day, then the skills other managers keep (read-only). |
-| `skiman doctor` | Diagnose the setup. |
+| `skiman overview` | Show every skill on this machine as Markdown: by group with summary, source and install day, each linked folder, then the skills other managers keep (read-only). |
+| `skiman doctor` | Diagnose the setup, linked folders and project roots included. |
 | `skiman linked add <path>` | Register a linked folder and distribute its skills (`--id`). |
 | `skiman linked remove <id>` | Stop distributing a linked folder; its content stays. |
 | `skiman project add <path>` | Register a project root (`--id`). |

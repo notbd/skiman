@@ -14,6 +14,8 @@ The remaining cases follow rules skiman already has.
 - **Checks.** `skiman check --staged` reads the git index, so it sees the table and never the linked content: nothing outside git can fail a commit. `skiman check` on the working tree also reads the linked skills, and what it finds there (a folder name that is no valid skill name, frontmatter that breaks the frontmatter rules, a missing summary, a body Antigravity would cut) is a warning that never changes an exit status, because the canon cannot fix it.
 - **Display.** `skiman list` shows the kind `linked` and the linked folder. `skiman overview` shows each linked folder as one section after the groups, with its path.
 
+The check that keeps a write out of a linked folder runs again right before each write, and again after every wait for the user's answer. It does not defend against another process that replaces a folder on the path with a symlink in the milliseconds between that last check and the write. That defence would need every write made through folder handles (`openat`) across the whole write protocol of [ADR 0005](0005-no-crash-recovery-journal.md).
+
 ## Evidence
 
 Measured in scratch folders, and in the real tool directories only with temporary links. The loading tests ran on 2026-11-19 with Claude Code 2.1.328, codex-cli 0.167.2 and agy 1.5.12; the git, link and Claude Code session tests ran on 2026-11-18 with Claude Code 2.1.327. Each test skill held a random token in its description and carried a `metadata.summary` line; each tool was asked, without tools, to quote the tokens it had loaded.

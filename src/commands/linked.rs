@@ -10,7 +10,7 @@ use crate::Exit;
 use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::{Failure, finish};
-use crate::fsutil::{absolute_lexical, write_atomic};
+use crate::fsutil::write_atomic;
 use crate::linked::{self, Folder, Linked, State, gitignore};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
@@ -35,7 +35,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current directory: {e}")))?;
     // Recorded as given, not as its realpath: `linked/<id>` points there.
-    let absolute = absolute_lexical(&cwd, path);
+    let absolute = root::given(home, &cwd, path);
     let written = root::written_form(home, &absolute);
     let given = id.is_some();
     let id = id.unwrap_or_else(|| default_id(&absolute));

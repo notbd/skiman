@@ -11,7 +11,7 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
-use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
+use crate::fsutil::{broken_chain, realpath_as_far_as_exists, write_atomic};
 use crate::linked::Linked;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
@@ -1053,12 +1053,7 @@ fn io_failure(e: std::io::Error) -> Failure {
 fn cwd_absolute(path: &Path) -> Result<PathBuf, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current folder: {e}")))?;
-    let home = Paths::from_env()?.home().to_path_buf();
-    let path = match path.to_str().and_then(|p| p.strip_prefix("~/")) {
-        Some(rest) => home.join(rest),
-        None => path.to_path_buf(),
-    };
-    Ok(absolute_lexical(&cwd, &path))
+    Ok(root::given(Paths::from_env()?.home(), &cwd, path))
 }
 
 /// `path` with its parent folder resolved (as far as it exists) and its last

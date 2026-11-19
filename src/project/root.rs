@@ -53,6 +53,17 @@ pub fn expand(home: &Path, written: &str) -> Option<PathBuf> {
     Some(absolute_lexical(Path::new("/"), &path))
 }
 
+/// A path given on the command line, made absolute: a literal leading `~/`
+/// (quoted, so the shell left it) is below `home`, a relative path below
+/// `cwd`.
+pub fn given(home: &Path, cwd: &Path, path: &Path) -> PathBuf {
+    let path = match path.to_str().and_then(|p| p.strip_prefix("~/")) {
+        Some(rest) => home.join(rest),
+        None => path.to_path_buf(),
+    };
+    absolute_lexical(cwd, &path)
+}
+
 /// `path` written the way `skiman project add` stores it: `~/...` under
 /// `HOME` (as given or as its realpath), absolute otherwise.
 pub fn written_form(home: &Path, path: &Path) -> String {

@@ -250,6 +250,19 @@ fn the_summary_lines_linked_add_prints_parse_once_applied() {
     assert!(!stderr.contains("bell"), "{stderr}");
 }
 
+/// A literal `~/` (quoted, so the shell left it) means HOME, as for
+/// `project add`.
+#[test]
+fn linked_add_expands_a_literal_tilde() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    folder(&sandbox, "work/company", &["alpha"]);
+
+    linked_add(&sandbox, &["~/work/company"]).code(0);
+
+    assert!(read(sandbox.canon().join("skiman.toml")).contains(COMPANY));
+}
+
 /// `linked remove` of an id that is not registered changes nothing; when
 /// `linked/<id>` is left from an earlier registration, it says that sync
 /// removes it.

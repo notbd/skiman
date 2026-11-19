@@ -29,7 +29,7 @@ use crate::manifest::Manifest;
 use crate::names;
 use crate::project::root::expand;
 pub use folder::Contents;
-use path::{Places, Stop, overlap, resolve};
+use path::{Listings, Places, Stop, overlap, resolve, resolve_in};
 pub use summary::stand_in;
 
 /// The canon's folder of links to linked folders.
@@ -75,6 +75,7 @@ impl Linked {
     /// against the path rules and reads the folder of each that passes.
     pub fn read(home: &Path, repo: &Canon, manifest: &Manifest) -> Linked {
         let places = Places::new(home, repo);
+        let mut listings = Listings::default();
         let mut folders: Vec<Folder> = Vec::new();
         for entry in manifest.linked() {
             let mut folder = Folder {
@@ -88,13 +89,13 @@ impl Linked {
                 Ok(written) => {
                     let path = expand(home, &written).expect("checked by is_path_form");
                     folder.path = Some(path);
-                    folder.state = check(&mut folder, &places, &folders);
+                    folder.state = check(&mut folder, &places, &folders, &mut listings);
                 }
                 Err(malformed) => {
                     // Skipped, but the folder at a usable path stays protected.
                     if let Some(written) = malformed.path {
                         let path = expand(home, &written).expect("checked by is_path_form");
-                        folder.resolved = Some(resolve(&path).path);
+                        folder.resolved = Some(resolve_in(&path, &mut listings).path);
                         folder.path = Some(path);
                     }
                     folder.state = State::Broken(malformed.why);
@@ -108,7 +109,7 @@ impl Linked {
                 let breaks = |p: &Path| child_breaks(p, own, &folders, &places);
                 // The realpath: the first link met under it is the entry itself.
                 let dir = own.resolved.as_ref().expect("a read folder resolved");
-                let state = match folder::read(dir, &breaks) {
+                let state = match folder::read(dir, &breaks, &mut listings) {
                     Ok(contents) => State::Read(contents),
                     Err(e) => State::Unreadable(e),
                 };
@@ -467,9 +468,14 @@ impl Collision {
 /// The state of `folder` by the path rules, before its content is read:
 /// `Read` with no contents yet when it passes. `earlier` are the
 /// registrations whose id sorts first: an overlap breaks the later one.
-fn check(folder: &mut Folder, places: &Places, earlier: &[Folder]) -> State {
+fn check(
+    folder: &mut Folder,
+    places: &Places,
+    earlier: &[Folder],
+    listings: &mut Listings,
+) -> State {
     let path = folder.path.clone().expect("set by the caller");
-    let resolved = resolve(&path);
+    let resolved = resolve_in(&path, listings);
     folder.resolved = Some(resolved.path.clone());
     folder.links = resolved.links.clone();
     if let Some(why) = places.breaks(&resolved.path) {

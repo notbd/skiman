@@ -4,10 +4,12 @@
 //! resolved and only candidate folders probed for a `SKILL.md`; no content
 //! is read, so `sync --hook` stays fast.
 
+use std::ffi::OsString;
 use std::io;
+use std::os::unix::fs::DirEntryExt;
 use std::path::{Path, PathBuf};
 
-use super::path::{self, Stop, resolve};
+use super::path::{self, Listings, Stop, resolve_in};
 use crate::fsutil::absolute_lexical;
 use crate::names;
 
@@ -40,8 +42,13 @@ pub struct Contents {
 pub type ReadError = String;
 
 /// Reads the folder at `dir`, the registered path's realpath.
-/// `breaks` says why a child link's path breaks the path rules.
-pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Contents, ReadError> {
+/// `breaks` says why a child link's path breaks the path rules; child
+/// links resolve with `listings`, which gets this folder's listing too.
+pub fn read(
+    dir: &Path,
+    breaks: &dyn Fn(&Path) -> Option<String>,
+    listings: &mut Listings,
+) -> Result<Contents, ReadError> {
     let cannot = |what: &Path, e: io::Error| format!("cannot read {}: {e}", what.display());
     let mut contents = Contents::default();
     let top = dir.join("SKILL.md");
@@ -54,11 +61,14 @@ pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Cont
         Err(e) if path::is_missing(&e) => {}
         Err(e) => contents.top_unprobed = Some(cannot(&top, e)),
     }
-    let mut names = Vec::new();
+    let mut listed = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| cannot(dir, e))? {
-        names.push(entry.map_err(|e| cannot(dir, e))?.file_name());
+        let entry = entry.map_err(|e| cannot(dir, e))?;
+        listed.push((entry.file_name(), entry.ino()));
     }
+    let mut names: Vec<OsString> = listed.iter().map(|(name, _)| name.clone()).collect();
     names.sort();
+    listings.insert(dir.to_owned(), listed);
     for name in names {
         if name.as_encoded_bytes().starts_with(b".") {
             continue;
@@ -75,7 +85,7 @@ pub fn read(dir: &Path, breaks: &dyn Fn(&Path) -> Option<String>) -> Result<Cont
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(cannot(&entry, e)),
             };
-            if !child_link(&entry, &target, breaks, &mut contents) {
+            if !child_link(&entry, &target, breaks, listings, &mut contents) {
                 continue;
             }
         } else if !meta.is_dir() {
@@ -112,9 +122,10 @@ fn child_link(
     entry: &Path,
     target: &Path,
     breaks: &dyn Fn(&Path) -> Option<String>,
+    listings: &mut Listings,
     contents: &mut Contents,
 ) -> bool {
-    let resolved = resolve(target);
+    let resolved = resolve_in(target, listings);
     if let Some(Stop::Loop) = resolved.stop {
         contents.problems.push((
             entry.to_owned(),

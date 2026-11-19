@@ -2,7 +2,7 @@
 //! registration and a child link may resolve to, and resolving a path link
 //! by link so that every link met on the way is checked too.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::os::unix::fs::{DirEntryExt, MetadataExt};
@@ -40,13 +40,18 @@ pub enum Stop {
     Unreadable(io::Error),
 }
 
+/// [`resolve_in`] with listings of its own.
+pub fn resolve(path: &Path) -> Resolution {
+    resolve_in(path, &mut Listings::default())
+}
+
 /// Resolves the absolute `path` one component at a time, following every
 /// link that can be read, as the system does. Unlike
 /// [`realpath_as_far_as_exists`] it goes on through a link whose target is
 /// missing, so a chain of links ends at the last target that can be named.
 /// Every component that exists, a link met included, comes back spelled
-/// as on disk.
-pub fn resolve(path: &Path) -> Resolution {
+/// as on disk; the folders listed for that are kept in `listings`.
+pub fn resolve_in(path: &Path, listings: &mut Listings) -> Resolution {
     let mut done = PathBuf::from("/");
     let mut rest: VecDeque<OsString> = parts(path).collect();
     let mut links = Vec::new();
@@ -62,7 +67,7 @@ pub fn resolve(path: &Path) -> Resolution {
         let next = done.join(&name);
         let stop = match std::fs::symlink_metadata(&next) {
             Ok(meta) if meta.is_symlink() => {
-                let next = listed(&done, &name, &meta).unwrap_or(next);
+                let next = listings.spelled(&done, &name, &meta).unwrap_or(next);
                 links.push(next.clone());
                 if links.len() > MAX_LINKS {
                     Stop::Loop
@@ -104,20 +109,35 @@ pub fn resolve(path: &Path) -> Resolution {
     }
 }
 
-/// The link `name` (metadata `meta`) in the folder `dir`, a realpath, as
-/// the listing spells it: the entry of that name, or else the entry with
-/// its inode. `canonicalize` cannot tell, since it follows the link.
-fn listed(dir: &Path, name: &OsStr, meta: &std::fs::Metadata) -> Option<PathBuf> {
-    let mut same = None;
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
-        if entry.file_name() == name {
-            return Some(dir.join(name));
-        }
-        if same.is_none() && entry.ino() == meta.ino() {
-            same = Some(entry.file_name());
-        }
+/// The entries (name and inode) of the folders listed so far, by realpath,
+/// so one run lists each folder once however many links it holds.
+#[derive(Debug, Default)]
+pub struct Listings(HashMap<PathBuf, Vec<(OsString, u64)>>);
+
+impl Listings {
+    /// Records the entries of `dir` (a realpath) listed by the caller.
+    pub fn insert(&mut self, dir: PathBuf, entries: Vec<(OsString, u64)>) {
+        self.0.insert(dir, entries);
     }
-    same.map(|found| dir.join(found))
+
+    /// The link `name` (metadata `meta`) in the folder `dir`, a realpath,
+    /// as the listing spells it: the entry of that name, or else the entry
+    /// with its inode. `canonicalize` cannot tell, since it follows the link.
+    fn spelled(&mut self, dir: &Path, name: &OsStr, meta: &std::fs::Metadata) -> Option<PathBuf> {
+        let entries = self.0.entry(dir.to_owned()).or_insert_with(|| {
+            std::fs::read_dir(dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| (e.file_name(), e.ino()))
+                .collect()
+        });
+        let found = entries
+            .iter()
+            .find(|(n, _)| n == name)
+            .or_else(|| entries.iter().find(|(_, ino)| *ino == meta.ino()))?;
+        Some(dir.join(&found.0))
+    }
 }
 
 /// The components of `path` that name something: normal names and `..`.
@@ -301,6 +321,24 @@ mod tests {
         let through = resolve(&root.join("alias/INNER"));
         assert_eq!(through.path, root.join("Real/Inner"));
         assert!(through.stop.is_none());
+    }
+
+    /// A folder listed once is not listed again: a link met in it later is
+    /// spelled from the listing already kept.
+    #[test]
+    fn a_folder_is_listed_once_per_listings() {
+        let (_temp, root) = root();
+        std::fs::create_dir(root.join("real")).unwrap();
+        symlink(root.join("real"), root.join("link")).unwrap();
+        let ino = std::fs::symlink_metadata(root.join("link")).unwrap().ino();
+        let mut listings = Listings::default();
+        // A kept listing that spells the link's inode `kept`: listing the
+        // folder again would find `link` by its name.
+        listings.insert(root.clone(), vec![("kept".into(), ino)]);
+
+        let resolved = resolve_in(&root.join("link"), &mut listings);
+
+        assert_eq!(resolved.links, [root.join("kept")]);
     }
 
     /// A file followed by `..` does not resolve, as the system refuses it.

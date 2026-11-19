@@ -1,9 +1,9 @@
 //! `skiman check [--staged]`: report every rule violation in the working tree
 //! of the skill repo, or in its staged snapshot, on stdout, and warnings on
 //! stderr; on the working tree, also each skill that lacks a summary, a group
-//! folder or an origin, and what is wrong with linked skills (warnings). When the staged snapshot breaks a rule
-//! that the working tree passes, a hint says so and prints a line that
-//! stages the working tree.
+//! folder or an origin, and what is wrong with linked skills (warnings). When
+//! the staged snapshot breaks a rule that the working tree passes, a hint
+//! says so and prints a line that stages the working tree.
 //! Read-only; takes no lock.
 
 use std::path::{Path, PathBuf};

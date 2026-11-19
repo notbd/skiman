@@ -745,10 +745,11 @@ fn linked_folders(
     content: &Folder,
 ) -> Result<Linked, Failure> {
     let linked = Linked::read(paths.home(), repo, manifest);
-    if let Some(folder) = linked.unreadable() {
-        let State::Unreadable(why) = &folder.state else {
-            unreachable!("unreadable() finds an unreadable folder");
-        };
+    let unreadable = linked.folders.iter().find_map(|f| match &f.state {
+        State::Unreadable(why) => Some((f, why)),
+        _ => None,
+    });
+    if let Some((folder, why)) = unreadable {
         return Err(Failure::refused(format!(
             "refusing to import {}: linked folder `{}` cannot be read now ({why}), so skiman cannot tell what in the tool directories leads into it; nothing was changed, run the import again once it can be read",
             content.root.display(),

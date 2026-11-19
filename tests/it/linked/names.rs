@@ -203,6 +203,11 @@ fn registered(sandbox: &Sandbox) -> PathBuf {
 fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
     let sandbox = Sandbox::new();
     let company = registered(&sandbox);
+    write(
+        sandbox.skill_repo().join("skills/beta/SKILL.md"),
+        skill_md("beta"),
+    );
+    assert_eq!(sync(&sandbox).0, 0);
     let before = world(&sandbox, &company);
     let named = format!(
         "alpha is a linked skill: it is edited in {}, in linked folder `company`",
@@ -214,6 +219,7 @@ fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
         &["diff", "alpha"],
         &["remove", "alpha", "--yes"],
         &["mv", "alpha", "beta"],
+        &["mv", "alpha", "gamma"],
         &["mv", "alpha", "--group", "office"],
     ] {
         let (code, stderr) = run(&sandbox, args);

@@ -70,15 +70,11 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
             ),
             _ => String::new(),
         };
-        if done.is_empty()
-            && let Some((why, _)) = Linked::load(paths.home(), &repo)?.edited_elsewhere(old)
-        {
-            return Err(Failure::refused(why));
-        }
-        return Err(Failure::refused(format!(
-            "{} is not a skill folder{done}",
-            layout.path(old)
-        )));
+        let why = match Linked::load(paths.home(), &repo)?.edited_elsewhere(old) {
+            Some((why, _)) => why,
+            None => format!("{} is not a skill folder", layout.path(old)),
+        };
+        return Err(Failure::refused(format!("{why}{done}")));
     };
     let group = match &to_arg {
         To::Same => from.group.clone(),

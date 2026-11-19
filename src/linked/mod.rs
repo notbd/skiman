@@ -4,9 +4,11 @@
 //! writes inside one.
 //!
 //! [`Linked::read`] reads every registration on this machine once per
-//! command; distribution, the project scope, `doctor` and the commands that
-//! move content into the canon ask it what they need: the skills, the write
-//! guard ([`Linked::refusal`]), what nothing may be moved out of
+//! command; distribution, the project scope, `doctor`, `check`, `list`,
+//! `overview`, the commands that take a skill name and the commands that
+//! move content into the canon ask it what they need: the skills and the
+//! names they hold ([`Linked::names`], [`Linked::skill`]), the write guard
+//! ([`Linked::refusal`]), what nothing may be moved out of
 //! ([`Linked::reaches_into`]) and which project items overlap a folder.
 
 pub mod canon;

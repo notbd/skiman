@@ -145,11 +145,11 @@ fn overview() -> Result<Exit, Failure> {
                     .unwrap_or_default();
                 let summary = match (about.summary, about.description) {
                     (Some(summary), _) => summary,
-                    (None, Some(description)) => {
+                    (None, Some(description)) if !linked::stand_in(&description).is_empty() => {
                         stand_in = true;
                         format!("*{}*", linked::stand_in(&description).replace('*', "\\*"))
                     }
-                    (None, None) => "-".to_owned(),
+                    _ => "-".to_owned(),
                 };
                 let distributed = match lost {
                     Some(holder) => format!("no: {}", holder.holds_the_name()),

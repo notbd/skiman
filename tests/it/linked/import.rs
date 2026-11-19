@@ -293,3 +293,41 @@ fn a_disabled_tools_directory_that_resolves_into_a_linked_folder_refuses_the_imp
 
     assert_refused(&sandbox, &setup.folder, "inside linked folder `company`");
 }
+
+/// A tool directory that is a link to a plain folder, re-pointed into a
+/// registered folder right before import moves an entry out of it: the
+/// move takes the entry from the folder import checked, and the
+/// registered folder stays byte for byte.
+#[test]
+fn import_moves_an_entry_out_of_the_tool_directory_it_checked() {
+    let sandbox = Sandbox::new();
+    let setup = setup(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    write(company.join("old-copy/notes.md"), "kept\n");
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let plain = sandbox.home().join("plain");
+    std::fs::rename(&claude, &plain).unwrap();
+    symlink(&plain, &claude).unwrap();
+    let before = contents(&[&company]);
+    let run = format!(
+        "rm '{0}' && ln -s '{1}' '{0}'",
+        claude.display(),
+        company.display()
+    );
+
+    let output = crate::support::import_with_hook(
+        &sandbox,
+        &setup.folder,
+        "import:back-up:claude-code/old-copy",
+        &run,
+    );
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(contents(&[&company]), before, "{stderr}");
+    assert!(!plain.join("old-copy").exists(), "{stderr}");
+    assert!(
+        backed_up(&sandbox).contains_key(Path::new("claude-code/old-copy/SKILL.md")),
+        "{stderr}"
+    );
+}

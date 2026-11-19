@@ -819,7 +819,7 @@ struct Move {
     path: PathBuf,
     /// Where it is: the realpath of its tool directory plus its name (for an
     /// instruction location, `path`). The move order compares this one, since
-    /// what a link resolves through is a real path.
+    /// what a link resolves through is a real path, and the move takes it.
     real: PathBuf,
     /// Where it goes, relative to the backup folder.
     backup: PathBuf,
@@ -1484,13 +1484,15 @@ fn canon_todo(repo: &Canon, candidate: &Candidate, change: &Change) -> Result<Ve
 }
 
 /// Moves each original of `plan` to the backup, `moved` once one is in. Sync
-/// creates the owned link in its place. An original that is gone needs nothing.
+/// creates the owned link in its place. An original that is gone needs
+/// nothing. Each is taken from where the plan checked it (`real`), never
+/// through a link on its way that may have changed since.
 fn take_over(plan: &Plan, backups: &mut Backups, moved: &mut bool) -> Result<(), Failure> {
     for entry in &plan.moves {
         let point = entry.backup.display();
         test_hook::at("import", &format!("back-up:{point}"));
-        if std::fs::symlink_metadata(&entry.path).is_ok() {
-            let dest = backups.move_in(&entry.path, &entry.backup).map_err(|e| {
+        if std::fs::symlink_metadata(&entry.real).is_ok() {
+            let dest = backups.move_in(&entry.real, &entry.backup).map_err(|e| {
                 Failure::operational(format!(
                     "cannot move {} to the backup: {e}",
                     entry.path.display()

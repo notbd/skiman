@@ -1,6 +1,6 @@
 # What a person reads about a skill lives in skiman.toml
 
-The `group` key is replaced by group folders ([ADR 0008](0008-groups-are-folders.md)).
+The `group` key is replaced by group folders ([ADR 0008](0008-groups-are-folders.md)). A linked skill's summary is read from its own `SKILL.md` ([ADR 0011](0011-linked-skill-summary-in-its-skill-md.md)).
 
 A skill's summary, group, origin and install day are optional keys of its `[skills.<name>]` table in `skiman.toml`, next to `enabled` and `source`. `skiman overview` shows them, and `skiman check` on the working tree warns about each skill without a summary, a group or a record of where it came from; the warning never changes an exit status, and neither `check --staged` (the pre-commit hook), `sync --hook` nor the write commands print it, so a skill repo whose skills have none of them works as before. The install day falls back to the latest commit that added the skill's `SKILL.md`.
 

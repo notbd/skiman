@@ -367,3 +367,48 @@ fn commands_that_create_a_name_refuse_a_linked_skills_name() {
         sandbox.canon().join("linked/company/alpha")
     );
 }
+
+/// A group folder's name is taken like a skill's (ADR 0009), so every
+/// command that creates a group folder refuses a linked skill's name, at
+/// any depth, and nothing changes; the linked skill stays distributed.
+#[test]
+fn commands_that_create_a_group_folder_refuse_a_linked_skills_name() {
+    let sandbox = Sandbox::new();
+    let company = registered(&sandbox);
+    write(
+        sandbox.canon().join("skills/beta/SKILL.md"),
+        skill_md("beta"),
+    );
+    write(
+        sandbox.tool_dir(Tool::Antigravity).join("delta/SKILL.md"),
+        skill_md("delta"),
+    );
+    let up = sandbox.upstream("acme/tool");
+    up.write("SKILL.md", skill_md("tool"));
+    up.commit("v1");
+    assert_eq!(sync(&sandbox).0, 0);
+    let before = world(&sandbox, &company);
+    for (group, args) in [
+        ("alpha", &["new", "foo", "-d", "Does foo things"][..]),
+        ("office/alpha", &["new", "foo", "-d", "Does foo things"]),
+        ("alpha", &["add", "acme/tool", "--yes"]),
+        (
+            "alpha",
+            &["adopt", "delta", "--from", "antigravity", "--yes"],
+        ),
+        ("alpha", &["mv", "beta"]),
+    ] {
+        let (code, stderr) = run(&sandbox, &[args, &["--group", group]].concat());
+        assert_eq!(code, 1, "{args:?} {group}: {stderr}");
+        let line = format!(
+            "`{group}` cannot be a group: `alpha` is a linked skill in {}, in linked folder `company`",
+            company.join("alpha").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert_eq!(world(&sandbox, &company), before, "{args:?} {group}");
+    }
+    assert_eq!(
+        target(&sandbox, "alpha"),
+        sandbox.canon().join("linked/company/alpha")
+    );
+}

@@ -34,7 +34,7 @@ fn new(name: &str, description: Option<String>, group: Option<&str>) -> Result<E
     let repo = Canon::from_config(&paths)?;
     names::check_new_name(name)?;
     if let Some(group) = group {
-        names::check_group(group, name, &repo.layout()?)?;
+        names::check_group(paths.home(), &repo, group, name)?;
     }
     let description = match description {
         Some(description) => description,

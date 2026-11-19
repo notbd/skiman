@@ -114,9 +114,8 @@ fn add(args: Args) -> Result<Exit, Failure> {
         installs.push(inspect(source, snapshot, candidate, name.clone(), group)?);
     }
     if let Some(group) = &args.group {
-        let layout = repo.layout()?;
         for install in &installs {
-            names::check_group(group, &install.name, &layout)?;
+            names::check_group(paths.home(), &repo, group, &install.name)?;
         }
     }
     check_install_names(paths.home(), &repo, &installs, &upstream)?;

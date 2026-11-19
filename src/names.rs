@@ -7,7 +7,6 @@ use std::path::Path;
 
 use crate::canon::Canon;
 use crate::failure::Failure;
-use crate::layout::Layout;
 use crate::linked::Linked;
 use crate::lockfile::Lockfile;
 use crate::manifest::Manifest;
@@ -52,9 +51,12 @@ pub fn check_new_name(name: &str) -> Result<(), Failure> {
 }
 
 /// Refuses (exit 1) a group (`a` or `a/b`) with a folder name that breaks
-/// the name rule, or that names the skill `name` going into it or a skill
-/// folder in `layout` (a group folder and a skill never share a name).
-pub fn check_group(group: &str, name: &str, layout: &Layout) -> Result<(), Failure> {
+/// the name rule, or that names the skill `name` going into it, a skill
+/// folder in the canon or a linked skill (a group folder and a skill never
+/// share a name).
+pub fn check_group(home: &Path, repo: &Canon, group: &str, name: &str) -> Result<(), Failure> {
+    let layout = repo.layout()?;
+    let linked = Linked::load(home, repo)?;
     for folder in group.split('/') {
         if !is_valid(folder) {
             return Err(Failure::refused(format!(
@@ -70,6 +72,11 @@ pub fn check_group(group: &str, name: &str, layout: &Layout) -> Result<(), Failu
             return Err(Failure::refused(format!(
                 "`{group}` cannot be a group: {} is a skill folder named `{folder}`",
                 skill.path()
+            )));
+        }
+        if let Some((it, _)) = linked.described(folder) {
+            return Err(Failure::refused(format!(
+                "`{group}` cannot be a group: `{folder}` is {it}"
             )));
         }
     }

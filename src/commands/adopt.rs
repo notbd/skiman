@@ -50,7 +50,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
     let entry = tool.tool_dir(paths.home()).join(name);
     check_name(paths.home(), &repo, name, &entry, None)?;
     if let Some(group) = group {
-        names::check_group(group, name, &repo.layout()?)?;
+        names::check_group(paths.home(), &repo, group, name)?;
     }
     let (entry, files) = read(&paths, &repo, tool, name)?;
     let change = Change {

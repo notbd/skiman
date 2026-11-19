@@ -431,6 +431,32 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     assert_eq!(contents(&[&company]), before);
 }
 
+/// While `skiman.toml` cannot be parsed no registration is known, so
+/// `init` writes nothing through a `.gitignore` that is a link.
+#[test]
+fn init_writes_no_linked_gitignore_while_the_manifest_does_not_parse() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.canon();
+    let real = sandbox.root().join("dotfiles/gitignore");
+    write(&real, "target\n");
+    std::fs::remove_file(repo.join(".gitignore")).unwrap();
+    symlink(&real, repo.join(".gitignore")).unwrap();
+    std::fs::write(repo.join("skiman.toml"), "[tools\n").unwrap();
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&repo)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("`.skiman/` is not added to it"), "{stderr}");
+    assert_eq!(read(&real), "target\n");
+}
+
 /// `init` into a registered folder of the current canon, or into a folder
 /// inside one, refuses before writing anything (exit 1): the user config
 /// still names the current canon.

@@ -325,14 +325,20 @@ fn ignore_machine_state(repo: &Canon, home: &Path) -> Result<Exit, Failure> {
     }) {
         return Ok(Exit::Success);
     }
-    // Written through a link: never into a linked folder.
-    if real != path
-        && let Ok(manifest) = Manifest::load(repo)
-        && let Some(message) =
-            Linked::read(home, repo, &manifest).refusal(&path, &linked::written_through(&path))
-    {
-        err!("warning: {message}; `.skiman/` is not added to it");
-        return Ok(Exit::NeedsAttention);
+    // Written through a link: never into a linked folder, nor while the
+    // registrations cannot be read. `real` is what is written.
+    if real != path {
+        let refused = match Manifest::load(repo) {
+            Ok(manifest) => Linked::read(home, repo, &manifest).refusal(&path, &real),
+            Err(_) => Some(format!(
+                "{} is a link, and while skiman.toml cannot be read skiman cannot tell whether it leads into a linked folder",
+                path.display()
+            )),
+        };
+        if let Some(message) = refused {
+            err!("warning: {message}; `.skiman/` is not added to it");
+            return Ok(Exit::NeedsAttention);
+        }
     }
     let separator = if text.is_empty() || text.ends_with('\n') {
         ""

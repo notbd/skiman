@@ -480,7 +480,13 @@ fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Li
             in_mirror.len()
         );
         let (mut not_here, mut on_disk) = (0, Vec::new());
+        // Neither mirrored nor restored, by the rule discovery uses below.
+        let mut skipped = Vec::new();
         for item in &items {
+            if let Some(why) = linked.item_overlap(&item.disk(&root)) {
+                skipped.push((item.disk(&root), why));
+                continue;
+            }
             let recorded = synced.get(&root, &item.rel).map(|(_, h)| h.clone());
             let Ok(evaluated) = classify(repo, &root, item, recorded.as_deref()) else {
                 out!("{}: cannot read it", item.disk(&root).display());
@@ -514,10 +520,17 @@ fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Li
         }
         let found = discover::discover(&root, &skip, linked);
         for (item, why) in &found.skipped {
+            let disk = item.disk(&root);
+            if !skipped.iter().any(|(path, _)| *path == disk) {
+                skipped.push((disk, why.clone()));
+            }
+        }
+        skipped.sort();
+        for (disk, why) in &skipped {
             out!(
                 "project root {}: {} is skipped: {why}",
                 root.id,
-                item.disk(&root).display()
+                disk.display()
             );
         }
         let candidates: Vec<std::path::PathBuf> = found

@@ -138,3 +138,63 @@ fn doctor_counts_no_project_item_inside_a_linked_folder() {
         ),
     );
 }
+
+/// A mirrored project item that came to overlap a linked folder gets no
+/// `project restore` suggestion, which would refuse: `doctor` names it as
+/// skipped, once, by the same overlap rule.
+#[test]
+fn doctor_suggests_no_restore_for_a_mirrored_item_inside_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let work = sandbox.home().join("work");
+    let company = folder(&sandbox, "work/company", &[]);
+    write(company.join("AGENTS.md"), "# company\n");
+    let gone = work.join("gone/AGENTS.md");
+    write(&gone, "# gone\n");
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&work)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    write(
+        sandbox.canon().join("projects/work/company/AGENTS.md"),
+        "# changed in the canon\n",
+    );
+    // A mirrored item inside the folder that is not on disk is skipped too.
+    let inside = company.join("gone");
+    std::fs::rename(work.join("gone"), &inside).unwrap();
+    std::fs::rename(
+        sandbox.canon().join("projects/work/gone"),
+        sandbox.canon().join("projects/work/company/gone"),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&inside).unwrap();
+    append_manifest(&sandbox, COMPANY);
+
+    let stdout = doctor(&sandbox);
+
+    for path in [company.join("AGENTS.md"), inside.join("AGENTS.md")] {
+        let shown = path.display().to_string();
+        assert!(
+            !stdout
+                .lines()
+                .any(|l| l.contains(&shown) && l.contains("restore")),
+            "{stdout}"
+        );
+        let skipped = format!(
+            "project root work: {shown} is skipped: it overlaps linked folder `company` ({}), whose content skiman never copies or writes",
+            company.display()
+        );
+        assert_eq!(
+            stdout.lines().filter(|l| *l == skipped).count(),
+            1,
+            "{skipped}\n{stdout}"
+        );
+    }
+}

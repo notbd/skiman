@@ -147,10 +147,14 @@ fn refuse_inside_linked(current: Option<&(Canon, Linked)>, path: &Path) -> Resul
         )));
     }
     if let Some((folder, child)) = linked.led_to(&target) {
+        let place = if target == child {
+            "is where".to_owned()
+        } else {
+            format!("lies inside {}, where", child.display())
+        };
         return Err(Failure::refused(format!(
-            "{} is, or lies inside, {}, where a link in linked folder `{id}` of the current canon leads, so skiman writes nothing there; to make a canon there, first remove that link or run `skiman linked remove {id}`",
+            "{} {place} a link in linked folder `{id}` of the current canon leads, so skiman writes nothing there; to make a canon there, first remove that link or run `skiman linked remove {id}`",
             path.display(),
-            child.display(),
             id = folder.id
         )));
     }

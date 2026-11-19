@@ -588,22 +588,38 @@ fn init_refuses_the_target_of_a_child_link() {
     append_manifest(&sandbox, COMPANY);
     let config = sandbox.config_home().join("skiman");
     let before = (contents(&[&outside]), crate::support::tree(&config));
+    let nested = outside.join("new");
 
-    let output = sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(&outside)
-        .output()
-        .unwrap();
+    for (target, says) in [
+        (&outside, format!("{} is where a link", outside.display())),
+        (
+            &nested,
+            format!(
+                "{} lies inside {}, where a link",
+                nested.display(),
+                outside.display()
+            ),
+        ),
+    ] {
+        let output = sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(target)
+            .output()
+            .unwrap();
 
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("linked folder `company`"), "{stderr}");
-    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
-    assert_eq!(
-        (contents(&[&outside]), crate::support::tree(&config)),
-        before
-    );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(&says) && stderr.contains("in linked folder `company`"),
+            "{says}\n{stderr}"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(
+            (contents(&[&outside]), crate::support::tree(&config)),
+            before
+        );
+    }
 }
 
 /// While a registered folder cannot be read, its child links are unknown,

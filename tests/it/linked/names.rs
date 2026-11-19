@@ -720,3 +720,36 @@ fn a_single_skill_that_cannot_be_probed_holds_no_sub_folder_names() {
         sandbox.canon().join("linked/solo")
     );
 }
+
+/// The same single skill with a sub-folder named like it, `solo/solo`,
+/// that cannot be probed either: the kept link `solo -> <canon>/linked/solo`
+/// still decides the shape, so sync keeps it (exit 3) and distributes no
+/// sub-folder skill, and `new kid` makes a skill in the canon.
+#[test]
+fn a_kept_single_skill_link_decides_the_shape_whatever_its_sub_folders() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let locked = super::unprobed_single(&sandbox);
+    let inner = sandbox.home().join("work/solo/solo");
+    std::fs::create_dir(&inner).unwrap();
+    std::os::unix::fs::symlink(locked.join("SKILL.md"), inner.join("SKILL.md")).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (code, stderr) = sync(&sandbox);
+    let kid = Tool::ALL.map(|tool| sandbox.tool_dir(tool).join("kid").exists());
+    let made = run(&sandbox, &["new", "kid", "-d", "Local skill"]);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(code, 3, "{stderr}");
+    assert!(!stderr.contains("kid"), "{stderr}");
+    assert_eq!(kid, [false; Tool::ALL.len()]);
+    for tool in Tool::ALL {
+        assert_eq!(
+            std::fs::read_link(sandbox.tool_dir(tool).join("solo")).unwrap(),
+            sandbox.canon().join("linked/solo")
+        );
+    }
+    assert_eq!(made.0, 3, "{}", made.1);
+    assert!(sandbox.canon().join("skills/kid/SKILL.md").is_file());
+    assert_eq!(target(&sandbox, "kid"), sandbox.canon().join("skills/kid"));
+}

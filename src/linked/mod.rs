@@ -318,9 +318,10 @@ impl Linked {
 
     /// What keeps a tool-directory link to `target` exactly as it is, with
     /// its name: the folder that cannot be read when `target` lies in its
-    /// `<canon>/linked/<id>`, or the linked skill whose `SKILL.md` cannot
-    /// be probed when it lies in that skill's target (when it is
-    /// `<canon>/linked/<id>` itself, for the folder's top-level `SKILL.md`).
+    /// `<canon>/linked/<id>`, the folder's top-level `SKILL.md` that cannot
+    /// be probed when `target` is `<canon>/linked/<id>` itself (the
+    /// single-skill shape), or the linked skill whose `SKILL.md` cannot be
+    /// probed when it lies in that skill's target.
     pub fn keeper(&self, target: &Path) -> Option<Holder> {
         self.folders.iter().find_map(|folder| {
             let link = self.dir.join(&folder.id);
@@ -333,7 +334,7 @@ impl Linked {
                     .starts_with(&link)
                     .then(|| Holder::Kept(folder.id.clone())),
                 State::Read(contents) if contents.top_unprobed.is_some() && target == link => {
-                    Some(unprobed(&folder.id))
+                    Some(Holder::Single(folder.id.clone()))
                 }
                 State::Read(contents) => contents
                     .unprobed
@@ -407,24 +408,16 @@ impl Linked {
     }
 
     /// Whether `folder` is one skill: read as one, or its top-level
-    /// `SKILL.md` cannot be probed while the tool directories keep its
-    /// `<id>` link (`kept`), so it was one.
+    /// `SKILL.md` cannot be probed while the tool directories keep a link
+    /// `<id> -> <canon>/linked/<id>` (`kept` holds [`Holder::Single`]), so
+    /// it was one, whatever its sub-folders hold.
     pub fn is_single(folder: &Folder, kept: &BTreeMap<String, Holder>) -> bool {
         let State::Read(contents) = &folder.state else {
             return false;
         };
-        if contents.single {
-            return true;
-        }
-        contents.top_unprobed.is_some()
-            // An unprobed sub-folder named like the id is kept under the
-            // same name: then the shape is unknown, and read as usual.
-            && !contents.unprobed.iter().any(|(name, _)| *name == folder.id)
-            && kept.get(&folder.id)
-                == Some(&Holder::Unprobed {
-                    id: folder.id.clone(),
-                    name: folder.id.clone(),
-                })
+        contents.single
+            || (contents.top_unprobed.is_some()
+                && kept.get(&folder.id) == Some(&Holder::Single(folder.id.clone())))
     }
 
     /// What `list` and `overview` show of each folder, in id order (spec
@@ -501,11 +494,20 @@ pub enum Holder {
     /// A link kept for the linked skill `name` of folder `id`, whose
     /// `SKILL.md` cannot be probed now.
     Unprobed { id: String, name: String },
+    /// A link `<id> -> <canon>/linked/<id>` kept for folder `id`, one skill
+    /// whose top-level `SKILL.md` cannot be probed now.
+    Single(String),
 }
 
 /// What holds the name, as sync, `check`, `doctor`, `list` and `overview` say it.
 impl std::fmt::Display for Holder {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let unprobed = |f: &mut std::fmt::Formatter, id: &str, name: &str| {
+            write!(
+                f,
+                "linked skill {name} of `{id}`, whose SKILL.md cannot be read now, keeps the name"
+            )
+        };
         match self {
             Holder::Canon(path) => write!(f, "the skill folder {path} uses the name"),
             Holder::Group(path) => write!(f, "the group folder {path} uses the name"),
@@ -514,10 +516,8 @@ impl std::fmt::Display for Holder {
                 f,
                 "linked folder `{id}`, which cannot be read now, keeps the name"
             ),
-            Holder::Unprobed { id, name } => write!(
-                f,
-                "linked skill {name} of `{id}`, whose SKILL.md cannot be read now, keeps the name"
-            ),
+            Holder::Unprobed { id, name } => unprobed(f, id, name),
+            Holder::Single(id) => unprobed(f, id, id),
         }
     }
 }

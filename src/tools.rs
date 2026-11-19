@@ -33,6 +33,26 @@ pub enum SkillsElsewhere {
     },
 }
 
+/// Where a tool keeps its session-start hooks, and in what shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionHook {
+    /// The JSON file (relative to `HOME`).
+    pub file: &'static str,
+    pub shape: HookShape,
+}
+
+/// How a session-start hook file lists its hooks. A handler is
+/// `{"type": "command", "command": ..., "timeout": ...}` in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookShape {
+    /// `hooks.SessionStart` is a list of groups `{"matcher", "hooks": [handler]}`;
+    /// skiman adds one group with this matcher.
+    Grouped { matcher: &'static str },
+    /// The top level maps hook names to hooks whose `SessionStart` is a flat
+    /// list of handlers; skiman adds the hook with this name.
+    Named { name: &'static str },
+}
+
 /// Any folder that contains this file is managed elsewhere (a plugin), in every tool.
 pub const PLUGIN_MARKER: &str = ".claude-plugin/plugin.json";
 
@@ -67,8 +87,8 @@ pub struct AgentTool {
     pub skills_not_listed: &'static [&'static str],
     /// Skill names this tool reserves (on top of [`crate::names::RESERVED`]).
     pub reserved_names: &'static [&'static str],
-    /// Settings file that holds the tool's session-start hooks; `None` when the tool has none.
-    pub session_hook_file: Option<&'static str>,
+    /// Where the tool's session-start hooks are; `None` when the tool has none.
+    pub session_hook: Option<SessionHook>,
     /// Why skiman writes no session-start hook entry for this tool yet; `None` when it does.
     pub session_hook_unavailable: Option<&'static str>,
     /// Instruction files the tool loads inside a project folder, as patterns
@@ -125,7 +145,13 @@ pub const TOOLS: &[AgentTool] = &[
         ],
         skills_not_listed: &["built-in skills that are not stored on disk"],
         reserved_names: &["synced"],
-        session_hook_file: Some(".claude/settings.json"),
+        // Phase 1 experiment 5: not on `clear` or `compact`.
+        session_hook: Some(SessionHook {
+            file: ".claude/settings.json",
+            shape: HookShape::Grouped {
+                matcher: "startup|resume",
+            },
+        }),
         session_hook_unavailable: None,
         // `docs/project-scope-evidence.md`: Claude Code also loads `AGENTS.md`,
         // and every `.md` under `.claude/rules/` at any depth.
@@ -161,7 +187,12 @@ pub const TOOLS: &[AgentTool] = &[
         // skiman does not read.
         skills_not_listed: &["the skills of its plugins in `~/.codex/plugins`"],
         reserved_names: &[],
-        session_hook_file: Some(".codex/hooks.json"),
+        session_hook: Some(SessionHook {
+            file: ".codex/hooks.json",
+            shape: HookShape::Grouped {
+                matcher: "startup|resume",
+            },
+        }),
         // Phase 1 could not confirm that a trusted entry runs on startup and
         // resume (`docs/phase1-results.md`, experiment 4).
         session_hook_unavailable: Some(
@@ -198,7 +229,13 @@ pub const TOOLS: &[AgentTool] = &[
             "the skills in `~/.gemini/antigravity-cli/skills`",
         ],
         reserved_names: &[],
-        session_hook_file: None,
+        // agy 1.5.12 runs it when a conversation starts, at its first prompt,
+        // after it has read the skills for that prompt; a skill it links is
+        // there from the next prompt (`docs/project-scope-evidence.md`).
+        session_hook: Some(SessionHook {
+            file: ".gemini/config/hooks.json",
+            shape: HookShape::Named { name: "skiman" },
+        }),
         session_hook_unavailable: None,
         project_instruction_files: &["GEMINI.md", "AGENTS.md"],
         project_skill_dirs: &[".agent/skills", ".agents/skills"],

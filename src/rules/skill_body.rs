@@ -9,7 +9,7 @@ use super::config::Records;
 use super::{Violation, frontmatter, readable, rule};
 use crate::layout::Layout;
 use crate::tools::TOOLS;
-use crate::tree::Tree;
+use crate::tree::{Kind, Tree};
 
 /// The warning for `skill_md`, the bytes of a whole `SKILL.md`, while the
 /// tools `enabled` are enabled; `None` when its body is within every
@@ -39,11 +39,11 @@ pub(super) fn warnings(
         return Ok(());
     }
     for placed in Layout::read(tree)?.skills() {
-        let path = format!("{}/SKILL.md", placed.path());
-        let Some(kind) = tree.kind(&path)? else {
+        if tree.kind(&placed.path())? != Some(Kind::Dir) {
             continue;
-        };
-        if !readable(kind) {
+        }
+        let path = format!("{}/SKILL.md", placed.path());
+        if !tree.kind(&path)?.is_some_and(readable) {
             continue;
         }
         if let Some(message) = warning(&tree.read(&path)?, &enabled) {
@@ -59,7 +59,10 @@ fn smallest_limit(enabled: &[String]) -> Option<(u64, String)> {
     let tools = TOOLS
         .iter()
         .filter(|tool| enabled.iter().any(|id| id == tool.id));
-    let limit = tools.clone().filter_map(|t| t.skill_body_size_limit).min()?;
+    let limit = tools
+        .clone()
+        .filter_map(|t| t.skill_body_size_limit)
+        .min()?;
     let ids: Vec<&str> = tools
         .filter(|t| t.skill_body_size_limit == Some(limit))
         .map(|t| t.id)

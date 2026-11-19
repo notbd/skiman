@@ -61,7 +61,7 @@ fn assert_line(stdout: &str, line: &str) {
 #[test]
 fn doctor_reports_a_healthy_setup() {
     let sandbox = Sandbox::new();
-    init(&sandbox, "claude-code");
+    init(&sandbox, "claude-code,antigravity");
     let repo = sandbox.skill_repo();
     let home = sandbox.home();
     let home = home.display();
@@ -79,6 +79,7 @@ git: version [..]
 git hooks: installed in {repo}/.git/hooks
 session-start hook for claude-code: installed in {home}/.claude/settings.json
 session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks
+session-start hook for antigravity: installed in {home}/.gemini/config/hooks.json
 claude-code: installed; tool directory {home}/.claude/skills; instruction file {home}/.claude/CLAUDE.md
 codex: installed; tool directory {home}/.agents/skills; instruction file {home}/.codex/AGENTS.md
 antigravity: installed; tool directory {home}/.gemini/config/skills; instruction file {home}/.gemini/GEMINI.md
@@ -418,5 +419,35 @@ fn doctor_names_each_instruction_file_antigravity_loads_on_top_of_the_shared_bod
     assert!(
         !out.contains("config/GEMINI.md"),
         "a file that does not exist is not named:\n{out}"
+    );
+}
+
+#[test]
+fn doctor_reports_antigravitys_session_start_hook_missing_and_different() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let r = sandbox.skill_repo();
+    let hooks = sandbox.home().join(".gemini/config/hooks.json");
+
+    assert_line(
+        &doctor(&sandbox),
+        &format!(
+            "session-start hook for antigravity: not installed in {}; add it with `skiman init {} --session-hooks antigravity`",
+            hooks.display(),
+            r.display()
+        ),
+    );
+
+    write(
+        &hooks,
+        r#"{"skiman": {"SessionStart": [{"type": "command", "command": "/old/skiman sync --hook"}]}}"#,
+    );
+    assert_line(
+        &doctor(&sandbox),
+        &format!(
+            "session-start hook for antigravity: {} holds a skiman hook that differs from what `skiman init` writes now; rewrite it with `skiman init {} --session-hooks antigravity`",
+            hooks.display(),
+            r.display()
+        ),
     );
 }

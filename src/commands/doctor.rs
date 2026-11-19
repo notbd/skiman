@@ -116,7 +116,7 @@ fn report_git_hooks(repo: &SkillRepo, binary: &Path) {
 }
 
 fn report_session_hooks(home: &Path, installed: &[&AgentTool], root: &str, binary: &Path) {
-    for tool in installed.iter().filter(|t| t.session_hook_file.is_some()) {
+    for tool in installed.iter().filter(|t| t.session_hook.is_some()) {
         let id = tool.id;
         let (path, status) = session_hooks::status(home, tool, binary);
         let path = path.display();

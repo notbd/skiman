@@ -7,7 +7,7 @@
 
 use std::ffi::OsString;
 use std::io;
-use std::os::unix::fs::{DirEntryExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use super::path::{self, Checked, Listings, Stop, resolve_in};
@@ -45,8 +45,8 @@ pub type ReadError = String;
 
 /// Reads the folder at `dir`, the registered path's realpath.
 /// `breaks` says why a path of a child link, or a link met on the way to
-/// it, breaks the path rules; child links resolve with `listings`, which
-/// gets this folder's listing too.
+/// it, breaks the path rules; `listings` lists this folder (or gives the
+/// listing it already holds) and resolves child links.
 pub fn read(
     dir: &Path,
     breaks: &dyn Fn(&Path, Checked) -> Option<String>,
@@ -63,13 +63,8 @@ pub fn read(
     }
     // Listed for a single skill too: a folder that cannot be listed is a
     // read error of the whole id whatever its shape.
-    let mut listed = Vec::new();
-    for entry in std::fs::read_dir(dir).map_err(|e| cannot(dir, e))? {
-        let entry = entry.map_err(|e| cannot(dir, e))?;
-        listed.push((entry.file_name(), entry.ino()));
-    }
+    let listed = listings.list(dir).map_err(|e| cannot(dir, e))?.to_vec();
     if contents.single {
-        listings.insert(dir.to_owned(), listed);
         return Ok(contents);
     }
     // The folder's own `SKILL.md`, probed above, is no entry: matched by
@@ -81,7 +76,6 @@ pub fn read(
         .map(|(name, _)| name.clone())
         .collect();
     names.sort();
-    listings.insert(dir.to_owned(), listed);
     for name in names {
         if name.as_encoded_bytes().starts_with(b".") {
             continue;

@@ -10,6 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::canon::Canon;
 use crate::fsutil::realpath_as_far_as_exists;
+use crate::test_hook;
 use crate::tools::TOOLS;
 
 /// At most this many links are followed on the way to one path; more is a loop.
@@ -115,29 +116,36 @@ pub fn resolve_in(path: &Path, listings: &mut Listings) -> Resolution {
 pub struct Listings(HashMap<PathBuf, Vec<(OsString, u64)>>);
 
 impl Listings {
-    /// Records the entries of `dir` (a realpath) listed by the caller.
-    pub fn insert(&mut self, dir: PathBuf, entries: Vec<(OsString, u64)>) {
-        self.0.insert(dir, entries);
+    /// The entries of `dir` (a realpath), listed on the first call. A
+    /// listing that fails is not kept: the next call lists again, and
+    /// fails as it would have.
+    pub fn list(&mut self, dir: &Path) -> io::Result<&[(OsString, u64)]> {
+        if !self.0.contains_key(dir) {
+            let entries = list(dir)?;
+            self.0.insert(dir.to_owned(), entries);
+        }
+        Ok(&self.0[dir])
     }
 
     /// The link `name` (metadata `meta`) in the folder `dir`, a realpath,
     /// as the listing spells it: the entry of that name, or else the entry
     /// with its inode. `canonicalize` cannot tell, since it follows the link.
     fn spelled(&mut self, dir: &Path, name: &OsStr, meta: &std::fs::Metadata) -> Option<PathBuf> {
-        let entries = self.0.entry(dir.to_owned()).or_insert_with(|| {
-            std::fs::read_dir(dir)
-                .into_iter()
-                .flatten()
-                .flatten()
-                .map(|e| (e.file_name(), e.ino()))
-                .collect()
-        });
+        let entries = self.list(dir).ok()?;
         let found = entries
             .iter()
             .find(|(n, _)| n == name)
             .or_else(|| entries.iter().find(|(_, ino)| *ino == meta.ino()))?;
         Some(dir.join(&found.0))
     }
+}
+
+/// The entries (name and inode) of the folder `dir`.
+fn list(dir: &Path) -> io::Result<Vec<(OsString, u64)>> {
+    test_hook::at("linked", &format!("list:{}", dir.display()));
+    std::fs::read_dir(dir)?
+        .map(|entry| entry.map(|e| (e.file_name(), e.ino())))
+        .collect()
 }
 
 /// The components of `path` that name something: normal names and `..`.
@@ -360,11 +368,33 @@ mod tests {
         let mut listings = Listings::default();
         // A kept listing that spells the link's inode `kept`: listing the
         // folder again would find `link` by its name.
-        listings.insert(root.clone(), vec![("kept".into(), ino)]);
+        listings.0.insert(root.clone(), vec![("kept".into(), ino)]);
 
         let resolved = resolve_in(&root.join("link"), &mut listings);
 
         assert_eq!(resolved.links, [root.join("kept")]);
+    }
+
+    /// A folder that cannot be listed while a link in it is resolved is
+    /// not kept as empty: listing it later fails as well.
+    #[test]
+    fn a_listing_that_fails_is_not_kept() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_temp, root) = root();
+        let dir = root.join("dir");
+        std::fs::create_dir_all(root.join("real")).unwrap();
+        std::fs::create_dir(&dir).unwrap();
+        symlink(root.join("real"), dir.join("link")).unwrap();
+        let mode = |m| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(m));
+        mode(0o300).unwrap();
+        let mut listings = Listings::default();
+
+        let resolved = resolve_in(&dir.join("link"), &mut listings);
+        let listed = listings.list(&dir).map(<[_]>::len);
+        mode(0o755).unwrap();
+
+        assert_eq!(resolved.path, root.join("real"));
+        assert!(listed.is_err(), "{listed:?}");
     }
 
     /// A file followed by `..` does not resolve, as the system refuses it.

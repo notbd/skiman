@@ -884,3 +884,52 @@ fn a_home_reached_through_a_link_can_hold_a_linked_folder() {
         }
     }
 }
+
+/// A child link of `aaa` that goes through the link `hop` in another
+/// registered folder `zzz`: resolving it lists `zzz`, and reading `zzz`
+/// afterwards reuses that listing, so one sync lists `zzz` once. The child
+/// link is not distributed; `zzz`'s own skill is.
+#[test]
+fn a_folder_listed_to_resolve_another_folders_child_link_is_listed_once() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let aaa = folder(&sandbox, "work/aaa", &["alpha"]);
+    let zzz = folder(&sandbox, "work/zzz", &["beta"]);
+    let elsewhere = folder(&sandbox, "elsewhere", &["gamma"]);
+    symlink(&elsewhere, zzz.join("hop")).unwrap();
+    symlink(zzz.join("hop/gamma"), aaa.join("child")).unwrap();
+    append_manifest(
+        &sandbox,
+        "\n[linked.aaa]\npath = \"~/work/aaa\"\n\n[linked.zzz]\npath = \"~/work/zzz\"\n",
+    );
+    let count = sandbox.root().join("listed");
+    let hook = format!("linked:list:{}", zzz.canonicalize().unwrap().display());
+
+    let output = sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", hook)
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("echo >> '{}'", count.display()),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "{} is a link that breaks the path rules",
+            aaa.join("child").display()
+        )),
+        "{stderr}"
+    );
+    assert_eq!(read(&count).lines().count(), 1, "{stderr}");
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    assert_eq!(
+        std::fs::read_link(claude.join("beta")).unwrap(),
+        sandbox.canon().join("linked/zzz/beta")
+    );
+    assert!(!exists(claude.join("child")));
+    assert!(!exists(claude.join("gamma")));
+}

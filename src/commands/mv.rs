@@ -93,7 +93,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
         // `mv pdf pdf` names a taken name; a move to the group it is in
         // finishes a move that is done but not yet synced.
         if to_arg == To::Same {
-            names::check_not_taken(&repo, new, |_| Ok(false))?;
+            names::check_not_taken(paths.home(), &repo, new, |_| Ok(false))?;
         }
         out!("{to} is already in place");
         return Ok(sync::run(&paths, &repo, &lock, Output::Normal));
@@ -102,7 +102,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
         if half_renamed(&repo, &from, old, new)? {
             out!("{from}/SKILL.md already names `{new}`: finishing the rename");
         } else {
-            names::check_not_taken(&repo, new, |_| Ok(false))?;
+            names::check_not_taken(paths.home(), &repo, new, |_| Ok(false))?;
         }
     }
     let plan = Plan::build(&repo, old, new, from, to)?;

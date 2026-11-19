@@ -119,7 +119,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
             names::check_group(group, &install.name, &layout)?;
         }
     }
-    check_install_names(&repo, &installs, &upstream)?;
+    check_install_names(paths.home(), &repo, &installs, &upstream)?;
 
     for install in &installs {
         print_file_list(install, &upstream);
@@ -138,7 +138,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     }
 
     let lock = RepoLock::wait(&paths, &repo)?;
-    check_install_names(&repo, &installs, &upstream)?;
+    check_install_names(paths.home(), &repo, &installs, &upstream)?;
     let change = change(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &change)?;
     change.apply(&repo, &lock, &mut Backups::new(&paths))?;
@@ -391,6 +391,7 @@ fn inspect(
 /// What this add writes itself does not take a name: an add stopped
 /// part-way finishes when it is run again.
 fn check_install_names(
+    home: &Path,
     repo: &SkillRepo,
     installs: &[Install],
     upstream: &Upstream,
@@ -405,7 +406,9 @@ fn check_install_names(
             )));
         }
         let check = names::check_new_name(name).and_then(|()| {
-            names::check_not_taken(repo, name, |taken| ours(repo, install, upstream, taken))
+            names::check_not_taken(home, repo, name, |taken| {
+                ours(repo, install, upstream, taken)
+            })
         });
         check.map_err(|failure| {
             let hint = if installs.len() == 1 {

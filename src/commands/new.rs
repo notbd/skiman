@@ -61,7 +61,7 @@ fn new(name: &str, description: Option<String>, group: Option<&str>) -> Result<E
     };
     // A `new` stopped after the folder was in place finishes when run again.
     let ours = |taken| Ok(taken == Taken::Folder && change.in_place(repo.root())?);
-    names::check_not_taken(&repo, name, ours)?;
+    names::check_not_taken(paths.home(), &repo, name, ours)?;
     // The whole skill folder is new content.
     let scope = Scope {
         skills: BTreeSet::from([name.to_owned()]),

@@ -181,22 +181,20 @@ fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String) {
     )
 }
 
-/// A canon with the linked folder `company` (skills `alpha`, `pdf`) registered and synced.
-fn registered(sandbox: &Sandbox) -> PathBuf {
-    init(sandbox);
+/// Registers the linked folder `company` (skills `alpha`, `pdf`) in an
+/// initialised canon and syncs; returns the folder and sync's exit code.
+fn register(sandbox: &Sandbox) -> (PathBuf, i32) {
     let company = folder(sandbox, "work/company", &["alpha", "pdf"]);
     append_manifest(sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
-    assert_eq!(sync(sandbox).0, 0);
-    company
+    (company, sync(sandbox).0)
 }
 
-/// Installs the third-party skill `pdf` from `acme/pdf`.
-fn add_pdf(sandbox: &Sandbox) {
-    let up = sandbox.upstream("acme/pdf");
-    up.write("SKILL.md", skill_md("pdf"));
-    up.commit("v1");
-    let (code, stderr) = run(sandbox, &["add", "acme/pdf", "--yes"]);
-    assert_eq!(code, 3, "the closing sync reports the collision: {stderr}");
+/// A canon with the linked folder `company` registered and synced.
+fn registered(sandbox: &Sandbox) -> PathBuf {
+    init(sandbox);
+    let (company, code) = register(sandbox);
+    assert_eq!(code, 0);
+    company
 }
 
 /// The commands that act on an existing skill refuse a name that is only
@@ -235,8 +233,12 @@ fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
 #[test]
 fn commands_that_act_on_a_skill_work_on_a_canon_skill_that_collides_with_a_linked_one() {
     let sandbox = Sandbox::new();
-    registered(&sandbox);
-    add_pdf(&sandbox);
+    init(&sandbox);
+    let up = sandbox.upstream("acme/pdf");
+    up.write("SKILL.md", skill_md("pdf"));
+    up.commit("v1");
+    assert_eq!(run(&sandbox, &["add", "acme/pdf", "--yes"]).0, 0);
+    assert_eq!(register(&sandbox).1, 3, "the linked `pdf` loses the name");
     let linked = sandbox.skill_repo().join("linked");
 
     let (code, stderr) = run(&sandbox, &["diff", "pdf"]);
@@ -263,4 +265,66 @@ fn commands_that_act_on_a_skill_work_on_a_canon_skill_that_collides_with_a_linke
     assert_eq!(code, 0, "{stderr}");
     assert!(!sandbox.skill_repo().join("skills/office/pdf").exists());
     assert_eq!(target(&sandbox, "pdf"), linked.join("company/pdf"));
+}
+
+/// The commands that create a name refuse a linked skill's name, whether
+/// it is distributed or not, and nothing changes; a free name works.
+#[test]
+fn commands_that_create_a_name_refuse_a_linked_skills_name() {
+    let sandbox = Sandbox::new();
+    let company = registered(&sandbox);
+    write(
+        sandbox.skill_repo().join("skills/beta/SKILL.md"),
+        skill_md("beta"),
+    );
+    assert_eq!(sync(&sandbox).0, 0);
+    let up = sandbox.upstream("acme/alpha");
+    up.write("SKILL.md", skill_md("alpha"));
+    up.commit("v1");
+    let taken = format!(
+        "the name `alpha` is taken: it is a linked skill in {}, in linked folder `company`",
+        company.join("alpha").display()
+    );
+    let before = world(&sandbox, &company);
+    for args in [
+        &["new", "alpha", "-d", "Does alpha things"][..],
+        &["add", "acme/alpha", "--yes"],
+        &["mv", "beta", "alpha"],
+    ] {
+        let (code, stderr) = run(&sandbox, args);
+        assert_eq!(code, 1, "{args:?}: {stderr}");
+        assert!(stderr.contains(&taken), "{args:?}: {stderr}");
+        assert_eq!(world(&sandbox, &company), before, "{args:?}");
+    }
+    // A foreign folder under the linked skill's name in one tool directory.
+    let antigravity = sandbox.tool_dir(Tool::Antigravity);
+    std::fs::remove_file(antigravity.join("alpha")).unwrap();
+    write(antigravity.join("alpha/SKILL.md"), skill_md("alpha"));
+    let before = world(&sandbox, &company);
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "alpha", "--from", "antigravity", "--yes"],
+    );
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains(&taken), "{stderr}");
+    assert_eq!(world(&sandbox, &company), before);
+
+    std::fs::rename(antigravity.join("alpha"), antigravity.join("delta")).unwrap();
+    for args in [
+        &["adopt", "delta", "--from", "antigravity", "--yes"][..],
+        &["new", "gamma", "-d", "Does gamma things"],
+        &["add", "acme/alpha", "--yes", "--name", "alpha-two"],
+        &["mv", "beta", "beta-two"],
+    ] {
+        let (code, stderr) = run(&sandbox, args);
+        assert_eq!(code, 0, "{args:?}: {stderr}");
+    }
+    let skills = sandbox.skill_repo().join("skills");
+    for name in ["delta", "gamma", "alpha-two", "beta-two"] {
+        assert!(skills.join(name).join("SKILL.md").is_file(), "{name}");
+    }
+    assert_eq!(
+        target(&sandbox, "alpha"),
+        sandbox.skill_repo().join("linked/company/alpha")
+    );
 }

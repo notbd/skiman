@@ -1,9 +1,13 @@
 //! Skill names: the name rule, reserved names and taken names (spec Rules,
-//! Agent tools, Source fetching). Shared by `new`, `add`, `mv`, `adopt`,
-//! `import` and sync's distributability test.
+//! Agent tools, Source fetching; a linked skill's name is taken too).
+//! Shared by `new`, `add`, `mv`, `adopt`, `import` and sync's
+//! distributability test.
+
+use std::path::Path;
 
 use crate::failure::Failure;
 use crate::layout::Layout;
+use crate::linked::Linked;
 use crate::lockfile::Lockfile;
 use crate::manifest::Manifest;
 use crate::repo::SkillRepo;
@@ -84,8 +88,10 @@ pub enum Taken {
 /// Refuses (exit 1) a **taken** name: a skill folder entry in any form in
 /// any group, a group folder, a `skiman.toml` table, a lock entry or an
 /// upstream snapshot, except one that `ours` says is what this command
-/// writes, left by a run of it that stopped part-way (which then finishes).
+/// writes, left by a run of it that stopped part-way (which then finishes);
+/// and a linked skill's name, always (spec "Names and collisions").
 pub fn check_not_taken(
+    home: &Path,
     repo: &SkillRepo,
     name: &str,
     ours: impl Fn(Taken) -> Result<bool, Failure>,
@@ -105,7 +111,13 @@ pub fn check_not_taken(
     } else if exists(repo.upstream_dir(name)) && !ours(Taken::Snapshot)? {
         Some(format!("upstream/{name} already exists"))
     } else {
-        None
+        Linked::load(home, repo)?.skill(name).map(|(folder, dir)| {
+            format!(
+                "it is a linked skill in {}, in linked folder `{}`",
+                dir.display(),
+                folder.id
+            )
+        })
     };
     match reason {
         Some(reason) => Err(Failure::refused(format!(

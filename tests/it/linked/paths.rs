@@ -130,17 +130,23 @@ fn overlapping_and_malformed_registrations_break_the_rules() {
 }
 
 /// A table that is not well formed (an unknown key, an invalid id) is
-/// skipped, but its path keeps the protection: sync writes nothing through
-/// a tool directory that resolves into the folder and gives an older
-/// script's link into it no adopt hint, and adopt refuses that link.
+/// skipped, in the words `check` uses, but its path keeps the protection:
+/// sync writes nothing through a tool directory that resolves into the
+/// folder and gives an older script's link into it no adopt hint, and
+/// adopt refuses that link.
 #[test]
 fn a_malformed_registration_still_protects_its_folder() {
-    for (id, table) in [
+    for (id, table, why) in [
         (
             "company",
             "[linked.company]\npath = \"~/work/company\"\nnote = \"x\"\n",
+            "unknown key `note` in [linked.company] (allowed: path)",
         ),
-        ("Company", "[linked.Company]\npath = \"~/work/company\"\n"),
+        (
+            "Company",
+            "[linked.Company]\npath = \"~/work/company\"\n",
+            "`Company` is not a valid linked folder id: use lowercase letters, digits and single hyphens",
+        ),
     ] {
         let sandbox = Sandbox::new();
         init(&sandbox);
@@ -157,7 +163,9 @@ fn a_malformed_registration_still_protects_its_folder() {
         let (code, stderr) = sync(&sandbox);
 
         assert_eq!(code, 3, "{stderr}");
-        let skipped = format!("linked folder `{id}` is skipped: ");
+        let skipped = format!(
+            "warning: linked folder `{id}` is skipped: {why}; fix [linked.{id}] in skiman.toml"
+        );
         assert!(stderr.contains(&skipped), "{skipped}\n{stderr}");
         let line = format!(
             "warning: {} resolves to {}, inside linked folder `{id}`",

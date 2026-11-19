@@ -341,6 +341,44 @@ fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
     );
 }
 
+/// While the linked folder cannot be read, a name its kept links hold is
+/// still known as its skill: the commands that act on a skill refuse it
+/// naming the folder, `remove` names `skiman linked remove`, and nothing
+/// changes.
+#[test]
+fn commands_that_act_on_a_skill_name_the_unreadable_folder_whose_link_keeps_the_name() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let company = registered(&sandbox);
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+    chmod(0o000).unwrap();
+    let before = world(&sandbox, &company);
+    let named = "alpha is a linked skill in linked folder `company`, which cannot be read now; it is edited there";
+
+    let mut outcomes = Vec::new();
+    for args in [
+        &["update", "alpha"][..],
+        &["diff", "alpha"],
+        &["remove", "alpha", "--yes"],
+        &["mv", "alpha", "other"],
+    ] {
+        outcomes.push((args, run(&sandbox, args), world(&sandbox, &company)));
+    }
+    chmod(0o755).unwrap();
+
+    for (args, (code, stderr), after) in outcomes {
+        assert_eq!(code, 1, "{args:?}: {stderr}");
+        assert!(stderr.contains(named), "{args:?}: {stderr}");
+        assert_eq!(after, before, "{args:?}");
+        if args[0] == "remove" {
+            assert!(
+                stderr.contains("run `skiman linked remove company`"),
+                "{stderr}"
+            );
+        }
+    }
+}
+
 /// A canon skill that shares its name with a linked skill holds the name,
 /// so the commands act on it: the collision can be repaired with them.
 #[test]

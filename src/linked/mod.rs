@@ -181,15 +181,24 @@ impl Linked {
 
     /// Why a command that acts on a skill in the canon refuses `name`, which
     /// is a linked skill (call it when nothing in the canon has the name),
-    /// and the linked folder's id.
-    pub fn edited_elsewhere(
-        &self,
+    /// and the linked folder's id. While the folder cannot be read, the
+    /// link `kept` for it still tells whose skill it is.
+    pub fn edited_elsewhere<'a>(
+        &'a self,
         name: &str,
-        kept: &BTreeMap<String, Holder>,
-    ) -> Option<(String, &str)> {
-        let (it, id) = self.described(name, kept)?;
+        kept: &'a BTreeMap<String, Holder>,
+    ) -> Option<(String, &'a str)> {
+        let edited = "it is edited there, and skiman never changes it";
+        if let Some((it, id)) = self.described(name, kept) {
+            return Some((format!("{name} is {it}; {edited}"), id));
+        }
+        let Holder::Kept(id) = kept.get(name)? else {
+            return None;
+        };
         Some((
-            format!("{name} is {it}; it is edited there, and skiman never changes it"),
+            format!(
+                "{name} is a linked skill in linked folder `{id}`, which cannot be read now; {edited}"
+            ),
             id,
         ))
     }

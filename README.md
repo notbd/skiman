@@ -100,7 +100,7 @@ canon's and never writes into it.
 - A name used by a skill in `skills/` and by a linked skill goes to the one
   in `skills/`; a group folder's name is taken the same way. Between two
   linked folders, the id that sorts first wins.
-  sync and `skiman check` report each such collision.
+  sync, `skiman check` and `skiman doctor` report each such collision.
 - While a linked folder, or a linked skill's `SKILL.md`, cannot be read,
   its links stay as they are and keep their names, even against a new
   skill in `skills/`. sync, `skiman check` and `skiman doctor` report the

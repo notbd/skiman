@@ -791,30 +791,22 @@ fn import_keeps_the_repos_project_exemptions_when_the_folder_has_an_empty_inline
     );
 }
 
-/// The takeover judges entries by the `skiman.toml` the import writes, not
-/// the one it replaces.
 #[test]
-fn a_link_into_skill_dirs_that_only_the_import_folder_declares_is_left_in_place() {
+fn an_import_folder_with_a_skill_dirs_key_is_refused_as_retired() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let target = sandbox.home().join("proj/skills/foo");
-    write(target.join("SKILL.md"), skill_md("foo"));
-    let link = sandbox.tool_dir(Tool::ClaudeCode).join("foo");
-    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
-    std::os::unix::fs::symlink(&target, &link).unwrap();
     let folder = import_folder(
         &sandbox,
         &format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\nskill_dirs = [\"skills\"]\n"),
     );
-
-    sandbox
-        .skiman()
-        .arg("import")
-        .arg(&folder)
-        .arg("--yes")
-        .assert()
-        .code(0);
-    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    assert_refused(
+        &sandbox,
+        &folder,
+        1,
+        &[
+            "skiman.toml:6: toml-value: `skill_dirs` in [projects.proj] is retired; remove it and register each folder of skills with `skiman linked add <path>`",
+        ],
+    );
 }
 
 #[test]

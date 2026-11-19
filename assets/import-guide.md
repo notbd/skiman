@@ -32,8 +32,6 @@ during the import.
 - Other managers own the following; leave it out of the import folder (skiman
   skips it during the import):
 {{MANAGED_ELSEWHERE}}
-  - anything whose realpath is under a `skill_dirs` folder of a project root
-    in `skiman.toml`
 - Follow symlinks to find where content really lives. Several entries can
   point to the same folder.
 - No tool directory may be a link into the skill repo (such as

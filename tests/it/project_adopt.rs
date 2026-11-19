@@ -24,7 +24,7 @@ fn root(sandbox: &Sandbox) -> PathBuf {
 }
 
 /// `init`, then registers `~/work` with `project add`; `extra` lines
-/// (`exclude = …`, `skill_dirs = …`) are appended to its table.
+/// (`exclude = …`) are appended to its table.
 fn setup(extra: &str) -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -118,7 +118,7 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[test]
 fn discovery_finds_every_instruction_file_pattern_and_every_skill_dir() {
-    let sandbox = setup("skill_dirs = [\"core/skills\"]");
+    let sandbox = setup("");
     let root = root(&sandbox);
     for rel in [
         "AGENTS.md",
@@ -142,7 +142,6 @@ fn discovery_finds_every_instruction_file_pattern_and_every_skill_dir() {
         "c/.claude/skills/one",
         "c/.agents/skills/two",
         "c/.agent/skills/three",
-        "core/skills/four",
         // No tool loads skills from these.
         "c/.gemini/skills/five",
         "other/skills/six",
@@ -167,7 +166,6 @@ fn discovery_finds_every_instruction_file_pattern_and_every_skill_dir() {
             "c/.agent/skills/three",
             "c/.agents/skills/two",
             "c/.claude/skills/one",
-            "core/skills/four",
         ])
     );
 }
@@ -828,23 +826,6 @@ fn an_exact_path_wins_over_a_folder_named_before_it() {
         .assert()
         .code(0);
     assert_eq!(read(mirror(&sandbox, "p/AGENTS.md")), "project\n");
-}
-
-#[test]
-fn a_root_with_an_unusable_skill_dirs_entry_is_skipped() {
-    let sandbox = setup("skill_dirs = [\"/\"]");
-    write(root(&sandbox).join("AGENTS.md"), "a\n");
-    let assert = sandbox
-        .skiman()
-        .args(["project", "adopt", "--yes"])
-        .assert()
-        .code(0);
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
-    assert!(
-        stderr.contains("`skill_dirs` entry \"/\" must be relative to the root"),
-        "{stderr}"
-    );
-    assert!(!exists(mirror(&sandbox, "AGENTS.md")));
 }
 
 #[test]

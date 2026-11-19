@@ -20,7 +20,6 @@ pub struct Root {
     /// Realpath of the folder.
     pub dir: PathBuf,
     pub exclude: Vec<String>,
-    pub skill_dirs: Vec<String>,
 }
 
 /// A root that failed validation, and why.
@@ -116,14 +115,6 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
         .collect()
 }
 
-/// The usable roots of [`resolve`].
-pub fn usable(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Root> {
-    resolve(home, repo, manifest)
-        .into_iter()
-        .filter_map(Result::ok)
-        .collect()
-}
-
 fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root, Problem> {
     let problem = |message: String| Problem {
         id: entry.id.clone(),
@@ -155,11 +146,6 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         }
     };
     validate_dir(home, repo, &dir).map_err(problem)?;
-    for dir in &entry.skill_dirs {
-        if let Some(why) = invalid_skill_dir(dir, &entry.skill_dirs) {
-            return Err(problem(format!("`skill_dirs` entry \"{dir}\" {why}")));
-        }
-    }
     for exclude in &entry.exclude {
         if let Some(why) = invalid_exclude(exclude) {
             return Err(problem(format!("`exclude` entry \"{exclude}\" {why}")));
@@ -170,30 +156,7 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         written: written.to_owned(),
         dir,
         exclude: entry.exclude.clone(),
-        skill_dirs: entry.skill_dirs.clone(),
     })
-}
-
-/// Why the `skill_dirs` entry `dir` cannot be used, given every entry of
-/// its root; `None` when it can. Shared by `skiman check` and every command.
-pub fn invalid_skill_dir(dir: &str, all: &[String]) -> Option<&'static str> {
-    if dir.starts_with('/') || dir.starts_with('~') {
-        Some("must be relative to the root")
-    } else if dir
-        .split('/')
-        .any(|p| p.is_empty() || p == "." || p == "..")
-    {
-        Some("must be a plain relative path without empty, `.` or `..` parts")
-    } else if crate::project::pattern::contains_skill_dir_pattern(dir) {
-        Some("holds a tool's own project skill folder, which is found without it")
-    } else if all
-        .iter()
-        .any(|other| other != dir && dir.starts_with(&format!("{other}/")))
-    {
-        Some("lies inside another `skill_dirs` entry")
-    } else {
-        None
-    }
 }
 
 /// Why the `exclude` entry `entry` can match nothing; `None` when it can.
@@ -232,16 +195,6 @@ pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), Str
         }
     }
     Ok(())
-}
-
-/// Realpaths of every usable root's `skill_dirs` folders: links into them
-/// from a tool directory are managed elsewhere, not foreign.
-pub fn configured_skill_dirs(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<PathBuf> {
-    usable(home, repo, manifest)
-        .iter()
-        .flat_map(|root| root.skill_dirs.iter().map(|d| root.dir.join(d)))
-        .filter_map(|d| d.canonicalize().ok())
-        .collect()
 }
 
 /// The id `skiman project add` proposes for a folder: its name made into a

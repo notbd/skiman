@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::manifest::Manifest;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -46,7 +45,7 @@ const FOREIGN_FOLDER: &str = "unknown: a folder skiman did not make";
 /// when no [`SkillsElsewhere`] place names it.
 const ANOTHER_MANAGER: &str = "another manager";
 
-pub fn find(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) -> Found {
+pub fn find(paths: &Paths, repo: &SkillRepo) -> Found {
     let home = paths.home();
     let mut found = Collected::default();
     let present = || TOOLS.iter().filter(|tool| tool.is_present(home));
@@ -75,7 +74,7 @@ pub fn find(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) -> Found {
             ));
         }
     }
-    let ownership = Ownership::new(paths, repo, manifest, None);
+    let ownership = Ownership::new(paths, repo, None);
     for tool in present() {
         let Ok(real_dir) = tool.tool_dir(home).canonicalize() else {
             continue;

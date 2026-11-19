@@ -250,7 +250,7 @@ pub fn reconcile(
             return report;
         }
     };
-    let ownership = Ownership::new(paths, repo, manifest, previous_repo);
+    let ownership = Ownership::new(paths, repo, previous_repo);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
     for tool in installed_tools(home, manifest) {

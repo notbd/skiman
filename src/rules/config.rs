@@ -15,6 +15,9 @@ pub const LOCKFILE: &str = "skiman.lock";
 
 const REF_KINDS: &[&str] = &["branch", "tag", "commit"];
 
+/// A `[projects.<id>]` key that is no longer read (ADR 0013).
+const RETIRED_SKILL_DIRS: &str = "skill_dirs";
+
 /// The one-line text keys of `[skills.<name>]` that describe a skill to a
 /// person (`skiman overview`); `skiman check` reminds of missing ones. A
 /// skill's group is the folder it sits in, not a key (ADR 0008).
@@ -139,8 +142,19 @@ struct Section<'a> {
 impl Section<'_> {
     /// Reports every key not in `allowed`.
     fn unknown_keys(&self, allowed: &[&str], out: &mut BTreeSet<Violation>) {
+        self.unknown_keys_besides(allowed, &[], out);
+    }
+
+    /// [`Self::unknown_keys`], leaving out the `retired` keys, which the
+    /// caller reports with their own message.
+    fn unknown_keys_besides(
+        &self,
+        allowed: &[&str],
+        retired: &[&str],
+        out: &mut BTreeSet<Violation>,
+    ) {
         for (key, _) in self.table.iter() {
-            if !allowed.contains(&key) {
+            if !allowed.contains(&key) && !retired.contains(&key) {
                 let line = self.file.key_line(self.table, key, self.line);
                 out.insert(self.file.violation(
                     line,
@@ -413,9 +427,7 @@ impl Records {
 
     /// The `[projects.<id>]` tables (project-scope.md "Configuration"): the id
     /// follows the skill name rule; `path` is absolute or starts with `~/`;
-    /// `exclude` and `skill_dirs` are arrays of strings, and each `skill_dirs`
-    /// entry is a root-relative folder that holds no tool skill-dir pattern and
-    /// lies inside no other entry.
+    /// `exclude` is an array of strings; `skill_dirs` is retired (ADR 0013).
     fn check_projects(
         &self,
         projects: &dyn TableLike,
@@ -441,7 +453,16 @@ impl Records {
                 ));
             }
             let section = m.section(table, format!("[projects.{id}]"), line);
-            section.unknown_keys(&["path", "exclude", "skill_dirs"], out);
+            section.unknown_keys_besides(&["path", "exclude"], &[RETIRED_SKILL_DIRS], out);
+            if table.contains_key(RETIRED_SKILL_DIRS) {
+                out.insert(m.violation(
+                    m.key_line(table, RETIRED_SKILL_DIRS, line),
+                    rule::TOML_VALUE,
+                    format!(
+                        "`{RETIRED_SKILL_DIRS}` in [projects.{id}] is retired; remove it and register each folder of skills with `skiman linked add <path>`"
+                    ),
+                ));
+            }
             let path: fn(&Item) -> bool = |i| {
                 i.as_str()
                     .is_some_and(|p| p.starts_with("~/") || p.starts_with('/'))
@@ -454,7 +475,6 @@ impl Records {
                 out,
             );
             section.value("exclude", false, "an array of strings", is_strings, out);
-            section.value("skill_dirs", false, "an array of strings", is_strings, out);
             let strings_of = |key: &str| -> Vec<String> {
                 table
                     .get(key)
@@ -473,17 +493,6 @@ impl Records {
                         exclude_line,
                         rule::TOML_VALUE,
                         format!("`exclude` entry \"{entry}\" in [projects.{id}] {why}"),
-                    ));
-                }
-            }
-            let dirs = strings_of("skill_dirs");
-            let dirs_line = m.key_line(table, "skill_dirs", line);
-            for dir in &dirs {
-                if let Some(why) = crate::project::root::invalid_skill_dir(dir, &dirs) {
-                    out.insert(m.violation(
-                        dirs_line,
-                        rule::TOML_VALUE,
-                        format!("`skill_dirs` entry \"{dir}\" in [projects.{id}] {why}"),
                     ));
                 }
             }

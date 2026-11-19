@@ -18,6 +18,7 @@ use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::rules;
 use crate::staged::{self, StagedTree};
+use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree};
 
 pub fn run(staged: bool) -> Exit {
@@ -94,7 +95,13 @@ fn linked_warnings(paths: &Paths, repo: &Canon) -> Result<Vec<String>, Failure> 
         return Ok(Vec::new());
     };
     let linked = Linked::read(paths.home(), repo, &manifest);
-    Ok(linked::check::warnings(&linked, &manifest, &repo.layout()?))
+    let kept = sync::kept_names(paths, repo, &manifest, &linked);
+    Ok(linked::check::warnings(
+        &linked,
+        &manifest,
+        &repo.layout()?,
+        &kept,
+    ))
 }
 
 /// While `[linked]` tables exist in a canon that is a git repo: that git

@@ -24,6 +24,7 @@ use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::rules;
 use crate::skiman_manual;
+use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree};
 
 const CANON_HEADER: [&str; 7] = [
@@ -123,7 +124,8 @@ fn overview() -> Result<Exit, Failure> {
         table(&CANON_HEADER, &ungrouped);
     }
     let linked = Linked::read(paths.home(), &repo, &manifest);
-    for (folder, shown) in linked.shown(&repo.layout()?) {
+    let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
+    for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
         let path = folder.path.as_ref().expect("a shown folder has a path");
         let (id, path) = (&folder.id, home_relative(path, paths.home()));
         let Shown::Skills(skills) = shown else {

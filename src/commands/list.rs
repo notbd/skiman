@@ -13,6 +13,7 @@ use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
 use crate::rules;
+use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree, tree_hash};
 
 const HEADER: [&str; 7] = [
@@ -63,7 +64,8 @@ fn list() -> Result<Exit, Failure> {
         rows.push([name, kind, source, version, modified, conflicts, enabled]);
     }
     let linked = Linked::read(paths.home(), &repo, &manifest);
-    for (folder, shown) in linked.shown(&repo.layout()?) {
+    let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
+    for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
         let source = format!(
             "{} ({})",
             folder.id,

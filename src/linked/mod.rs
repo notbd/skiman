@@ -265,34 +265,34 @@ impl Linked {
         self.places.breaks(path).is_none() && self.reaches_into(path).is_none()
     }
 
-    /// Link targets sync leaves exactly as they are, and everything below
-    /// them: `<canon>/linked/<id>` of each folder that cannot be read, and
-    /// the target of each linked skill whose `SKILL.md` cannot be probed.
-    pub fn frozen(&self) -> Vec<PathBuf> {
-        let mut frozen = Vec::new();
-        for folder in &self.folders {
-            match &folder.state {
-                State::Unreadable(_) => frozen.push(self.dir.join(&folder.id)),
-                State::Read(contents) => frozen.extend(
-                    contents
-                        .unprobed
-                        .iter()
-                        .map(|(name, _)| self.skill_target(folder, name)),
-                ),
-                _ => {}
-            }
-        }
-        frozen
+    /// Whether sync leaves some links exactly as they are ([`Linked::keeper`]).
+    pub fn keeps_any(&self) -> bool {
+        self.folders.iter().any(|f| match &f.state {
+            State::Unreadable(_) => true,
+            State::Read(contents) => !contents.unprobed.is_empty(),
+            _ => false,
+        })
     }
 
-    /// The id of the unreadable folder a link target lies in, when it does:
-    /// the link keeps its name for that folder.
-    pub fn keeper(&self, target: &Path) -> Option<&str> {
-        self.folders
-            .iter()
-            .filter(|f| matches!(f.state, State::Unreadable(_)))
-            .find(|f| target.starts_with(self.dir.join(&f.id)))
-            .map(|f| f.id.as_str())
+    /// What keeps a tool-directory link to `target` exactly as it is, with
+    /// its name: the folder that cannot be read when `target` lies in its
+    /// `<canon>/linked/<id>`, or the linked skill whose `SKILL.md` cannot
+    /// be probed when it lies in that skill's target.
+    pub fn keeper(&self, target: &Path) -> Option<Holder> {
+        self.folders.iter().find_map(|folder| match &folder.state {
+            State::Unreadable(_) => target
+                .starts_with(self.dir.join(&folder.id))
+                .then(|| Holder::Kept(folder.id.clone())),
+            State::Read(contents) => contents
+                .unprobed
+                .iter()
+                .find(|(name, _)| target.starts_with(self.skill_target(folder, name)))
+                .map(|(name, _)| Holder::Unprobed {
+                    id: folder.id.clone(),
+                    name: name.clone(),
+                }),
+            _ => None,
+        })
     }
 
     /// The linked skills to distribute, one per name, in id and then name
@@ -300,37 +300,21 @@ impl Linked {
     /// holds their name (spec "Names and collisions"). Only folders `offers`
     /// accepts take part. Every skill folder under `skills/` (`layout`)
     /// holds its name, enabled or not, and so does every group folder (ADR
-    /// 0009); then the names `kept` (name to id) by links of unreadable
-    /// folders; then the folder whose id sorts first. A skill whose
-    /// `SKILL.md` cannot be probed takes part in its folder's turn: it holds
-    /// a name no earlier folder holds (its link stays, [`Linked::frozen`]),
-    /// and never takes one from an earlier folder.
+    /// 0009); then the names `kept` by the links [`Linked::keeper`] keeps;
+    /// then the folder whose id sorts first. A skill whose `SKILL.md`
+    /// cannot be probed holds a name only through `kept`, so it never
+    /// takes a name it did not hold.
     pub fn names(
         &self,
         layout: &Layout,
-        kept: &BTreeMap<String, String>,
+        kept: &BTreeMap<String, Holder>,
         offers: impl Fn(&str) -> bool,
     ) -> (Vec<(String, PathBuf)>, Vec<Collision>) {
-        let mut taken: BTreeMap<String, Holder> = kept
-            .iter()
-            .map(|(name, id)| (name.clone(), Holder::Kept(id.clone())))
-            .collect();
+        let mut taken = kept.clone();
         let mut wanted = Vec::new();
         let mut collisions = Vec::new();
         for folder in self.folders.iter().filter(|f| offers(&f.id)) {
-            let unprobed: &[(String, String)] = match &folder.state {
-                State::Read(contents) => &contents.unprobed,
-                _ => &[],
-            };
-            // Each name with whether its `SKILL.md` was probed.
-            let mut names: Vec<(String, bool)> = folder
-                .skill_names()
-                .into_iter()
-                .map(|n| (n, true))
-                .chain(unprobed.iter().map(|(n, _)| (n.clone(), false)))
-                .collect();
-            names.sort();
-            for (name, probed) in names {
+            for name in folder.skill_names() {
                 let holder = if let Some(placed) = layout.find(&name) {
                     Some(Holder::Canon(placed.path()))
                 } else if let Some(group) = layout.group_named(&name) {
@@ -338,21 +322,16 @@ impl Linked {
                 } else {
                     taken.get(&name).cloned()
                 };
-                match (holder, probed) {
-                    (Some(holder), true) => collisions.push(Collision {
+                match holder {
+                    Some(holder) => collisions.push(Collision {
                         id: folder.id.clone(),
                         dir: folder.skill_dir(&name),
                         name,
                         holder,
                     }),
-                    (None, true) => {
+                    None => {
                         taken.insert(name.clone(), Holder::Linked(folder.id.clone()));
                         wanted.push((name.clone(), self.skill_target(folder, &name)));
-                    }
-                    // Not known to be a skill: it is reported unprobed, not as lost.
-                    (Some(_), false) => {}
-                    (None, false) => {
-                        taken.insert(name, Holder::Kept(folder.id.clone()));
                     }
                 }
             }
@@ -363,11 +342,11 @@ impl Linked {
     /// What `list` and `overview` show of each folder, in id order (spec
     /// "Display"): one not on this machine, or the linked skills of one that
     /// was read, each with the skill that holds its name when it lost a
-    /// collision ([`Linked::names`] with every folder taking part). A folder
-    /// that breaks a rule or cannot be read is left out: sync, `check` and
-    /// `doctor` report it.
-    pub fn shown(&self, layout: &Layout) -> Vec<(&Folder, Shown)> {
-        let (_, collisions) = self.names(layout, &BTreeMap::new(), |_| true);
+    /// collision ([`Linked::names`] with every folder taking part and the
+    /// names `kept` in the tool directories). A folder that breaks a rule
+    /// or cannot be read is left out: sync, `check` and `doctor` report it.
+    pub fn shown(&self, layout: &Layout, kept: &BTreeMap<String, Holder>) -> Vec<(&Folder, Shown)> {
+        let (_, collisions) = self.names(layout, kept, |_| true);
         self.folders
             .iter()
             .filter_map(|folder| {
@@ -425,6 +404,9 @@ pub enum Holder {
     Linked(String),
     /// A link kept for a linked folder that cannot be read now.
     Kept(String),
+    /// A link kept for the linked skill `name` of folder `id`, whose
+    /// `SKILL.md` cannot be probed now.
+    Unprobed { id: String, name: String },
 }
 
 /// What holds the name, as sync, `check`, `doctor`, `list` and `overview` say it.
@@ -437,6 +419,10 @@ impl std::fmt::Display for Holder {
             Holder::Kept(id) => write!(
                 f,
                 "linked folder `{id}`, which cannot be read now, keeps the name"
+            ),
+            Holder::Unprobed { id, name } => write!(
+                f,
+                "linked skill {name} of `{id}`, whose SKILL.md cannot be read now, keeps the name"
             ),
         }
     }

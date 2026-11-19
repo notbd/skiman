@@ -123,54 +123,71 @@ fn between_linked_folders_the_first_id_wins_and_the_next_takes_over() {
 }
 
 /// A linked skill whose `SKILL.md` cannot be probed holds its name only
-/// where it would win: a readable winner keeps its link while a loser
-/// cannot be probed, and a readable loser does not take over from a
-/// winner that cannot be probed.
+/// through the tool-directory links that already point at it: a readable
+/// winner keeps its link while a loser cannot be probed, a readable loser
+/// does not take over from a winner that cannot be probed, and a new entry
+/// that cannot be probed takes no name from the current winner. `list`
+/// shows the winner the tool directories hold.
 #[test]
 fn a_skill_that_cannot_be_probed_changes_no_collision_winner() {
     use std::os::unix::fs::PermissionsExt;
     let chmod = |path: &std::path::Path, mode| {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
     };
-    for locked in ["zeta", "acme"] {
+    // Which folder's `pdf` cannot be probed, and whether it is new.
+    for (locked, new) in [("zeta", false), ("acme", false), ("acme", true)] {
+        let case = format!("{locked}{}", if new { " (new)" } else { "" });
         let sandbox = Sandbox::new();
         init(&sandbox);
-        folder(&sandbox, "work/acme", &["pdf"]);
+        folder(
+            &sandbox,
+            "work/acme",
+            if new { &["other"] } else { &["pdf"] },
+        );
         folder(&sandbox, "work/zeta", &["pdf"]);
         append_manifest(
             &sandbox,
             "\n[linked.zeta]\npath = \"~/work/zeta\"\n\n[linked.acme]\npath = \"~/work/acme\"\n",
         );
         let linked = sandbox.canon().join("linked");
-        assert_eq!(sync(&sandbox).0, 3);
-        assert_eq!(target(&sandbox, "pdf"), linked.join("acme/pdf"));
+        sync(&sandbox);
+        let winner = linked.join(if new { "zeta/pdf" } else { "acme/pdf" });
+        assert_eq!(target(&sandbox, "pdf"), winner, "{case}");
         let skill = sandbox.home().join("work").join(locked).join("pdf");
+        if new {
+            write(skill.join("SKILL.md"), skill_md("pdf"));
+        }
 
         chmod(&skill, 0o000);
         let (code, stderr) = sync(&sandbox);
         let list = sandbox.skiman().arg("list").output().unwrap().stdout;
         chmod(&skill, 0o755);
 
-        assert_eq!(code, 3, "{locked}: {stderr}");
+        assert_eq!(code, 3, "{case}: {stderr}");
         let unchecked = format!("linked skill pdf of `{locked}` is not checked");
-        assert!(stderr.contains(&unchecked), "{locked}: {stderr}");
-        assert!(!stderr.contains("removed"), "{locked}: {stderr}");
-        assert_eq!(target(&sandbox, "pdf"), linked.join("acme/pdf"), "{locked}");
+        assert!(stderr.contains(&unchecked), "{case}: {stderr}");
+        assert!(!stderr.contains("removed"), "{case}: {stderr}");
+        for tool in Tool::ALL {
+            let link = sandbox.tool_dir(tool).join("pdf");
+            assert_eq!(std::fs::read_link(link).unwrap(), winner, "{case}");
+        }
         let acme = sandbox.home().join("work/acme/pdf");
         let zeta = sandbox.home().join("work/zeta/pdf");
         let lost = |dir: &std::path::Path| {
             format!("linked skill pdf in {} is not distributed", dir.display())
         };
-        assert!(!stderr.contains(&lost(&acme)), "{locked}: {stderr}");
-        if locked == "acme" {
-            let kept = "linked folder `acme`, which cannot be read now, keeps the name";
+        assert!(!stderr.contains(&lost(&acme)), "{case}: {stderr}");
+        let list = String::from_utf8(list).unwrap();
+        let kept = "linked skill pdf of `acme`, whose SKILL.md cannot be read now, keeps the name";
+        if locked == "acme" && !new {
             assert!(
                 stderr.contains(&format!("{}: {kept}", lost(&zeta))),
                 "{stderr}"
             );
+            assert!(list.contains(&format!("no: {kept}")), "{list}");
         } else {
-            let list = String::from_utf8(list).unwrap();
-            assert!(!list.contains("which cannot be read now"), "{list}");
+            assert!(!stderr.contains(&lost(&zeta)), "{case}: {stderr}");
+            assert!(!list.contains("cannot be read now"), "{case}: {list}");
         }
     }
 }

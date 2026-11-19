@@ -23,7 +23,7 @@ use crate::failure::{Failure, finish};
 use crate::git;
 use crate::git_hooks::{self, Hook};
 use crate::layout::Layout;
-use crate::linked::{self, Linked, State};
+use crate::linked::{self, Holder, Linked, State};
 use crate::manifest::Manifest;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -61,8 +61,9 @@ fn doctor() -> Result<Exit, Failure> {
     report_session_hooks(home, &installed, &root, &config.binary);
     report_tools(home, &manifest, &installed);
     let linked = Linked::read(home, &repo, &manifest);
-    report_linked(&repo, &linked).map_err(io)?;
-    report_entries(&paths, &repo, &manifest, &linked, &installed).map_err(io)?;
+    let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
+    report_linked(&repo, &linked, &kept).map_err(io)?;
+    report_entries(&paths, &repo, &manifest, &linked, &kept, &installed).map_err(io)?;
     report_instruction_locations(&paths, &repo, &installed);
     report_canon(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
@@ -197,7 +198,11 @@ fn alias_note<'a>(
 /// Each linked folder, and what sync would report about it: missing,
 /// breaking a rule, not read, a skill that loses its name, and `linked/`
 /// or `linked/<id>` in the way. Nothing when no folder is registered.
-fn report_linked(repo: &Canon, linked: &Linked) -> std::io::Result<()> {
+fn report_linked(
+    repo: &Canon,
+    linked: &Linked,
+    kept: &BTreeMap<String, Holder>,
+) -> std::io::Result<()> {
     for folder in &linked.folders {
         if let (State::Read(contents), Some(path)) = (&folder.state, &folder.path) {
             let skills = if contents.single {
@@ -214,7 +219,7 @@ fn report_linked(repo: &Canon, linked: &Linked) -> std::io::Result<()> {
         }
     }
     let layout = Layout::read(&WorkingTree::new(repo.root()))?;
-    let (_, collisions) = linked.names(&layout, &BTreeMap::new(), |_| true);
+    let (_, collisions) = linked.names(&layout, kept, |_| true);
     for collision in collisions {
         out!("{}", collision.message());
     }
@@ -231,12 +236,12 @@ fn report_entries(
     repo: &Canon,
     manifest: &Manifest,
     linked: &Linked,
+    kept: &BTreeMap<String, Holder>,
     installed: &[&AgentTool],
 ) -> std::io::Result<()> {
     let mut ignored = sync::Report::default();
-    let none = BTreeMap::new();
     let wanted: BTreeMap<String, PathBuf> =
-        sync::wanted_entries(repo, manifest, linked, &none, &|_| true, &mut ignored)?
+        sync::wanted_entries(repo, manifest, linked, kept, &|_| true, &mut ignored)?
             .into_iter()
             .map(|w| (w.name, w.target))
             .collect();

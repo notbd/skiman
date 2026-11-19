@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::summary::About;
-use super::{Linked, State};
+use super::{Holder, Linked, State};
 use crate::layout::Layout;
 use crate::manifest::Manifest;
 use crate::rules::{Violation, frontmatter, rule, skill_body};
@@ -14,9 +14,14 @@ use crate::rules::{Violation, frontmatter, rule, skill_body};
 /// After a frontmatter that does not parse.
 const UNPARSABLE: &str = "; Antigravity drops a skill whose frontmatter does not parse";
 
-/// Every warning, in id and then name order, then the collisions, then
-/// the `[skills.<name>]` tables.
-pub fn warnings(linked: &Linked, manifest: &Manifest, layout: &Layout) -> Vec<String> {
+/// Every warning, in id and then name order, then the collisions (`kept`
+/// from [`crate::sync::kept_names`]), then the `[skills.<name>]` tables.
+pub fn warnings(
+    linked: &Linked,
+    manifest: &Manifest,
+    layout: &Layout,
+    kept: &BTreeMap<String, Holder>,
+) -> Vec<String> {
     let enabled = manifest.enabled_tools();
     let mut out = Vec::new();
     for folder in &linked.folders {
@@ -66,7 +71,7 @@ pub fn warnings(linked: &Linked, manifest: &Manifest, layout: &Layout) -> Vec<St
             }
         }
     }
-    let (_, collisions) = linked.names(layout, &BTreeMap::new(), |_| true);
+    let (_, collisions) = linked.names(layout, kept, |_| true);
     out.extend(collisions.iter().map(|c| c.message()));
     for name in manifest.skills().keys() {
         if layout.find(name).is_none()

@@ -202,7 +202,7 @@ fn install_session_hooks(
         exit: Exit::NeedsAttention,
         message: format!("{message}; its session-start hook entry is left as it is"),
     };
-    let guard = |file: &Path, written: &Path| -> Result<CanonLock, Failure> {
+    let guard = |file: &Path, lands: &Path| -> Result<CanonLock, Failure> {
         let lock = CanonLock::wait(paths, repo)?;
         let previous = previous
             .filter(|p| p.linked.is_some())
@@ -224,7 +224,7 @@ fn install_session_hooks(
             .transpose()?;
         let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?)
             .guarding_also(previous.as_ref());
-        match linked.refusal(file, &linked::written_through(written)) {
+        match linked.refusal(file, lands) {
             Some(message) => Err(left(message)),
             None => Ok(lock),
         }

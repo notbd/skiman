@@ -657,6 +657,52 @@ fn a_settings_file_relinked_before_the_write_is_guarded_where_it_is_written() {
     assert_eq!(contents(&[&company]), before);
 }
 
+/// A settings file that does not exist yet, in a tool folder that is a
+/// link re-pointed into a registered folder after the guard passed: the
+/// file is made where the guard checked, and the registered folder's own
+/// settings file stays byte for byte.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_new_settings_file_is_made_where_the_guard_checked() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    write(company.join("settings.json"), "{\"marker\": true}\n");
+    let claude = sandbox.presence_dir(Tool::ClaudeCode);
+    let plain = sandbox.home().join("plain-claude");
+    std::fs::rename(&claude, &plain).unwrap();
+    let _ = std::fs::remove_file(plain.join("settings.json"));
+    symlink(&plain, &claude).unwrap();
+    let before = contents(&[&company]);
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "claude-code"])
+        .arg(sandbox.canon())
+        .env("SKIMAN_TEST_HOOK", "session-hooks:save")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!(
+                "rm '{0}' && ln -s '{1}' '{0}'",
+                claude.display(),
+                company.display()
+            ),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(contents(&[&company]), before, "{stderr}");
+    assert!(
+        read(plain.join("settings.json")).contains("SessionStart"),
+        "{stderr}"
+    );
+}
+
 /// While `skiman.toml` cannot be parsed no registration is known, so
 /// `init` writes nothing through a `.gitignore` that is a link.
 #[test]

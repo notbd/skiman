@@ -46,9 +46,10 @@ pub enum Request<'a> {
 }
 
 /// Asked right before a settings file (the path in the tool table, and
-/// the file that is then written) is written: holds the canon lock while
-/// the write happens, or says why the file is left as it is (a file that
-/// resolves into a linked folder, exit 3).
+/// where the write lands, [`crate::linked::written_through`]) is written:
+/// holds the canon lock while the write happens, or says why the file is
+/// left as it is (a file that resolves into a linked folder, exit 3). The
+/// write goes to that landing, never through a link on the path again.
 pub type Guard<'a> = &'a dyn Fn(&Path, &Path) -> Result<CanonLock, Failure>;
 
 /// Applies `request`; `binary` is the recorded binary path. Every settings
@@ -182,7 +183,7 @@ fn shell_word(path: &str) -> String {
 struct Settings {
     /// The path in the tool table, under `HOME` (used in messages).
     path: PathBuf,
-    /// Where the file is written: its realpath, or `path` when it does not exist yet.
+    /// The file read: its realpath, or `path` when it does not exist yet.
     real: PathBuf,
     root: Value,
     /// The file's permissions; `None` when it does not exist yet.
@@ -239,14 +240,15 @@ fn load(path: PathBuf) -> Result<Settings, Unusable> {
 }
 
 impl Settings {
-    fn save(&self) -> std::io::Result<()> {
+    /// Writes the file at `lands`, where the guard checked it would land.
+    fn save(&self, lands: &Path) -> std::io::Result<()> {
         let mut text = serde_json::to_string_pretty(&self.root).expect("JSON value serialises");
         text.push('\n');
         match &self.permissions {
             Some(permissions) => {
-                crate::fsutil::rewrite_atomic(&self.real, text.as_bytes(), permissions.clone())
+                crate::fsutil::rewrite_atomic(lands, text.as_bytes(), permissions.clone())
             }
-            None => crate::fsutil::write_atomic(&self.real, text.as_bytes()),
+            None => crate::fsutil::write_atomic(lands, text.as_bytes()),
         }
     }
 }
@@ -337,11 +339,13 @@ fn add(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
 
 fn write_addition(settings: &Settings, shape: HookShape, own: &str, guard: Guard) -> Exit {
     crate::test_hook::at("session-hooks", "guard");
-    let _lock = match guard(&settings.path, &settings.real) {
+    let lands = crate::linked::written_through(&settings.real);
+    let _lock = match guard(&settings.path, &lands) {
         Ok(lock) => lock,
         Err(failure) => return failure.report(),
     };
-    match settings.save() {
+    crate::test_hook::at("session-hooks", "save");
+    match settings.save(&lands) {
         Ok(()) => {
             out!(
                 "added the session-start hook entry to {}{}",
@@ -352,7 +356,7 @@ fn write_addition(settings: &Settings, shape: HookShape, own: &str, guard: Guard
         }
         Err(e) => {
             print_by_hand(
-                &format!("cannot write {}: {e}", settings.real.display()),
+                &format!("cannot write {}: {e}", lands.display()),
                 shape,
                 own,
             );
@@ -399,11 +403,13 @@ fn remove(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
         return Exit::Success;
     }
     crate::test_hook::at("session-hooks", "guard");
-    let _lock = match guard(&settings.path, &settings.real) {
+    let lands = crate::linked::written_through(&settings.real);
+    let _lock = match guard(&settings.path, &lands) {
         Ok(lock) => lock,
         Err(failure) => return failure.report(),
     };
-    match settings.save() {
+    crate::test_hook::at("session-hooks", "save");
+    match settings.save(&lands) {
         Ok(()) => {
             out!(
                 "removed the session-start hook entries from {}{REWRITTEN}",
@@ -411,7 +417,7 @@ fn remove(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
             );
             Exit::Success
         }
-        Err(e) => by_hand(format!("cannot write {}: {e}", settings.real.display())),
+        Err(e) => by_hand(format!("cannot write {}: {e}", lands.display())),
     }
 }
 

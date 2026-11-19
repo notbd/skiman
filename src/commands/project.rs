@@ -485,6 +485,28 @@ fn refuse_while_unreadable(linked: &Linked, verb: &str) -> Result<(), Failure> {
     }
 }
 
+/// The linked folders once the user has answered, from `skiman.toml` read
+/// again: the lock stops other skiman commands, not a re-pointed path or a
+/// hand edit. Refuses as [`refuse_while_unreadable`] does.
+fn linked_after_answer(ctx: &Context, verb: &str) -> Result<Linked, Failure> {
+    let linked = Linked::load(ctx.paths.home(), &ctx.repo)?;
+    refuse_while_unreadable(&linked, verb)?;
+    Ok(linked)
+}
+
+/// Reports the planned write to `disk` as skipped when it overlaps a folder
+/// of `linked`, and returns the exit that adds: refused for a path named
+/// exactly, as in the plan.
+fn skip_overlapping(linked: &Linked, plan: &Plan, disk: &Path) -> Option<Exit> {
+    let why = linked.item_overlap(disk)?;
+    err!("skip {}: {why}", disk.display());
+    Some(if plan.named.contains(disk) {
+        Exit::Refused
+    } else {
+        Exit::Success
+    })
+}
+
 /// Prints the outcome of one replace and returns the exit it adds; the
 /// new content is in place exactly when the first value is `true`.
 fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) -> (bool, Exit) {
@@ -642,12 +664,17 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             own.combine(ctx.sync())
         });
     }
+    let linked = linked_after_answer(&ctx, "adopted")?;
     let mut backups = ctx.backups();
     let mut exit = own;
     let mut written = Vec::new();
     let mut failed = Vec::new();
     let (swap, saved) = swap_parent(&ctx.repo);
     for p in &plan.writes {
+        if let Some(refused) = skip_overlapping(&linked, &plan, &p.item.disk(p.root)) {
+            exit = exit.combine(refused);
+            continue;
+        }
         let content = p
             .new
             .as_ref()
@@ -778,21 +805,14 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     if !plan.confirm(Verb::Restore, yes, dry_run)? {
         return Ok(own);
     }
-    // The checks again, on the registrations and folders as they are after
-    // the answer: the lock stops other skiman commands, not a re-pointed
-    // path or a hand edit.
-    let linked = Linked::load(ctx.paths.home(), &ctx.repo)?;
-    refuse_while_unreadable(&linked, "restored")?;
+    let linked = linked_after_answer(&ctx, "restored")?;
     let mut backups = ctx.backups();
     let mut exit = own;
     let mut failed = Vec::new();
     for p in &plan.writes {
         let disk = p.item.disk(p.root);
-        if let Some(why) = linked.item_overlap(&disk) {
-            err!("skip {}: {why}", disk.display());
-            if plan.named.contains(&disk) {
-                exit = exit.combine(Exit::Refused);
-            }
+        if let Some(refused) = skip_overlapping(&linked, &plan, &disk) {
+            exit = exit.combine(refused);
             continue;
         }
         // Its tmp leftovers go where the anchor's items go in the backup.

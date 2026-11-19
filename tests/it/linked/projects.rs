@@ -395,3 +395,69 @@ fn restore_skips_an_item_inside_a_folder_registered_while_it_asked() {
     assert_eq!(read(&item), OLD);
     assert!(!exists(crate::support::backups(&sandbox)));
 }
+
+/// What changes while `project adopt` waits for its answer, and what the
+/// adopt then says: it reads `skiman.toml` and the linked folders again
+/// once confirmed. An item that overlaps a linked folder now is skipped
+/// (exit 1, named exactly); a folder that cannot be read now refuses the
+/// whole adopt (exit 3). Either way nothing reaches the mirror.
+#[test]
+fn adopt_reads_the_linked_folders_again_once_confirmed() {
+    // A case name, the change, then the exit and a line the adopt prints.
+    type Case = (&'static str, fn(&Sandbox), i32, &'static str);
+    let cases: [Case; 3] = [
+        (
+            "re-pointed",
+            |sandbox| {
+                let vendor = sandbox.home().join("vendor");
+                std::fs::remove_file(&vendor).unwrap();
+                symlink(work(sandbox, "app"), &vendor).unwrap();
+            },
+            1,
+            "it overlaps linked folder `vendor`",
+        ),
+        (
+            "registered by hand",
+            |sandbox| append_manifest(sandbox, "\n[linked.app]\npath = \"~/work/app\"\n"),
+            1,
+            "it overlaps linked folder `app`",
+        ),
+        (
+            "unreadable",
+            |sandbox| {
+                let company = sandbox.home().join("company");
+                std::fs::set_permissions(&company, std::fs::Permissions::from_mode(0o000)).unwrap();
+            },
+            3,
+            "linked folder `vendor` cannot be read, so which project items overlap it is unknown; nothing was adopted",
+        ),
+    ];
+    for (case, change, expected, said) in cases {
+        let sandbox = adopted(&["AGENTS.md"], &[]);
+        let company = sandbox.home().join("company");
+        write(company.join("alpha/SKILL.md"), skill_md("alpha"));
+        symlink(&company, sandbox.home().join("vendor")).unwrap();
+        append_manifest(&sandbox, "\n[linked.vendor]\npath = \"~/vendor\"\n");
+        let (code, stderr) = run(&sandbox, &["sync"], &[]);
+        assert_eq!(code, 0, "{case}: {stderr}");
+        let item = work(&sandbox, "app/AGENTS.md");
+        write(&item, NEW);
+        let synced_file = sandbox.state_home().join("skiman/projects-synced.toml");
+        let synced = read(&synced_file);
+
+        let mut pty = sandbox.skiman_pty(["project".as_ref(), "adopt".as_ref(), item.as_os_str()]);
+        pty.expect("Adopt 1 item(s)? [y/N] ");
+        change(&sandbox);
+        pty.send_line("y");
+        let (code, rest) = pty.wait();
+        std::fs::set_permissions(&company, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(code, expected, "{case}: {rest}");
+        assert!(rest.contains(said), "{case}: {rest}");
+        assert!(!rest.contains("adopted "), "{case}: {rest}");
+        assert!(!exists(mirror(&sandbox, "app")), "{case}");
+        assert_eq!(read(&synced_file), synced, "{case}");
+        assert!(!exists(crate::support::backups(&sandbox)), "{case}");
+        assert_eq!(read(&item), NEW, "{case}");
+    }
+}

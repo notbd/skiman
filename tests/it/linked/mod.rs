@@ -14,6 +14,7 @@ mod display;
 mod distribution;
 mod doctor;
 mod gitignore;
+mod import;
 mod missing;
 mod names;
 mod paths;

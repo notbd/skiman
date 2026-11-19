@@ -4,10 +4,12 @@
 //!
 //! Order: no TTY and no `--yes` -> exit 2 -> config -> the skill repo's
 //! `skiman.toml`, `skiman.lock` and shared body are regular files, and it is
-//! initialised -> phase 1 on the folder (layout, path safety, every rule
-//! except Consistency) -> whether the skill repo already holds the whole
-//! import ([`progress`]; if so, nothing is fetched or written and the run
-//! goes on at the takeover plan) -> fetch every declared source -> phase 2
+//! initialised -> phase 1 on the folder (layout, path safety, no `[linked]`
+//! table, every rule except Consistency) -> the canon's linked folders
+//! ([`linked_folders`]: none unreadable, none of their names, no write into
+//! one) -> whether the skill repo already holds the whole import
+//! ([`progress`]; if so, nothing is fetched or written and the run goes on
+//! at the takeover plan) -> fetch every declared source -> phase 2
 //! on the complete result (Consistency, secrets, everything) -> what the
 //! skill repo holds against what the import writes ([`repo_todo`]) ->
 //! takeover plan, no special file in it and no local source it moves away
@@ -37,6 +39,7 @@ use crate::fetch::Cache;
 use crate::git::Prompts;
 use crate::import_guide;
 use crate::layout::{Layout, Placed};
+use crate::linked::{self, Linked, State};
 use crate::lockfile::{self, LockEntry, Lockfile};
 use crate::managing_skills;
 use crate::manifest::{self, Manifest, SkillEntry, SourceRecord};
@@ -113,10 +116,13 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let prompts = prompts();
 
     let content = Folder::read(&folder)?;
+    refuse_linked_tables(&content)?;
     let manifest_text = merge_repo_config(&content.manifest, &repo_manifest)?;
     check_folder(&content, &manifest_text)?;
     let folder_manifest = Manifest::parse(&manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
+    // Before anything is fetched; again with the takeover plan.
+    linked_folders(&paths, &repo, &folder_manifest, &content)?;
     // `None` when the skill repo already holds the whole import (an earlier
     // run wrote it): nothing is fetched or written, and the takeover follows
     // the repo's own skiman.toml.
@@ -400,12 +406,13 @@ impl Folder {
 
 /// The folder's `skiman.toml` with the skill repo's configuration merged in
 /// by key, since an import brings skills and instructions only: the repo's
-/// `[tools]` when the folder has none, each repo `[projects.<id>]` whose id
-/// the folder does not define, and each repo `[[secrets.allow]]` entry for a
-/// path below `projects/` the folder does not hold already. Tables written
-/// inline count on both sides. The folder's own text keeps its bytes, except
-/// an inline `projects` or `secrets` table that takes repo entries, which
-/// becomes a standard table.
+/// `[tools]` when the folder has none, each repo `[projects.<id>]` and
+/// `[linked.<id>]` whose id the folder does not define (it defines no
+/// `[linked]`: [`refuse_linked_tables`]), and each repo `[[secrets.allow]]`
+/// entry for a path below `projects/` the folder does not hold already.
+/// Tables written inline count on both sides. The folder's own text keeps
+/// its bytes, except an inline `projects` or `secrets` table that takes repo
+/// entries, which becomes a standard table.
 fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
     let Ok(mut doc) = folder.parse::<DocumentMut>() else {
         // The rules report the syntax error with its line.
@@ -424,13 +431,16 @@ fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
         doc.insert("tools", tools);
         merged = true;
     }
-    if let Some(projects) = repo.get("projects").and_then(Item::as_table_like) {
-        for (id, project) in projects.iter() {
-            if doc.get("projects").and_then(|kept| kept.get(id)).is_none()
-                && let Ok(project) = project.clone().into_table()
-                && let Some(into) = manifest::subtable(&mut doc, "projects")
+    for key in ["projects", "linked"] {
+        let Some(tables) = repo.get(key).and_then(Item::as_table_like) else {
+            continue;
+        };
+        for (id, table) in tables.iter() {
+            if doc.get(key).and_then(|kept| kept.get(id)).is_none()
+                && let Ok(table) = table.clone().into_table()
+                && let Some(into) = manifest::subtable(&mut doc, key)
             {
-                into.insert(id, Item::Table(appended(project)));
+                into.insert(id, Item::Table(appended(table)));
                 merged = true;
             }
         }
@@ -696,6 +706,97 @@ fn check_result(
     )
 }
 
+/// Refuses (exit 1) an import folder whose `skiman.toml` has `[linked]`
+/// tables: an import brings skills and instructions only, and the canon's
+/// own registrations are kept. Names the command that registers each.
+fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
+    let Ok(manifest) = Manifest::parse(&content.manifest) else {
+        // The rules report the syntax error with its line.
+        return Ok(());
+    };
+    let tables = manifest.linked();
+    if tables.is_empty() {
+        return Ok(());
+    }
+    let lines: Vec<String> = tables
+        .iter()
+        .map(|entry| match &entry.path {
+            Ok(path) => format!("  skiman linked add {path} --id {}", entry.id),
+            Err(why) => format!("  [linked.{}]: {why}", entry.id),
+        })
+        .collect();
+    Err(Failure::refused(format!(
+        "refusing to import {}: its skiman.toml has [linked] tables, but an import brings skills and instructions only; remove them from the import folder, and once the import is done register each folder with skiman linked add; nothing was changed:\n{}",
+        content.root.display(),
+        lines.join("\n")
+    )))
+}
+
+/// The canon's linked folders on this machine, as registered in `manifest`
+/// (the canon's, which the import keeps). Refuses (exit 1) while one cannot
+/// be read, since what leads into it is unknown; when a skill of the import
+/// folder uses a linked skill's name; and when an installed tool's tool
+/// directory or instruction location resolves into a linked folder, as sync
+/// compares them (spec "Write targets never reach into a linked folder").
+fn linked_folders(
+    paths: &Paths,
+    repo: &SkillRepo,
+    manifest: &Manifest,
+    content: &Folder,
+) -> Result<Linked, Failure> {
+    let linked = Linked::read(paths.home(), repo, manifest);
+    if let Some(folder) = linked.unreadable() {
+        let State::Unreadable(why) = &folder.state else {
+            unreachable!("unreadable() finds an unreadable folder");
+        };
+        return Err(Failure::refused(format!(
+            "refusing to import {}: linked folder `{}` cannot be read now ({why}), so skiman cannot tell what in the tool directories leads into it; nothing was changed, run the import again once it can be read",
+            content.root.display(),
+            folder.id
+        )));
+    }
+    let lines: Vec<String> = content
+        .skills
+        .iter()
+        .filter_map(|(name, skill)| {
+            let (folder, dir) = linked.skill(name)?;
+            Some(format!(
+                "  {}: it is a linked skill in {}, in linked folder `{}`",
+                skill.path,
+                dir.display(),
+                folder.id
+            ))
+        })
+        .collect();
+    if !lines.is_empty() {
+        return Err(Failure::refused(format!(
+            "refusing to import {}: these skills use the name of a linked skill, which skiman never replaces; rename them in the import folder, nothing was changed:\n{}",
+            content.root.display(),
+            lines.join("\n")
+        )));
+    }
+    let home = paths.home();
+    let lines: Vec<String> = sync::installed_tools(home, manifest)
+        .flat_map(|tool| {
+            let (dir, file) = (tool.tool_dir(home), home.join(tool.instruction_file));
+            [
+                linked.refusal(&dir, &linked::written_through(&dir)),
+                linked.refusal(&file, &linked::location(&file)),
+            ]
+        })
+        .flatten()
+        .map(|why| format!("  {why}"))
+        .collect();
+    if !lines.is_empty() {
+        return Err(Failure::refused(format!(
+            "refusing to import {}: it would write into a linked folder; nothing was changed:\n{}",
+            content.root.display(),
+            lines.join("\n")
+        )));
+    }
+    Ok(linked)
+}
+
 /// The import folder's content, checked, plus what skiman built.
 struct Candidate<'a> {
     content: &'a Folder,
@@ -737,12 +838,17 @@ struct Plan {
     /// Non-skill entries at a name the import distributes: left alone, so
     /// that skill is not distributed there. `(path, skill name)`.
     staying: Vec<(PathBuf, String)>,
+    /// Entries that are, hold or lie in a linked folder or a target of one
+    /// of its child links: never moved (spec "Nothing is moved out of a
+    /// linked folder"). `(path, linked folder id)`.
+    linked: Vec<(PathBuf, String)>,
 }
 
 impl Plan {
     /// Classifies every entry of every installed tool's tool directory (tool
     /// directories resolving to one real directory once) and every
-    /// instruction location, as sync would after the import.
+    /// instruction location, as sync would after the import. Refuses (exit
+    /// 1) what [`linked_folders`] refuses.
     fn make(
         paths: &Paths,
         repo: &SkillRepo,
@@ -750,6 +856,7 @@ impl Plan {
         content: &Folder,
     ) -> Result<Plan, Failure> {
         let home = paths.home();
+        let linked = linked_folders(paths, repo, manifest, content)?;
         let entries = manifest.skills();
         let mut wanted: BTreeMap<String, PathBuf> = content
             .skills
@@ -758,6 +865,11 @@ impl Plan {
             .map(|(name, skill)| (name.clone(), repo.root().join(&skill.path)))
             .collect();
         wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
+        // No import skill uses a linked skill's name ([`linked_folders`]).
+        let layout = Layout::read(&WorkingTree::new(&content.root)).map_err(|e| {
+            Failure::operational(format!("cannot read {}: {e}", content.root.display()))
+        })?;
+        wanted.extend(linked.names(&layout, &BTreeMap::new(), |_| true).0);
         let ownership = Ownership::new(paths, repo, None);
         let io = |path: &Path, e: std::io::Error| {
             Failure::operational(format!("cannot read {}: {e}", path.display()))
@@ -790,6 +902,10 @@ impl Plan {
                     // Moving a moved one again finishes the move.
                     Entry::Foreign | Entry::Moved(_) => {
                         let real = real.join(&name);
+                        if let Some(folder) = linked.reaches_into(&real) {
+                            plan.linked.push((path, folder.id.clone()));
+                            continue;
+                        }
                         entries.push(Move {
                             resolution: resolution(&real),
                             path,
@@ -819,6 +935,10 @@ impl Plan {
                 continue;
             };
             if !seen.insert(location.clone()) {
+                continue;
+            }
+            if let Some(folder) = linked.reaches_into(&location) {
+                plan.linked.push((location, folder.id.clone()));
                 continue;
             }
             let meta = match std::fs::symlink_metadata(&location) {
@@ -1113,6 +1233,12 @@ fn print_plan(repo: &SkillRepo, plan: &Plan, paths: &Paths) {
     for (path, name) in &plan.staying {
         out!(
             "  keep {}: it is not a skill, so skill {name} is not linked there",
+            path.display()
+        );
+    }
+    for (path, id) in &plan.linked {
+        out!(
+            "  keep {}: it holds or lies in linked folder `{id}`, whose content skiman never moves",
             path.display()
         );
     }
@@ -1544,6 +1670,10 @@ mod tests {
             (
                 format!("{tools}\n{proj}\n{allow}"),
                 format!("{tools}\n[projects.other]\npath = \"~/other\"\n\n{allow}"),
+            ),
+            (
+                format!("{tools}\n[linked.company]\npath = \"~/work/company\"\n\n{proj}"),
+                tools.to_owned(),
             ),
         ];
         for (repo, folder) in cases {

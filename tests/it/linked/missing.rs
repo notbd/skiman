@@ -221,3 +221,40 @@ fn no_adopt_hint_while_a_linked_folder_cannot_be_read() {
         );
     }
 }
+
+/// A single-skill folder that can be entered but not listed is a read
+/// error of the whole id, like any other folder: its link stays (exit 3),
+/// and no new canon is made while it lasts.
+#[test]
+fn a_single_skill_folder_that_cannot_be_listed_keeps_its_link() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    folder(&sandbox, "work", &["solo"]);
+    append_manifest(&sandbox, "\n[linked.solo]\npath = \"~/work/solo\"\n");
+    assert_eq!(sync(&sandbox, &["sync"]).0, 0);
+    let solo = sandbox.home().join("work/solo");
+    let second = sandbox.root().join("second");
+    chmod(&solo, 0o111);
+
+    let (code, _, stderr) = sync(&sandbox, &["sync"]);
+    let init_second = sync(
+        &sandbox,
+        &["init", "--session-hooks", "none", second.to_str().unwrap()],
+    );
+    chmod(&solo, 0o755);
+
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        stderr.contains("linked folder `solo` is not read ("),
+        "{stderr}"
+    );
+    let linked = sandbox.canon().join("linked/solo");
+    for tool in Tool::ALL {
+        assert_eq!(
+            std::fs::read_link(sandbox.tool_dir(tool).join("solo")).unwrap(),
+            linked
+        );
+    }
+    assert_eq!(init_second.0, 1, "{}", init_second.2);
+    assert!(!exists(&second));
+}

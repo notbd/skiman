@@ -1,8 +1,9 @@
 //! Reading one linked folder (spec "Reading a linked folder"): a folder
-//! whose top level holds a `SKILL.md` is one skill; any other folder is read
-//! one level deep. One listing, one metadata call per entry, only links
-//! resolved and only candidate folders probed for a `SKILL.md`; no content
-//! is read, so `sync --hook` stays fast.
+//! whose top level holds a `SKILL.md` is one skill (listed, but its
+//! entries are not read); any other folder is read one level deep. One
+//! listing, one metadata call per entry, only links resolved and only
+//! candidate folders probed for a `SKILL.md`; no content is read, so
+//! `sync --hook` stays fast.
 
 use std::ffi::OsString;
 use std::io;
@@ -53,18 +54,21 @@ pub fn read(
     let mut contents = Contents::default();
     let top = dir.join("SKILL.md");
     match std::fs::metadata(&top) {
-        Ok(meta) if meta.is_file() => {
-            contents.single = true;
-            return Ok(contents);
-        }
+        Ok(meta) if meta.is_file() => contents.single = true,
         Ok(_) => {}
         Err(e) if path::is_missing(&e) => {}
         Err(e) => contents.top_unprobed = Some(cannot(&top, e)),
     }
+    // Listed for a single skill too: a folder that cannot be listed is a
+    // read error of the whole id whatever its shape.
     let mut listed = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(|e| cannot(dir, e))? {
         let entry = entry.map_err(|e| cannot(dir, e))?;
         listed.push((entry.file_name(), entry.ino()));
+    }
+    if contents.single {
+        listings.insert(dir.to_owned(), listed);
+        return Ok(contents);
     }
     // The folder's own `SKILL.md`, probed above, is no entry: matched by
     // inode, so another spelling of it on a volume that ignores case is too.

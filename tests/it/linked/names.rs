@@ -558,3 +558,55 @@ fn finishing_a_rename_refuses_a_linked_skills_name() {
     assert!(!stderr.contains("finishing the rename"), "{stderr}");
     assert_eq!(world(&sandbox, &company), before);
 }
+
+/// While a linked folder cannot be read, the names its kept links hold
+/// stay taken for every command that creates a skill or group name, so
+/// the canon never takes them over once it can be read again; a free name
+/// still works.
+#[test]
+fn names_kept_for_an_unreadable_folder_stay_taken() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let company = registered(&sandbox);
+    write(
+        sandbox.canon().join("skills/beta/SKILL.md"),
+        skill_md("beta"),
+    );
+    assert_eq!(sync(&sandbox).0, 0);
+    let up = sandbox.upstream("acme/alpha");
+    up.write("SKILL.md", skill_md("alpha"));
+    up.commit("v1");
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+    chmod(0o000).unwrap();
+    let before = world(&sandbox, &company);
+
+    let mut refused = Vec::new();
+    for args in [
+        &["new", "alpha", "-d", "Replacement"][..],
+        &["add", "acme/alpha", "--yes"],
+        &["mv", "beta", "alpha"],
+        &["new", "foo", "-d", "Does foo things", "--group", "alpha"],
+        &["mv", "beta", "--group", "alpha"],
+    ] {
+        refused.push((args, run(&sandbox, args), world(&sandbox, &company)));
+    }
+    let free = run(&sandbox, &["new", "gamma", "-d", "Does gamma things"]);
+    chmod(0o755).unwrap();
+
+    let kept = "linked folder `company`, which cannot be read now, keeps the name";
+    for (args, (code, stderr), after) in refused {
+        assert_eq!(code, 1, "{args:?}: {stderr}");
+        assert!(stderr.contains(kept), "{args:?}: {stderr}");
+        assert_eq!(after, before, "{args:?}");
+    }
+    assert_eq!(free.0, 3, "{}", free.1);
+    assert!(sandbox.canon().join("skills/gamma/SKILL.md").is_file());
+    assert_eq!(sync(&sandbox).0, 0);
+    assert!(!sandbox.canon().join("skills/alpha").exists());
+    for tool in Tool::ALL {
+        assert_eq!(
+            std::fs::read_link(sandbox.tool_dir(tool).join("alpha")).unwrap(),
+            sandbox.canon().join("linked/company/alpha")
+        );
+    }
+}

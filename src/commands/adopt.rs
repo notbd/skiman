@@ -48,9 +48,9 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
         .find(|tool| tool.id == from)
         .expect("clap accepts only known tool ids");
     let entry = tool.tool_dir(paths.home()).join(name);
-    check_name(paths.home(), &repo, name, &entry, None)?;
+    check_name(&paths, &repo, name, &entry, None)?;
     if let Some(group) = group {
-        names::check_group(paths.home(), &repo, group, name)?;
+        names::check_group(&paths, &repo, group, name)?;
     }
     let (entry, files) = read(&paths, &repo, tool, name)?;
     let change = Change {
@@ -58,7 +58,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
         command: "adopt",
         save_files: false,
     };
-    check_name(paths.home(), &repo, name, &entry, Some(&change))?;
+    check_name(&paths, &repo, name, &entry, Some(&change))?;
     if !yes {
         out!("skill {name} from {}:", entry.display());
         for file in &files {
@@ -71,7 +71,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
 
     test_hook::at("adopt", "confirmed");
     let lock = CanonLock::wait(&paths, &repo)?;
-    check_name(paths.home(), &repo, name, &entry, Some(&change))?;
+    check_name(&paths, &repo, name, &entry, Some(&change))?;
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,
     // `.git/` left out), so only a change to what would be adopted refuses.
@@ -105,7 +105,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
 /// With the `change` adopt writes, a `skills/<name>` that already holds the
 /// copy does not take the name.
 fn check_name(
-    home: &Path,
+    paths: &Paths,
     repo: &Canon,
     name: &str,
     entry: &Path,
@@ -114,7 +114,7 @@ fn check_name(
     names::check_new_name(name)
         .and_then(|()| match change {
             None => Ok(()),
-            Some(c) => names::check_not_taken(home, repo, name, |taken| {
+            Some(c) => names::check_not_taken(paths, repo, name, |taken| {
                 Ok(taken == Taken::Folder && c.in_place(repo.root())?)
             }),
         })

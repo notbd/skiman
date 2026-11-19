@@ -79,7 +79,7 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     let group = match &to_arg {
         To::Same => from.group.clone(),
         To::Group(group) => {
-            names::check_group(paths.home(), &repo, group, new)?;
+            names::check_group(&paths, &repo, group, new)?;
             Some(group.clone())
         }
         To::NoGroup => None,
@@ -89,17 +89,17 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
         // `mv pdf pdf` names a taken name; a move to the group it is in
         // finishes a move that is done but not yet synced.
         if to_arg == To::Same {
-            names::check_not_taken(paths.home(), &repo, new, |_| Ok(false))?;
+            names::check_not_taken(&paths, &repo, new, |_| Ok(false))?;
         }
         out!("{to} is already in place");
         return Ok(sync::run(&paths, &repo, &lock, Output::Normal));
     }
     if new != old {
         if half_renamed(&repo, &from, old, new)? {
-            names::check_not_linked(paths.home(), &repo, new)?;
+            names::check_not_linked(&paths, &repo, new)?;
             out!("{from}/SKILL.md already names `{new}`: finishing the rename");
         } else {
-            names::check_not_taken(paths.home(), &repo, new, |_| Ok(false))?;
+            names::check_not_taken(&paths, &repo, new, |_| Ok(false))?;
         }
     }
     let plan = Plan::build(&repo, old, new, from, to)?;

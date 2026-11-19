@@ -115,10 +115,10 @@ fn add(args: Args) -> Result<Exit, Failure> {
     }
     if let Some(group) = &args.group {
         for install in &installs {
-            names::check_group(paths.home(), &repo, group, &install.name)?;
+            names::check_group(&paths, &repo, group, &install.name)?;
         }
     }
-    check_install_names(paths.home(), &repo, &installs, &upstream)?;
+    check_install_names(&paths, &repo, &installs, &upstream)?;
 
     for install in &installs {
         print_file_list(install, &upstream);
@@ -137,7 +137,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
     }
 
     let lock = CanonLock::wait(&paths, &repo)?;
-    check_install_names(paths.home(), &repo, &installs, &upstream)?;
+    check_install_names(&paths, &repo, &installs, &upstream)?;
     let change = change(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &change)?;
     change.apply(&repo, &lock, &mut Backups::new(&paths))?;
@@ -390,7 +390,7 @@ fn inspect(
 /// What this add writes itself does not take a name: an add stopped
 /// part-way finishes when it is run again.
 fn check_install_names(
-    home: &Path,
+    paths: &Paths,
     repo: &Canon,
     installs: &[Install],
     upstream: &Upstream,
@@ -405,7 +405,7 @@ fn check_install_names(
             )));
         }
         let check = names::check_new_name(name).and_then(|()| {
-            names::check_not_taken(home, repo, name, |taken| {
+            names::check_not_taken(paths, repo, name, |taken| {
                 ours(repo, install, upstream, taken)
             })
         });

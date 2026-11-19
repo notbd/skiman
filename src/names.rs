@@ -3,13 +3,13 @@
 //! Shared by `new`, `add`, `mv`, `adopt`, `import` and sync's
 //! distributability test.
 
-use std::path::Path;
-
 use crate::canon::Canon;
 use crate::failure::Failure;
-use crate::linked::Linked;
+use crate::linked::{Holder, Linked};
 use crate::lockfile::Lockfile;
 use crate::manifest::Manifest;
+use crate::paths::Paths;
+use crate::sync;
 use crate::tools::TOOLS;
 
 /// Reserved by skiman itself; each agent tool can reserve more (`AgentTool::reserved_names`).
@@ -52,11 +52,10 @@ pub fn check_new_name(name: &str) -> Result<(), Failure> {
 
 /// Refuses (exit 1) a group (`a` or `a/b`) with a folder name that breaks
 /// the name rule, or that names the skill `name` going into it, a skill
-/// folder in the canon or a linked skill (a group folder and a skill never
-/// share a name).
-pub fn check_group(home: &Path, repo: &Canon, group: &str, name: &str) -> Result<(), Failure> {
+/// folder in the canon or a linked skill's name ([`linked_name`]; a group
+/// folder and a skill never share a name).
+pub fn check_group(paths: &Paths, repo: &Canon, group: &str, name: &str) -> Result<(), Failure> {
     let layout = repo.layout()?;
-    let linked = Linked::load(home, repo)?;
     for folder in group.split('/') {
         if !is_valid(folder) {
             return Err(Failure::refused(format!(
@@ -74,10 +73,18 @@ pub fn check_group(home: &Path, repo: &Canon, group: &str, name: &str) -> Result
                 skill.path()
             )));
         }
-        if let Some((it, _)) = linked.described(folder) {
-            return Err(Failure::refused(format!(
-                "`{group}` cannot be a group: `{folder}` is {it}"
-            )));
+        match linked_name(paths, repo, folder)? {
+            Some(LinkedName::Skill(it)) => {
+                return Err(Failure::refused(format!(
+                    "`{group}` cannot be a group: `{folder}` is {it}"
+                )));
+            }
+            Some(LinkedName::Kept(holder)) => {
+                return Err(Failure::refused(format!(
+                    "`{group}` cannot be a group: {holder} `{folder}`"
+                )));
+            }
+            None => {}
         }
     }
     Ok(())
@@ -96,9 +103,10 @@ pub enum Taken {
 /// any group, a group folder, a `skiman.toml` table, a lock entry or an
 /// upstream snapshot, except one that `ours` says is what this command
 /// writes, left by a run of it that stopped part-way (which then finishes);
-/// and a linked skill's name, always (spec "Names and collisions").
+/// and a linked skill's name, always (spec "Names and collisions";
+/// [`linked_name`]).
 pub fn check_not_taken(
-    home: &Path,
+    paths: &Paths,
     repo: &Canon,
     name: &str,
     ours: impl Fn(Taken) -> Result<bool, Failure>,
@@ -122,18 +130,39 @@ pub fn check_not_taken(
     };
     match reason {
         Some(reason) => Err(taken(name, &reason)),
-        None => check_not_linked(home, repo, name),
+        None => check_not_linked(paths, repo, name),
     }
 }
 
 /// Refuses (exit 1) a linked skill's name, as [`check_not_taken`] does:
 /// for a command that finishes a run that stopped part-way, whose own
 /// records may hold the name.
-pub fn check_not_linked(home: &Path, repo: &Canon, name: &str) -> Result<(), Failure> {
-    match Linked::load(home, repo)?.described(name) {
-        Some((it, _)) => Err(taken(name, &format!("it is {it}"))),
+pub fn check_not_linked(paths: &Paths, repo: &Canon, name: &str) -> Result<(), Failure> {
+    match linked_name(paths, repo, name)? {
+        Some(LinkedName::Skill(it)) => Err(taken(name, &format!("it is {it}"))),
+        Some(LinkedName::Kept(holder)) => Err(taken(name, &holder.to_string())),
         None => Ok(()),
     }
+}
+
+/// What holds a name among the linked skills.
+enum LinkedName {
+    /// A linked skill, as [`Linked::described`] says it.
+    Skill(String),
+    /// A link sync keeps while its folder or `SKILL.md` cannot be read
+    /// ([`sync::kept_names`]): the name stays taken, so the canon never
+    /// takes it over once the folder can be read again.
+    Kept(Holder),
+}
+
+fn linked_name(paths: &Paths, repo: &Canon, name: &str) -> Result<Option<LinkedName>, Failure> {
+    let manifest = Manifest::load(repo)?;
+    let linked = Linked::read(paths.home(), repo, &manifest);
+    if let Some((it, _)) = linked.described(name) {
+        return Ok(Some(LinkedName::Skill(it)));
+    }
+    let mut kept = sync::kept_names(paths, repo, &manifest, &linked);
+    Ok(kept.remove(name).map(LinkedName::Kept))
 }
 
 fn taken(name: &str, reason: &str) -> Failure {

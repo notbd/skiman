@@ -431,6 +431,47 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     assert_eq!(contents(&[&company]), before);
 }
 
+/// A settings file that is a link into a registered folder when `init`
+/// reads it and is pointed elsewhere before the write: the guard checks
+/// the file that is written, so nothing is written into the folder.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_settings_file_relinked_before_the_write_is_guarded_where_it_is_written() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    write(company.join("settings.json"), "{}\n");
+    let elsewhere = sandbox.root().join("elsewhere.json");
+    write(&elsewhere, "{}\n");
+    let settings = sandbox.presence_dir(Tool::ClaudeCode).join("settings.json");
+    symlink(company.join("settings.json"), &settings).unwrap();
+    let before = contents(&[&company]);
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "claude-code"])
+        .arg(sandbox.canon())
+        .env("SKIMAN_TEST_HOOK", "session-hooks:guard")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("ln -sfn '{}' '{}'", elsewhere.display(), settings.display()),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("inside linked folder `company`"),
+        "{stderr}"
+    );
+    assert_eq!(contents(&[&company]), before);
+}
+
 /// While `skiman.toml` cannot be parsed no registration is known, so
 /// `init` writes nothing through a `.gitignore` that is a link.
 #[test]

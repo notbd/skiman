@@ -45,11 +45,11 @@ pub enum Request<'a> {
     Ask,
 }
 
-/// Asked right before a settings file (the path in the tool table) is
-/// written: holds the canon lock while the write happens, or says why the
-/// file is left as it is (a settings file that resolves into a linked
-/// folder, exit 3).
-pub type Guard<'a> = &'a dyn Fn(&Path) -> Result<CanonLock, Failure>;
+/// Asked right before a settings file (the path in the tool table, and
+/// the file that is then written) is written: holds the canon lock while
+/// the write happens, or says why the file is left as it is (a file that
+/// resolves into a linked folder, exit 3).
+pub type Guard<'a> = &'a dyn Fn(&Path, &Path) -> Result<CanonLock, Failure>;
 
 /// Applies `request`; `binary` is the recorded binary path. Every settings
 /// file is handled on its own, and the exit is the highest of them.
@@ -336,7 +336,8 @@ fn add(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
 }
 
 fn write_addition(settings: &Settings, shape: HookShape, own: &str, guard: Guard) -> Exit {
-    let _lock = match guard(&settings.path) {
+    crate::test_hook::at("session-hooks", "guard");
+    let _lock = match guard(&settings.path, &settings.real) {
         Ok(lock) => lock,
         Err(failure) => return failure.report(),
     };
@@ -397,7 +398,8 @@ fn remove(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
     if !strip(&mut settings.root, session_hook(tool).shape, own, true) {
         return Exit::Success;
     }
-    let _lock = match guard(&settings.path) {
+    crate::test_hook::at("session-hooks", "guard");
+    let _lock = match guard(&settings.path, &settings.real) {
         Ok(lock) => lock,
         Err(failure) => return failure.report(),
     };

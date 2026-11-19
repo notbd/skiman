@@ -132,10 +132,10 @@ fn install_session_hooks(
         Some(ids) => session_hooks::Request::Add(ids),
         None => session_hooks::Request::Ask,
     };
-    let guard = |file: &Path| -> Result<CanonLock, Failure> {
+    let guard = |file: &Path, written: &Path| -> Result<CanonLock, Failure> {
         let lock = CanonLock::wait(paths, repo)?;
         let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?);
-        match linked.refusal(file, &linked::written_through(file)) {
+        match linked.refusal(file, &linked::written_through(written)) {
             Some(message) => Err(Failure {
                 exit: Exit::NeedsAttention,
                 message: format!("{message}; its session-start hook entry is left as it is"),

@@ -604,11 +604,13 @@ fn init_makes_the_canon_where_it_checked_the_path() {
 
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(
-        stderr.contains(&format!("{}", through.join("next").display()))
-            && stderr.contains("user config is not written"),
-        "{stderr}"
+    let named = format!(
+        "{} now leads to {}, not to {} where the canon was made",
+        through.join("next").display(),
+        company.join("next").canonicalize().unwrap().display(),
+        plain.join("next").canonicalize().unwrap().display()
     );
+    assert!(stderr.contains(&named), "{named}\n{stderr}");
     assert_eq!(contents(&[&company]), before, "{stderr}");
     assert!(plain.join("next/skiman.toml").is_file(), "{stderr}");
     assert_eq!(crate::support::tree(&config), config_before);

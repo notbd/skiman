@@ -1,8 +1,11 @@
 //! Names and collisions (spec "Names and collisions"): tool directories are
 //! flat, so a linked skill's name competes with every other skill's.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use super::{append_manifest, folder};
-use crate::support::{Sandbox, Tool, init, skill_md, write};
+use crate::support::{Sandbox, Tool, init, skill_md, tree, write};
 
 /// Runs `skiman sync` and returns its exit code and stderr.
 fn sync(sandbox: &Sandbox) -> (i32, String) {
@@ -159,4 +162,105 @@ fn a_foreign_link_into_a_registered_folder_gets_no_adopt_hint() {
         other.display()
     );
     assert!(stderr.contains(&line), "{line}\n{stderr}");
+}
+
+/// The canon, every tool directory and the linked folder `company`: a
+/// refused command leaves all of them as they were.
+fn world(sandbox: &Sandbox, company: &std::path::Path) -> Vec<BTreeMap<PathBuf, String>> {
+    let mut world = vec![tree(sandbox.skill_repo()), tree(company)];
+    world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
+    world
+}
+
+/// Runs skiman with `args` and returns its exit code and stderr.
+fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String) {
+    let output = sandbox.skiman().args(args).output().unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// A canon with the linked folder `company` (skills `alpha`, `pdf`) registered and synced.
+fn registered(sandbox: &Sandbox) -> PathBuf {
+    init(sandbox);
+    let company = folder(sandbox, "work/company", &["alpha", "pdf"]);
+    append_manifest(sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    assert_eq!(sync(sandbox).0, 0);
+    company
+}
+
+/// Installs the third-party skill `pdf` from `acme/pdf`.
+fn add_pdf(sandbox: &Sandbox) {
+    let up = sandbox.upstream("acme/pdf");
+    up.write("SKILL.md", skill_md("pdf"));
+    up.commit("v1");
+    let (code, stderr) = run(sandbox, &["add", "acme/pdf", "--yes"]);
+    assert_eq!(code, 3, "the closing sync reports the collision: {stderr}");
+}
+
+/// The commands that act on an existing skill refuse a name that is only
+/// a linked skill, naming the folder it is edited in; nothing changes.
+#[test]
+fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
+    let sandbox = Sandbox::new();
+    let company = registered(&sandbox);
+    let before = world(&sandbox, &company);
+    let named = format!(
+        "alpha is a linked skill: it is edited in {}, in linked folder `company`",
+        company.join("alpha").display()
+    );
+
+    for args in [
+        &["update", "alpha"][..],
+        &["diff", "alpha"],
+        &["remove", "alpha", "--yes"],
+        &["mv", "alpha", "beta"],
+        &["mv", "alpha", "--group", "office"],
+    ] {
+        let (code, stderr) = run(&sandbox, args);
+        assert_eq!(code, 1, "{args:?}: {stderr}");
+        assert!(stderr.contains(&named), "{args:?}: {stderr}");
+        assert_eq!(world(&sandbox, &company), before, "{args:?}");
+    }
+    let (_, stderr) = run(&sandbox, &["remove", "alpha", "--yes"]);
+    assert!(
+        stderr.contains("run `skiman linked remove company`"),
+        "{stderr}"
+    );
+}
+
+/// A canon skill that shares its name with a linked skill holds the name,
+/// so the commands act on it: the collision can be repaired with them.
+#[test]
+fn commands_that_act_on_a_skill_work_on_a_canon_skill_that_collides_with_a_linked_one() {
+    let sandbox = Sandbox::new();
+    registered(&sandbox);
+    add_pdf(&sandbox);
+    let linked = sandbox.skill_repo().join("linked");
+
+    let (code, stderr) = run(&sandbox, &["diff", "pdf"]);
+    assert_eq!(code, 0, "{stderr}");
+    // Each closing sync reports the linked `pdf` that is not distributed.
+    let (code, stderr) = run(&sandbox, &["update", "pdf"]);
+    assert_eq!(code, 3, "{stderr}");
+    assert!(stderr.contains("linked skill pdf in "), "{stderr}");
+    // A move to another group under the same name gives no new name.
+    let (code, stderr) = run(&sandbox, &["mv", "pdf", "--group", "office"]);
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        sandbox
+            .skill_repo()
+            .join("skills/office/pdf/SKILL.md")
+            .is_file()
+    );
+    assert_eq!(
+        target(&sandbox, "pdf"),
+        sandbox.skill_repo().join("skills/office/pdf")
+    );
+
+    let (code, stderr) = run(&sandbox, &["remove", "pdf", "--yes"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!sandbox.skill_repo().join("skills/office/pdf").exists());
+    assert_eq!(target(&sandbox, "pdf"), linked.join("company/pdf"));
 }

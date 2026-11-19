@@ -21,6 +21,7 @@ use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
 use crate::fsutil::read_text;
 use crate::layout::skill_path;
+use crate::linked::Linked;
 use crate::lockfile::{self, Lockfile};
 use crate::manifest::{self, Manifest};
 use crate::names;
@@ -69,6 +70,11 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
             ),
             _ => String::new(),
         };
+        if done.is_empty()
+            && let Some((why, _)) = Linked::load(paths.home(), &repo)?.edited_elsewhere(old)
+        {
+            return Err(Failure::refused(why));
+        }
         return Err(Failure::refused(format!(
             "{} is not a skill folder{done}",
             layout.path(old)

@@ -17,6 +17,7 @@ pub mod path;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::failure::Failure;
 use crate::fsutil::realpath_as_far_as_exists;
 use crate::layout::Layout;
 use crate::manifest::Manifest;
@@ -107,6 +108,47 @@ impl Linked {
             dir: repo.root().join(LINKED_DIR),
             places,
         }
+    }
+
+    /// [`Linked::read`] on the canon's own `skiman.toml`.
+    pub fn load(home: &Path, repo: &SkillRepo) -> Result<Linked, Failure> {
+        Ok(Linked::read(home, repo, &Manifest::load(repo)?))
+    }
+
+    /// The linked skill `name`: the first folder, in id order, that holds a
+    /// skill of that name (one whose `SKILL.md` cannot be probed included),
+    /// and the skill's folder. Distributed or not.
+    pub fn skill(&self, name: &str) -> Option<(&Folder, PathBuf)> {
+        self.folders.iter().find_map(|folder| {
+            let State::Read(contents) = &folder.state else {
+                return None;
+            };
+            let holds = if contents.single {
+                folder.id == name
+            } else {
+                contents
+                    .skills
+                    .iter()
+                    .chain(contents.unprobed.iter().map(|(n, _)| n))
+                    .any(|n| n == name)
+            };
+            holds.then(|| (folder, folder.skill_dir(name)))
+        })
+    }
+
+    /// Why a command that acts on a skill in the canon refuses `name`, which
+    /// is a linked skill (call it when nothing in the canon has the name):
+    /// the folder it is edited in, and the linked folder's id.
+    pub fn edited_elsewhere(&self, name: &str) -> Option<(String, &str)> {
+        let (folder, dir) = self.skill(name)?;
+        Some((
+            format!(
+                "{name} is a linked skill: it is edited in {}, in linked folder `{}`, and skiman never changes it",
+                dir.display(),
+                folder.id
+            ),
+            &folder.id,
+        ))
     }
 
     /// `<canon>/linked/<id>/<name>`, or `<canon>/linked/<id>` for a folder

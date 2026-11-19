@@ -6,7 +6,7 @@
 //! skill. A remove stopped part-way finishes when it is run again.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::Backups;
@@ -14,6 +14,7 @@ use crate::change::{Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::read_text;
+use crate::linked::Linked;
 use crate::lockfile::Lockfile;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
@@ -34,7 +35,7 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = SkillRepo::from_config(&paths)?;
     check_single_name(name)?;
-    let found = Found::read(&repo, name)?;
+    let found = Found::read(paths.home(), &repo, name)?;
     if !yes {
         found.print(&repo);
         if !confirm(&format!("Remove skill {name}? [y/N] "))? {
@@ -43,7 +44,7 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
     }
 
     let lock = RepoLock::wait(&paths, &repo)?;
-    Found::read(&repo, name)?;
+    Found::read(paths.home(), &repo, name)?;
     let skill = repo.layout()?.path(name);
     let change = change(&repo, &skill, name)?;
     validate(&repo, name, &change)?;
@@ -75,9 +76,10 @@ struct Found {
 }
 
 impl Found {
-    /// Refuses (exit 1) a name with neither a folder nor any record, and
-    /// the name of a group folder.
-    fn read(repo: &SkillRepo, name: &str) -> Result<Found, Failure> {
+    /// Refuses (exit 1) a name with neither a folder nor any record (naming
+    /// the linked folder of a linked skill of that name), and the name of a
+    /// group folder.
+    fn read(home: &Path, repo: &SkillRepo, name: &str) -> Result<Found, Failure> {
         let layout = repo.layout()?;
         if layout.find(name).is_none()
             && let Some(group) = layout.group_named(name)
@@ -97,9 +99,15 @@ impl Found {
         let table = Manifest::load(repo)?.skills().contains_key(name);
         let lock_entry = Lockfile::load(repo)?.skill_names().contains(name);
         if folders.is_empty() && !table && !lock_entry {
-            return Err(Failure::refused(format!(
-                "there is no skill {name}: no skills/{name}, no upstream/{name}, no [skills.{name}] table in skiman.toml and no entry in skiman.lock"
-            )));
+            let linked = Linked::load(home, repo)?;
+            return Err(Failure::refused(match linked.edited_elsewhere(name) {
+                Some((why, id)) => format!(
+                    "{why}; to stop distributing linked folder `{id}`, run `skiman linked remove {id}`"
+                ),
+                None => format!(
+                    "there is no skill {name}: no skills/{name}, no upstream/{name}, no [skills.{name}] table in skiman.toml and no entry in skiman.lock"
+                ),
+            }));
         }
         Ok(Found {
             folders,

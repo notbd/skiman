@@ -11,6 +11,7 @@ use similar::TextDiff;
 
 use crate::Exit;
 use crate::failure::{Failure, finish};
+use crate::linked::Linked;
 use crate::manifest::Manifest;
 use crate::names;
 use crate::paths::Paths;
@@ -29,9 +30,11 @@ fn diff(name: &str) -> Result<Exit, Failure> {
     let skill = repo.layout()?.path(name);
     let upstream = format!("upstream/{name}");
     if !names::is_valid(name) || tree.kind(&skill).map_err(io)? != Some(Kind::Dir) {
-        return Err(Failure::refused(format!(
-            "there is no skill folder {skill}"
-        )));
+        let linked = Linked::load(paths.home(), &repo)?;
+        return Err(Failure::refused(match linked.edited_elsewhere(name) {
+            Some((why, _)) => why,
+            None => format!("there is no skill folder {skill}"),
+        }));
     }
     if Manifest::load(&repo)?.source(name).is_none() {
         return Err(Failure::refused(format!(

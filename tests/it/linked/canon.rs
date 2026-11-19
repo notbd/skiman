@@ -48,7 +48,7 @@ fn linked_as_a_link_or_a_file_links_no_linked_skill() {
         assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
         for tool in Tool::ALL {
             assert!(!exists(sandbox.tool_dir(tool).join("alpha")));
-            assert!(exists(sandbox.tool_dir(tool).join("managing-skills")));
+            assert!(exists(sandbox.tool_dir(tool).join("skiman-manual")));
         }
     }
 }

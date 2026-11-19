@@ -14,7 +14,7 @@ use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
 /// Reserved by skiman itself; each agent tool can reserve more (`AgentTool::reserved_names`).
-pub const RESERVED: &[&str] = &["managing-skills"];
+pub const RESERVED: &[&str] = &[crate::skiman_manual::NAME];
 
 pub const MAX_LEN: usize = 64;
 
@@ -29,7 +29,7 @@ pub fn is_valid(name: &str) -> bool {
         })
 }
 
-/// `managing-skills`, any agent tool's reserved name, or a name starting with `.`.
+/// `skiman-manual`, any agent tool's reserved name, or a name starting with `.`.
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with('.')
         || RESERVED.contains(&name)
@@ -40,7 +40,7 @@ pub fn is_reserved(name: &str) -> bool {
 pub fn check_new_name(name: &str) -> Result<(), Failure> {
     if is_reserved(name) {
         return Err(Failure::refused(format!(
-            "`{name}` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)"
+            "`{name}` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)"
         )));
     }
     if !is_valid(name) {

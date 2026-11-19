@@ -1,4 +1,4 @@
-//! The content of the distributed `managing-skills` skill.
+//! The content of the distributed `skiman-manual` skill.
 
 use saphyr::LoadableYamlNode;
 
@@ -11,19 +11,14 @@ fn materialised(sandbox: &Sandbox) -> String {
         .arg(sandbox.skill_repo())
         .assert()
         .code(0);
-    std::fs::read_to_string(
-        sandbox
-            .skill_repo()
-            .join(".skiman/managing-skills/SKILL.md"),
-    )
-    .unwrap()
+    std::fs::read_to_string(sandbox.skill_repo().join(".skiman/skiman-manual/SKILL.md")).unwrap()
 }
 
 #[test]
-fn materialised_managing_skills_passes_every_skill_format_rule() {
+fn materialised_skiman_manual_passes_every_skill_format_rule() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let folder = sandbox.skill_repo().join(".skiman/managing-skills");
+    let folder = sandbox.skill_repo().join(".skiman/skiman-manual");
 
     // Frontmatter starts on line 1 and is valid YAML without duplicate keys.
     let rest = content
@@ -36,7 +31,9 @@ fn materialised_managing_skills_passes_every_skill_format_rule() {
     };
     let name = yaml["name"].as_str().expect("name");
     let description = yaml["description"].as_str().expect("description");
-    assert_eq!(name, "managing-skills", "name equals the folder name");
+    assert_eq!(name, "skiman-manual", "name equals the folder name");
+    assert!(description.starts_with("skiman's manual "), "{description}");
+    assert!(content.is_ascii(), "the manual is plain ASCII English");
     let len = description.chars().count();
     assert!((1..=1024).contains(&len), "description is {len} characters");
 
@@ -54,7 +51,7 @@ fn materialised_managing_skills_passes_every_skill_format_rule() {
 }
 
 #[test]
-fn managing_skills_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
+fn skiman_manual_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
     let repo = sandbox.skill_repo().display().to_string();
@@ -62,14 +59,14 @@ fn managing_skills_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
 
     snapbox::assert_data_eq!(
         content.replace(&repo, "<SKILL_REPO>"),
-        snapbox::file!["snapshots/managing-skills.md"].raw()
+        snapbox::file!["snapshots/skiman-manual.md"].raw()
     );
 }
 
 /// Every everyday operation the ticket lists, with the text that tells an
 /// agent how to do it the canonical way.
 #[test]
-fn managing_skills_covers_every_everyday_operation() {
+fn skiman_manual_covers_every_everyday_operation() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
     let repo = sandbox.skill_repo().display().to_string();

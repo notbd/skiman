@@ -14,11 +14,11 @@ fn a_linked_table_that_is_not_well_formed_breaks_the_rules_in_both_modes() {
     init(&sandbox);
     append_manifest(
         &sandbox,
-        "\n[linked.managing-skills]\npath = \"/w/a\"\n\n[linked.Bad_Id]\npath = \"/w/b\"\n\n[linked.relative]\npath = \"w/c\"\n\n[linked.extra]\npath = \"~/w/d\"\nenabled = true\n\n[linked.empty]\n\n[linked]\nloose = \"x\"\n",
+        "\n[linked.skiman-manual]\npath = \"/w/a\"\n\n[linked.Bad_Id]\npath = \"/w/b\"\n\n[linked.relative]\npath = \"w/c\"\n\n[linked.extra]\npath = \"~/w/d\"\nenabled = true\n\n[linked.empty]\n\n[linked]\nloose = \"x\"\n",
     );
 
     let expected = str![[r#"
-skiman.toml:4: toml-value: `managing-skills` is a reserved name and cannot be a linked folder id
+skiman.toml:4: toml-value: `skiman-manual` is a reserved name and cannot be a linked folder id
 skiman.toml:7: toml-value: `Bad_Id` is not a valid linked folder id: use lowercase letters, digits and single hyphens
 skiman.toml:11: toml-value: `path` in [linked.relative] must be a string: an absolute path or one starting with `~/`
 skiman.toml:15: unknown-key: unknown key `enabled` in [linked.extra] (allowed: path)

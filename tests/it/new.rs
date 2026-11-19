@@ -32,7 +32,7 @@ fn new_creates_a_valid_skill_and_links_it_into_every_installed_tool_directory() 
 created [..]/skill-repo/skills/pdf
 linked [..]/home/.claude/skills/pdf
 linked [..]/home/.gemini/config/skills/pdf
-linked [..]/home/.gemini/config/skills/managing-skills
+linked [..]/home/.gemini/config/skills/skiman-manual
 
 "#]])
         .stderr_eq("");
@@ -141,7 +141,7 @@ fn new_refuses_invalid_and_reserved_names_and_writes_nothing() {
                 "error: `{name}` is not a valid skill name: use 1 to 64 lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)\n"
             ));
     }
-    for name in ["managing-skills", "synced", ".hidden"] {
+    for name in ["skiman-manual", "synced", ".hidden"] {
         sandbox
             .skiman()
             .args(["new", "-d", "d", "--", name])
@@ -149,10 +149,17 @@ fn new_refuses_invalid_and_reserved_names_and_writes_nothing() {
             .code(1)
             .stdout_eq("")
             .stderr_eq(format!(
-                "error: `{name}` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)\n"
+                "error: `{name}` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)\n"
             ));
     }
     assert_eq!(world(&sandbox), before);
+
+    // The manual's name before the rename is an ordinary skill name.
+    sandbox
+        .skiman()
+        .args(["new", "managing-skills", "-d", "d"])
+        .assert()
+        .code(0);
 
     sandbox
         .skiman()

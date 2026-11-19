@@ -117,7 +117,7 @@ Evidence: [docs/project-scope-evidence.md](docs/project-scope-evidence.md).
    ```
 
    `doctor` reports the skill repo and Claude Code as installed, and
-   `~/.claude/skills/managing-skills` is a link into the skill repo.
+   `~/.claude/skills/skiman-manual` is a link into the skill repo.
 
    Or run `skiman init <path> --session-hooks none` on a real skill repo path,
    then `skiman doctor`.

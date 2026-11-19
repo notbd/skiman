@@ -341,7 +341,7 @@ locks, staging, backups under machine state.
 - **Deleted in the mirror**: reported; `adopt <item>` takes it back in,
   `eject` forgets it.
 - **A new item created in the project**: sync does not walk the roots, so
-  it stays unmanaged until `adopt`; `managing-skills` tells agents to adopt
+  it stays unmanaged until `adopt`; `skiman-manual` tells agents to adopt
   what they create, and `doctor` counts candidates not adopted yet.
 - **Project folder moved or deleted**: the old path is "project gone" (once
   per anchor); the moved folder holds real files, unmanaged until
@@ -374,7 +374,7 @@ locks, staging, backups under machine state.
   (row 7), leftover staging folders, mirror paths git ignores, and whether
   `projects/` has uncommitted changes (skiman never commits; mirror changes
   are committed by the user like any other change).
-- `managing-skills`: project items are real files, edit them in place; after
+- `skiman-manual`: project items are real files, edit them in place; after
   creating a project `AGENTS.md`, rules file or project skill under a root,
   run `skiman project adopt <path>`; edits made in the mirror reach the
   project only through `restore`; compare the two sides with `diff` or
@@ -408,7 +408,7 @@ locks, staging, backups under machine state.
   change).
 - Claude Code loading a mirror folder's instructions when a session reads a
   file there (measured; avoided by not opening mirror files, see
-  `managing-skills`).
+  `skiman-manual`).
 
 ## Test plan (`tests/project_*.rs`, sandbox harness)
 

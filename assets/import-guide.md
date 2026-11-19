@@ -72,7 +72,7 @@ wants them grouped. Every skill passes the everyday rules:
   fields are allowed.
 - `name` matches `^[a-z0-9]+(-[a-z0-9]+)*$`, has 1 to 64 characters, equals
   the skill's own folder name, is in one place only whatever its group, and
-  is not reserved (`managing-skills`, `synced`, or any name starting with
+  is not reserved (`skiman-manual`, `synced`, or any name starting with
   `.`). When you rename a skill, rename both.
 - `description` has 1 to 1024 characters.
 - Every entry is a regular file or folder: replace a symlink with the content

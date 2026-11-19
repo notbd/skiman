@@ -204,7 +204,7 @@ fn mv_to_an_invalid_reserved_or_taken_name_exits_1_and_changes_nothing() {
 
     for (new, message) in [
         ("Notes", "is not a valid skill name"),
-        ("managing-skills", "is a reserved skill name"),
+        ("skiman-manual", "is a reserved skill name"),
         (".hidden", "is a reserved skill name"),
         (
             "notes",

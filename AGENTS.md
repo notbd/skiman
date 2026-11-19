@@ -17,4 +17,4 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
 ## Tests
 
 - Run one test module: `cargo test --test it import::`. The filter matches any part of a test's path, so `add::` also runs `project_add::`.
-- Rewrite the two rendered snapshots after an intended change: `SNAPSHOTS=overwrite cargo test --test it -- import_guide:: managing_skills::`.
+- Rewrite the two rendered snapshots after an intended change: `SNAPSHOTS=overwrite cargo test --test it -- import_guide:: skiman_manual::`.

@@ -105,7 +105,7 @@ fn check_one(
         }
     }
     if names::is_reserved(name) {
-        out.insert(Violation::new(dir, None, rule::SKILL_FOLDER, format!("`{name}` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)")));
+        out.insert(Violation::new(dir, None, rule::SKILL_FOLDER, format!("`{name}` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)")));
     } else if !names::is_valid(name) {
         out.insert(Violation::new(dir, None, rule::SKILL_FOLDER, format!("`{name}` is not a valid skill name: use 1 to {} lowercase letters, digits and single hyphens between them", names::MAX_LEN)));
     }

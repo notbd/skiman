@@ -41,7 +41,6 @@ use crate::import_guide;
 use crate::layout::{Layout, Placed};
 use crate::linked::{self, Linked, State};
 use crate::lockfile::{self, LockEntry, Lockfile};
-use crate::managing_skills;
 use crate::manifest::{self, Manifest, SkillEntry, SourceRecord};
 use crate::ownership::{Entry, Ownership};
 use crate::path_safety::{self, Content};
@@ -50,6 +49,7 @@ use crate::project::item::MIRROR_DIR;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
+use crate::skiman_manual;
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
 use crate::staging::Staging;
@@ -865,7 +865,7 @@ impl Plan {
             .filter(|(name, _)| entries.get(*name).is_none_or(|e| e.enabled))
             .map(|(name, skill)| (name.clone(), repo.root().join(&skill.path)))
             .collect();
-        wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
+        wanted.insert(skiman_manual::NAME.to_owned(), repo.manual_dir());
         // No import skill uses a linked skill's name ([`linked_folders`]).
         let layout = Layout::read(&WorkingTree::new(&content.root)).map_err(|e| {
             Failure::operational(format!("cannot read {}: {e}", content.root.display()))

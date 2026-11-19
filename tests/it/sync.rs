@@ -1,4 +1,4 @@
-//! `skiman sync [--hook]`: link distribution, `managing-skills` and the repo lock.
+//! `skiman sync [--hook]`: link distribution, `skiman-manual` and the repo lock.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -59,27 +59,27 @@ fn sync_links_only_distributable_skill_folders() {
 
     for tool in Tool::ALL {
         let names: Vec<_> = tree(sandbox.tool_dir(tool)).into_keys().collect();
-        assert_eq!(names, [std::path::PathBuf::from("managing-skills")]);
+        assert_eq!(names, [std::path::PathBuf::from("skiman-manual")]);
     }
 }
 
 #[test]
-fn managing_skills_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten() {
+fn skiman_manual_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let repo = sandbox.skill_repo();
-    let materialised = repo.join(".skiman/managing-skills");
+    let materialised = repo.join(".skiman/skiman-manual");
 
     for tool in Tool::ALL {
         assert_symlink(
-            sandbox.tool_dir(tool).join("managing-skills"),
+            sandbox.tool_dir(tool).join("skiman-manual"),
             &materialised,
             &materialised,
         );
     }
     let skill_md = materialised.join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md).unwrap();
-    assert!(content.starts_with("---\nname: managing-skills\ndescription: "));
+    assert!(content.starts_with("---\nname: skiman-manual\ndescription: "));
     assert!(
         content.contains(&format!("The skill repo is `{}`.", repo.display())),
         "{content}"
@@ -93,12 +93,10 @@ fn managing_skills_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten
 }
 
 #[test]
-fn managing_skills_is_rewritten_when_its_content_differs() {
+fn skiman_manual_is_rewritten_when_its_content_differs() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skill_md = sandbox
-        .skill_repo()
-        .join(".skiman/managing-skills/SKILL.md");
+    let skill_md = sandbox.skill_repo().join(".skiman/skiman-manual/SKILL.md");
     let content = std::fs::read_to_string(&skill_md).unwrap();
     std::fs::write(&skill_md, "edited").unwrap();
 
@@ -108,10 +106,10 @@ fn managing_skills_is_rewritten_when_its_content_differs() {
 }
 
 #[test]
-fn sync_hook_does_not_write_managing_skills_through_a_linked_folder_and_names_it() {
+fn sync_hook_does_not_write_skiman_manual_through_a_linked_folder_and_names_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let materialised = sandbox.skill_repo().join(".skiman/managing-skills");
+    let materialised = sandbox.skill_repo().join(".skiman/skiman-manual");
     std::fs::remove_dir_all(&materialised).unwrap();
     let foreign = sandbox.root().join("foreign");
     std::fs::create_dir(&foreign).unwrap();
@@ -127,9 +125,86 @@ fn sync_hook_does_not_write_managing_skills_through_a_linked_folder_and_names_it
     );
     assert_eq!(std::fs::read_link(&materialised).unwrap(), foreign);
     assert.code(0).stdout_eq("").stderr_eq(str![[r#"
-error: cannot write [..]/skill-repo/.skiman/managing-skills: [..]/skill-repo/.skiman/managing-skills is not a real folder (a link or a file is in the way)
+error: cannot write [..]/skill-repo/.skiman/skiman-manual: [..]/skill-repo/.skiman/skiman-manual is not a real folder (a link or a file is in the way)
 
 "#]]);
+}
+
+/// The manual as a release before the rename left it: materialised at
+/// `.skiman/managing-skills` and linked under that name in every tool
+/// directory. Returns the old folder.
+fn old_manual(sandbox: &Sandbox) -> std::path::PathBuf {
+    init(sandbox);
+    let local = sandbox.skill_repo().join(".skiman");
+    let old = local.join("managing-skills");
+    std::fs::rename(local.join("skiman-manual"), &old).unwrap();
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        std::fs::remove_file(dir.join("skiman-manual")).unwrap();
+        std::os::unix::fs::symlink(&old, dir.join("managing-skills")).unwrap();
+    }
+    old
+}
+
+/// `skiman doctor` reports no tool-directory entry under either name of
+/// the manual: neither is foreign nor occupied.
+fn assert_doctor_quiet_about_the_manual(sandbox: &Sandbox) {
+    let output = sandbox.skiman().arg("doctor").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    for tool in Tool::ALL {
+        for name in ["managing-skills", "skiman-manual"] {
+            let entry = sandbox.tool_dir(tool).join(name).display().to_string();
+            assert!(!stdout.contains(&entry), "{stdout}");
+        }
+    }
+}
+
+#[test]
+fn the_first_sync_after_the_rename_moves_the_manual_to_skiman_manual() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+
+    sandbox.skiman().arg("sync").assert().code(0).stderr_eq("");
+
+    let manual = sandbox.skill_repo().join(".skiman/skiman-manual");
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert_symlink(dir.join("skiman-manual"), &manual, &manual);
+        assert!(!exists(dir.join("managing-skills")), "{}", tool.tool_dir());
+    }
+    assert!(!exists(&old), "the old manual folder is left");
+    assert_doctor_quiet_about_the_manual(&sandbox);
+}
+
+/// The name `managing-skills` is free again: a linked skill with that name
+/// takes the place of the old manual's link in the same sync.
+#[test]
+fn the_first_sync_after_the_rename_gives_managing_skills_to_a_linked_skill() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    let company = sandbox.home().join("work/company");
+    write_skill(&company, "managing-skills");
+    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{text}\n[linked.company]\npath = \"~/work/company\"\n"),
+    )
+    .unwrap();
+
+    sandbox.skiman().arg("sync").assert().code(0).stderr_eq("");
+
+    let linked = sandbox.skill_repo().join("linked/company/managing-skills");
+    let real = company.join("managing-skills");
+    for tool in Tool::ALL {
+        assert_symlink(
+            sandbox.tool_dir(tool).join("managing-skills"),
+            &linked,
+            &real,
+        );
+    }
+    assert!(!exists(&old), "the old manual folder is left");
+    assert_doctor_quiet_about_the_manual(&sandbox);
 }
 
 #[test]
@@ -585,11 +660,11 @@ fn init_on_a_clone_on_a_second_machine_distributes_every_committed_skill() {
             assert_symlink(second.tool_dir(tool).join(name), &target, &target);
         }
     }
-    let managing = clone.join(".skiman/managing-skills");
+    let manual = clone.join(".skiman/skiman-manual");
     assert_symlink(
-        second.tool_dir(Tool::Codex).join("managing-skills"),
-        &managing,
-        &managing,
+        second.tool_dir(Tool::Codex).join("skiman-manual"),
+        &manual,
+        &manual,
     );
 }
 

@@ -17,7 +17,6 @@ use crate::failure::Failure;
 use crate::fsutil;
 use crate::layout::Layout;
 use crate::linked::{self, Linked};
-use crate::managing_skills;
 use crate::manifest::Manifest;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
@@ -25,6 +24,7 @@ use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::repo_lock::RepoLock;
 use crate::reported::Reported;
+use crate::skiman_manual;
 use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
 use crate::tree::WorkingTree;
@@ -323,7 +323,7 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
     }
 }
 
-/// Materialises `managing-skills` and links each linked folder into the
+/// Materialises `skiman-manual` and links each linked folder into the
 /// canon, then makes every installed tool's tool directory hold an owned
 /// link for every wanted entry, removes owned entries nothing wants, and
 /// removes owned entries from tool directories of known tools that are not
@@ -338,11 +338,10 @@ pub fn reconcile(
 ) -> Report {
     let home = paths.home();
     let mut report = Report::default();
-    if let Err(e) = managing_skills::materialise(repo) {
-        report.errors.push(format!(
-            "cannot write {}: {e}",
-            repo.managing_skills_dir().display()
-        ));
+    if let Err(e) = skiman_manual::materialise(repo) {
+        report
+            .errors
+            .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
     }
     linked::canon::report_folders(linked, &mut report);
     let offered = linked::canon::reconcile(linked, &mut report);
@@ -615,13 +614,13 @@ pub struct Wanted {
     pub name: String,
     /// The exact absolute link target: `<repo realpath>/skills/<n>`,
     /// `<repo realpath>/skills/<group>/<n>`,
-    /// `<repo realpath>/.skiman/managing-skills`, or for a linked skill
+    /// `<repo realpath>/.skiman/skiman-manual`, or for a linked skill
     /// `<repo realpath>/linked/<id>/<n>` or `<repo realpath>/linked/<id>`.
     pub target: PathBuf,
 }
 
 /// Every distributable skill that is not `enabled = false`, in name order,
-/// then `managing-skills`, then the linked skills of the folders `offers`
+/// then `skiman-manual`, then the linked skills of the folders `offers`
 /// accepts that no other skill holds the name of ([`Linked::names`]; `kept`
 /// are the names links of unreadable folders keep). Folders under
 /// `skills/` that are not distributable and linked skills that lose their
@@ -661,8 +660,8 @@ pub fn wanted_entries(
         }
     }
     wanted.push(Wanted {
-        name: managing_skills::NAME.to_owned(),
-        target: repo.managing_skills_dir(),
+        name: skiman_manual::NAME.to_owned(),
+        target: repo.manual_dir(),
     });
     let (offered, collisions) = linked.names(&layout, kept, offers);
     wanted.extend(

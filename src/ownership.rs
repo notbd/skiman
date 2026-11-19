@@ -34,7 +34,8 @@ pub enum Entry {
 #[derive(Debug, Clone)]
 pub struct Ownership {
     skills_dir: PathBuf,
-    managing_skills_dir: PathBuf,
+    manual_dir: PathBuf,
+    retired_manual_dir: PathBuf,
     shared_body: PathBuf,
     /// `<canon>/linked`: links to `<id>/<name>` or `<id>` in it are owned.
     linked_dir: PathBuf,
@@ -73,7 +74,8 @@ impl Ownership {
         }
         Ownership {
             skills_dir: repo.skills_dir(),
-            managing_skills_dir: repo.managing_skills_dir(),
+            manual_dir: repo.manual_dir(),
+            retired_manual_dir: repo.retired_manual_dir(),
             shared_body: repo.shared_body(),
             linked_dir: repo.root().join(crate::linked::LINKED_DIR),
             previous_repo,
@@ -157,7 +159,8 @@ impl Ownership {
             && target
                 .parent()
                 .is_some_and(|d| in_skills(d) || in_linked(d)))
-            || *target == self.managing_skills_dir
+            || *target == self.manual_dir
+            || *target == self.retired_manual_dir
             || self.is_under_previous_repo(target)
     }
 

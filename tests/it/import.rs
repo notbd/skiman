@@ -978,7 +978,7 @@ fn a_local_source_the_takeover_would_move_or_reach_through_refuses_the_import_na
     std::fs::create_dir_all(&stuff).unwrap();
     std::fs::rename(&claude, stuff.join("claude-skills")).unwrap();
     std::os::unix::fs::symlink(stuff.join("claude-skills"), &claude).unwrap();
-    std::fs::remove_file(stuff.join("claude-skills/managing-skills")).unwrap();
+    std::fs::remove_file(stuff.join("claude-skills/skiman-manual")).unwrap();
     write(stuff.join("SKILL.md"), skill_md("pdf"));
     write(
         stuff.join("claude-skills/notes/SKILL.md"),

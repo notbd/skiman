@@ -110,8 +110,14 @@ impl SkillRepo {
         self.local_dir().join("import")
     }
 
-    /// `.skiman/managing-skills`: the materialised `managing-skills` skill.
-    pub fn managing_skills_dir(&self) -> PathBuf {
+    /// `.skiman/skiman-manual`: the materialised manual.
+    pub fn manual_dir(&self) -> PathBuf {
+        self.local_dir().join(crate::skiman_manual::NAME)
+    }
+
+    /// `.skiman/managing-skills`: where releases before the manual's rename
+    /// materialised it. Sync removes it; links to it stay skiman's.
+    pub fn retired_manual_dir(&self) -> PathBuf {
         self.local_dir().join("managing-skills")
     }
 }

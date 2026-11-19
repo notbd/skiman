@@ -48,9 +48,9 @@ fn an_existing_regular_claude_md_stays_byte_identical_and_init_points_to_import(
         .stdout_eq(str![[r#"
 created skill repo [..]/skill-repo
 ...
-linked [..]/home/.claude/skills/managing-skills
-linked [..]/home/.agents/skills/managing-skills
-linked [..]/home/.gemini/config/skills/managing-skills
+linked [..]/home/.claude/skills/skiman-manual
+linked [..]/home/.agents/skills/skiman-manual
+linked [..]/home/.gemini/config/skills/skiman-manual
 linked [..]/home/.codex/AGENTS.md
 linked [..]/home/.gemini/GEMINI.md
 
@@ -161,8 +161,8 @@ fn removing_a_tool_from_tools_enabled_removes_its_owned_instruction_link() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-removed [..]/home/.agents/skills/managing-skills
-removed [..]/home/.gemini/config/skills/managing-skills
+removed [..]/home/.agents/skills/skiman-manual
+removed [..]/home/.gemini/config/skills/skiman-manual
 removed [..]/home/.gemini/GEMINI.md
 
 "#]])
@@ -188,9 +188,9 @@ fn init_with_another_skill_repo_retargets_the_instruction_links() {
         .stdout_eq(str![[r#"
 created skill repo [..]/other-repo
 ...
-retargeted [..]/home/.claude/skills/managing-skills
-retargeted [..]/home/.agents/skills/managing-skills
-retargeted [..]/home/.gemini/config/skills/managing-skills
+retargeted [..]/home/.claude/skills/skiman-manual
+retargeted [..]/home/.agents/skills/skiman-manual
+retargeted [..]/home/.gemini/config/skills/skiman-manual
 retargeted [..]/home/.claude/CLAUDE.md
 retargeted [..]/home/.codex/AGENTS.md
 retargeted [..]/home/.gemini/GEMINI.md

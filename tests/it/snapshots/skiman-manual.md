@@ -1,9 +1,9 @@
 ---
-name: managing-skills
-description: Where the user's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, or to import an existing setup.
+name: skiman-manual
+description: skiman's manual on where this machine's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, or to import an existing setup.
 ---
 
-# Managing skills
+# skiman manual
 
 The skill repo is `<SKILL_REPO>`. It is a git repo that holds the canonical
 copy of every skill and of the global instructions. skiman distributes it to

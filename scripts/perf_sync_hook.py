@@ -72,7 +72,7 @@ def main() -> int:
             sys.stderr.write(setup.stderr.decode())
             return 1
         for rel in TOOL_DIRS:
-            # 100 skills plus managing-skills.
+            # 100 skills plus skiman-manual.
             assert len(list((home / rel).iterdir())) == SKILLS + 1, rel
 
         # The first exec of a freshly built binary includes a one-time macOS

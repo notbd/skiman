@@ -150,7 +150,7 @@ fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
 
 | Skill | Summary | Kind | Source | Installed | Enabled | Modified |
 | --- | --- | --- | --- | --- | --- | --- |
-| managing-skills | How to change skills and global instructions with skiman | built-in | skiman [..] | - | yes | - |
+| skiman-manual | How to change skills and global instructions with skiman | built-in | skiman [..] | - | yes | - |
 
 ## Not managed by skiman (6)
 

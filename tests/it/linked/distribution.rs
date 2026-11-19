@@ -111,7 +111,7 @@ fn a_skill_added_to_or_deleted_from_the_folder_is_followed_by_the_next_sync() {
 fn reserved_invalid_and_dot_entries_are_not_distributed() {
     let sandbox = two_folders();
     let company = sandbox.home().join("work/company");
-    for name in ["managing-skills", "Bad_Name", ".hidden"] {
+    for name in ["skiman-manual", "Bad_Name", ".hidden"] {
         write(
             company.join(name).join("SKILL.md"),
             crate::support::skill_md(name),
@@ -130,7 +130,7 @@ fn reserved_invalid_and_dot_entries_are_not_distributed() {
         .get_output()
         .clone();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    for name in ["managing-skills", "Bad_Name"] {
+    for name in ["skiman-manual", "Bad_Name"] {
         let line = format!(
             "warning: {} linked skill folder is not distributed: ",
             company.join(name).display()
@@ -144,11 +144,8 @@ fn reserved_invalid_and_dot_entries_are_not_distributed() {
             assert!(dir.join(name).join("SKILL.md").is_file(), "{name}");
         }
         assert!(!exists(dir.join("Bad_Name")) && !exists(dir.join(".hidden")));
-        let managing = std::fs::read_link(dir.join("managing-skills")).unwrap();
-        assert!(
-            managing.ends_with(".skiman/managing-skills"),
-            "{managing:?}"
-        );
+        let manual = std::fs::read_link(dir.join("skiman-manual")).unwrap();
+        assert!(manual.ends_with(".skiman/skiman-manual"), "{manual:?}");
     }
 }
 

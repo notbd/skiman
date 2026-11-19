@@ -149,7 +149,7 @@ fn adopt_refuses_every_name_conflict_and_changes_nothing() {
         "locked",
         "snapped",
         "Bad_Name",
-        "managing-skills",
+        "skiman-manual",
         "synced",
     ] {
         write(
@@ -181,7 +181,7 @@ fn adopt_refuses_every_name_conflict_and_changes_nothing() {
         ("locked", "skiman.lock already has an entry for locked"),
         ("snapped", "upstream/snapped already exists"),
         ("Bad_Name", "is not a valid skill name"),
-        ("managing-skills", "is a reserved skill name"),
+        ("skiman-manual", "is a reserved skill name"),
         ("synced", "is a reserved skill name"),
     ] {
         let assert = sandbox

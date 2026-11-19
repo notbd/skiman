@@ -1,5 +1,6 @@
-//! The `managing-skills` skill shipped in the binary. Sync materialises it,
-//! with the skill repo path filled in, into `<repo>/.skiman/managing-skills/`.
+//! skiman's manual, the `skiman-manual` skill shipped in the binary. Sync
+//! materialises it, with the skill repo path filled in, into
+//! `<repo>/.skiman/skiman-manual/`.
 
 use std::io;
 
@@ -7,9 +8,9 @@ use crate::fsutil;
 use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
-pub const NAME: &str = "managing-skills";
+pub const NAME: &str = "skiman-manual";
 
-const TEMPLATE: &str = include_str!("../assets/managing-skills/SKILL.md");
+const TEMPLATE: &str = include_str!("../assets/skiman-manual/SKILL.md");
 const REPO_PLACEHOLDER: &str = "{{SKILL_REPO}}";
 
 /// The `SKILL.md` content for this skill repo.
@@ -44,15 +45,25 @@ fn code_list(items: &[&str]) -> String {
         .join(", ")
 }
 
-/// Writes `.skiman/managing-skills/SKILL.md` only when its content differs.
-/// Returns whether it wrote. Fails without writing when a folder on the way
-/// is not a real folder: a link there could lead the write out of the repo.
+/// Writes `.skiman/skiman-manual/SKILL.md` only when its content differs,
+/// and removes the manual's folder from before its rename (derived content,
+/// so no backup; a link there is removed, not followed). Returns whether it
+/// wrote. Fails without writing when a folder on the way is not a real
+/// folder: a link there could lead the write out of the repo.
 pub fn materialise(repo: &SkillRepo) -> io::Result<bool> {
-    let dir = repo.managing_skills_dir();
+    let dir = repo.manual_dir();
     let file = dir.join("SKILL.md");
     if let Some(why) = fsutil::broken_chain(repo.root(), &file) {
         return Err(io::Error::other(why));
     }
+    let retired = repo.retired_manual_dir();
+    let removed = match std::fs::symlink_metadata(&retired) {
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&retired),
+        Ok(_) => std::fs::remove_file(&retired),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    };
+    removed.map_err(|e| io::Error::other(format!("cannot remove {}: {e}", retired.display())))?;
     let wanted = content(repo);
     if std::fs::read(&file).is_ok_and(|current| current == wanted.as_bytes()) {
         return Ok(false);

@@ -271,17 +271,17 @@ fn skill_folders_with_reserved_invalid_or_too_long_names_are_reported() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let long = "a".repeat(65);
-    for name in ["managing-skills", ".hidden", "Bad_Name", long.as_str()] {
+    for name in ["skiman-manual", ".hidden", "Bad_Name", long.as_str()] {
         write(&sandbox, &format!("skills/{name}/SKILL.md"), skill_md(name));
     }
     // Finder litter next to the skills is ignored.
     write(&sandbox, "skills/.DS_Store", "x");
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
-skills/.hidden: skill-folder: `.hidden` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)
+skills/.hidden: skill-folder: `.hidden` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)
 skills/Bad_Name: skill-folder: `Bad_Name` is not a valid skill name: use 1 to 64 lowercase letters, digits and single hyphens between them
 skills/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: skill-folder: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` is not a valid skill name: use 1 to 64 lowercase letters, digits and single hyphens between them
-skills/managing-skills: skill-folder: `managing-skills` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)
+skills/skiman-manual: skill-folder: `skiman-manual` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)
 
 "#]]);
 }

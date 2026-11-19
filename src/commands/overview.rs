@@ -19,11 +19,11 @@ use crate::failure::{Failure, finish};
 use crate::git;
 use crate::linked::summary::About;
 use crate::linked::{self, Linked, Shown};
-use crate::managing_skills;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
 use crate::rules;
+use crate::skiman_manual;
 use crate::tree::{Kind, Tree, WorkingTree};
 
 const REPO_HEADER: [&str; 7] = [
@@ -41,7 +41,7 @@ const ELSEWHERE_HEADER: [&str; 4] = ["Skill", "Managed by", "Location", "Read by
 const STAND_IN_NOTE: &str = "A summary in italics stands in for a missing `metadata.summary`: \
      it is the first sentence of the skill's description.";
 /// The summary of the skill skiman brings, which has no `[skills.<name>]` table.
-const MANAGING_SKILLS_SUMMARY: &str = "How to change skills and global instructions with skiman";
+const MANUAL_SUMMARY: &str = "How to change skills and global instructions with skiman";
 /// What a day marked `(git)` means.
 const GIT_DAY_NOTE: &str = "An installed day marked (git) is the day of the latest commit that added \
      the skill's SKILL.md to the skill repo, which can be later than the real install; \
@@ -167,8 +167,8 @@ fn overview() -> Result<Exit, Failure> {
     table(
         &REPO_HEADER,
         &[[
-            managing_skills::NAME.to_owned(),
-            MANAGING_SKILLS_SUMMARY.to_owned(),
+            skiman_manual::NAME.to_owned(),
+            MANUAL_SUMMARY.to_owned(),
             "built-in".to_owned(),
             format!("skiman {}", env!("CARGO_PKG_VERSION")),
             "-".to_owned(),

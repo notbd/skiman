@@ -373,7 +373,7 @@ skiman: skill folder [..]/skill-repo/skills/synced is not distributed: its name 
 
     for tool in Tool::ALL {
         let names: Vec<_> = tree(sandbox.tool_dir(tool)).into_keys().collect();
-        assert_eq!(names, [PathBuf::from("managing-skills")]);
+        assert_eq!(names, [PathBuf::from("skiman-manual")]);
     }
 }
 
@@ -433,8 +433,8 @@ fn removing_a_tool_from_tools_enabled_removes_only_skimans_links_from_its_tool_d
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-removed [..]/home/.gemini/config/skills/managing-skills
 removed [..]/home/.gemini/config/skills/pdf
+removed [..]/home/.gemini/config/skills/skiman-manual
 removed [..]/home/.gemini/GEMINI.md
 
 "#]])
@@ -489,15 +489,15 @@ installed git hook [..]/skill-repo/.git/hooks/post-commit
 installed git hook [..]/skill-repo/.git/hooks/post-merge
 installed git hook [..]/skill-repo/.git/hooks/post-checkout
 installed git hook [..]/skill-repo/.git/hooks/post-rewrite
-retargeted [..]/home/.claude/skills/managing-skills
 removed [..]/home/.claude/skills/notes
 retargeted [..]/home/.claude/skills/pdf
-retargeted [..]/home/.agents/skills/managing-skills
+retargeted [..]/home/.claude/skills/skiman-manual
 removed [..]/home/.agents/skills/notes
 retargeted [..]/home/.agents/skills/pdf
-retargeted [..]/home/.gemini/config/skills/managing-skills
+retargeted [..]/home/.agents/skills/skiman-manual
 removed [..]/home/.gemini/config/skills/notes
 retargeted [..]/home/.gemini/config/skills/pdf
+retargeted [..]/home/.gemini/config/skills/skiman-manual
 retargeted [..]/home/.claude/CLAUDE.md
 retargeted [..]/home/.codex/AGENTS.md
 retargeted [..]/home/.gemini/GEMINI.md
@@ -506,11 +506,11 @@ retargeted [..]/home/.gemini/GEMINI.md
         .stderr_eq("");
 
     let pdf = second.join("skills/pdf");
-    let managing = second.join(".skiman/managing-skills");
+    let manual = second.join(".skiman/skiman-manual");
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);
         assert_symlink(dir.join("pdf"), &pdf, &pdf);
-        assert_symlink(dir.join("managing-skills"), &managing, &managing);
+        assert_symlink(dir.join("skiman-manual"), &manual, &manual);
         assert!(std::fs::symlink_metadata(dir.join("notes")).is_err());
     }
     assert_eq!(sync_hook_stdout(&sandbox), "");

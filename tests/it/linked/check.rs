@@ -267,12 +267,16 @@ fn check_warns_about_what_cannot_be_read_without_changing_the_exit() {
 }
 
 /// While a single skill's top-level `SKILL.md` cannot be probed, its
-/// sub-folders are no linked skills for `check` either, as for sync.
+/// sub-folders are no linked skills for `check` either, as for sync, and
+/// their layout problems (an invalid name, a dangling link) are not shown.
 #[test]
 fn check_reads_no_skill_below_a_single_skill_that_cannot_be_probed() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let locked = super::unprobed_single(&sandbox);
+    let solo = sandbox.home().join("work/solo");
+    write(solo.join("Bad_Name/SKILL.md"), skill_md("bad"));
+    std::os::unix::fs::symlink(solo.join("nowhere"), solo.join("dangling")).unwrap();
     let chmod = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
 
     chmod(0o000).unwrap();
@@ -284,5 +288,7 @@ fn check_reads_no_skill_below_a_single_skill_that_cannot_be_probed() {
         stderr.contains("warning: linked skill solo of `solo` is not checked ("),
         "{stderr}"
     );
-    assert!(!stderr.contains("kid"), "{stderr}");
+    for child in ["kid", "Bad_Name", "dangling"] {
+        assert!(!stderr.contains(child), "{child}\n{stderr}");
+    }
 }

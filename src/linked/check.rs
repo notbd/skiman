@@ -44,8 +44,11 @@ pub fn warnings(
         let State::Read(contents) = &folder.state else {
             continue;
         };
-        for (entry, problem) in &contents.problems {
-            out.push(format!("{} {problem}", entry.display()));
+        // A single skill's sub-folders are no part of its layout.
+        if !Linked::is_single(folder, kept) {
+            for (entry, problem) in &contents.problems {
+                out.push(format!("{} {problem}", entry.display()));
+            }
         }
         for name in Linked::skill_names(folder, kept) {
             let path = folder.skill_dir(&name).join("SKILL.md");

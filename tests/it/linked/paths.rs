@@ -94,6 +94,26 @@ fn a_path_through_a_link_in_a_tool_directory_is_refused_with_no_record_left() {
     assert_eq!(linked_add(&sandbox, &company).0, 0);
 }
 
+/// A link whose target goes through a file and `..` names nothing, as the
+/// system refuses to resolve it: `linked add` refuses it and records nothing.
+#[test]
+fn a_path_through_a_file_and_dot_dot_is_not_an_existing_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    folder(&sandbox, "target", &["alpha"]);
+    write(home.join("file"), "x");
+    symlink("file/../target", home.join("alias")).unwrap();
+    let before = records(&sandbox);
+
+    let (code, stderr) = linked_add(&sandbox, &home.join("alias"));
+
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("is not an existing folder"), "{stderr}");
+    assert_eq!(records(&sandbox), before);
+    assert!(!exists(sandbox.canon().join("linked/alias")));
+}
+
 /// Of two registrations that overlap, the one whose id sorts first keeps
 /// working; a table that is not well formed is skipped too (exit 3).
 #[test]

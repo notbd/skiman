@@ -75,8 +75,13 @@ pub fn resolve(path: &Path) -> Resolution {
                     }
                 }
             }
+            // A file where a folder is needed, before a name or a `..`.
+            Ok(meta) if !meta.is_dir() && !rest.is_empty() => Stop::Missing,
             Ok(_) => {
-                done = next;
+                // `done` stays a realpath spelled as on disk, so a path
+                // typed in another case on a volume that ignores case
+                // compares equal to a realpath.
+                done = std::fs::canonicalize(&next).unwrap_or(next);
                 continue;
             }
             Err(e) if is_missing(&e) => Stop::Missing,
@@ -246,6 +251,46 @@ mod tests {
         let resolved = resolve(&root.join("file/sub"));
         assert!(matches!(resolved.stop, Some(Stop::Missing)));
         assert_eq!(resolved.path, root.join("file/sub"));
+    }
+
+    /// Whether the volume under `root` ignores letter case (macOS APFS by default).
+    fn case_insensitive(root: &Path) -> bool {
+        std::fs::create_dir(root.join("A")).unwrap();
+        let yes = root.join("a").exists();
+        std::fs::remove_dir(root.join("A")).unwrap();
+        yes
+    }
+
+    /// Every component that exists comes back spelled as on disk, so a path
+    /// typed in another case compares equal to a realpath.
+    #[test]
+    #[allow(clippy::print_stdout)]
+    fn existing_components_take_their_spelling_on_disk() {
+        let (_temp, root) = root();
+        if !case_insensitive(&root) {
+            println!("skipped: the temporary folder's volume is case-sensitive");
+            return;
+        }
+        std::fs::create_dir_all(root.join("Real/Inner")).unwrap();
+        symlink(root.join("Real"), root.join("Alias")).unwrap();
+
+        assert_eq!(
+            resolve(&root.join("REAL/inner/missing")).path,
+            root.join("Real/Inner/missing")
+        );
+        let through = resolve(&root.join("alias/INNER"));
+        assert_eq!(through.path, root.join("Real/Inner"));
+        assert!(through.stop.is_none());
+    }
+
+    /// A file followed by `..` does not resolve, as the system refuses it.
+    #[test]
+    fn a_file_before_dot_dot_counts_as_missing() {
+        let (_temp, root) = root();
+        std::fs::create_dir(root.join("target")).unwrap();
+        std::fs::write(root.join("file"), "").unwrap();
+        let resolved = resolve(&root.join("file/../target"));
+        assert!(matches!(resolved.stop, Some(Stop::Missing)));
     }
 
     #[test]

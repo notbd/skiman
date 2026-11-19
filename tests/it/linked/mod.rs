@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::support::{Sandbox, skill_md, tree, write};
 
 mod canon;
+mod case;
 mod check;
 mod commands;
 mod display;

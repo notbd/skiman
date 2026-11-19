@@ -55,7 +55,7 @@ pub enum ItemKind {
     Foreign {
         name: String,
         tool: &'static str,
-        into: Into,
+        into: PointsInto,
     },
     /// Sync wants to link skill `name` here, but something it does not own
     /// is there (exit 3); `same` when that is a link to the same folder.
@@ -82,7 +82,7 @@ pub enum ItemKind {
 
 /// Where a foreign entry leads, for the way in sync names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Into {
+pub enum PointsInto {
     /// Anywhere else: `skiman adopt` brings it in.
     Elsewhere,
     /// A link into a folder outside the canon that could be registered:
@@ -107,7 +107,7 @@ pub fn foreign(
     let real = path.canonicalize().ok();
     let into = match &real {
         Some(real) if let Some(folder) = linked.reaches_into(real) => {
-            Into::Linked(folder.id.clone())
+            PointsInto::Linked(folder.id.clone())
         }
         Some(real)
             if meta.is_symlink()
@@ -115,9 +115,9 @@ pub fn foreign(
                 && let Some(parent) = real.parent()
                 && linked.admits(parent) =>
         {
-            Into::Registrable(parent.to_owned())
+            PointsInto::Registrable(parent.to_owned())
         }
-        _ => Into::Elsewhere,
+        _ => PointsInto::Elsewhere,
     };
     ItemKind::Foreign {
         name: name.to_string_lossy().into_owned(),
@@ -163,20 +163,20 @@ impl Item {
             ItemKind::Foreign {
                 name,
                 tool,
-                into: Into::Elsewhere,
+                into: PointsInto::Elsewhere,
             } => format!(
                 "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`"
             ),
             ItemKind::Foreign {
                 name,
                 tool,
-                into: Into::Registrable(folder),
+                into: PointsInto::Registrable(folder),
             } => format!(
                 "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`, or register the folder it is in with `skiman linked add {}`",
                 crate::project::shell_quote(&folder.display().to_string())
             ),
             ItemKind::Foreign {
-                into: Into::Linked(id),
+                into: PointsInto::Linked(id),
                 ..
             } => format!(
                 "{path} is a link into linked folder `{id}`, which skiman already distributes; delete it once nothing needs it"

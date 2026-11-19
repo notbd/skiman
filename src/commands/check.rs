@@ -46,7 +46,7 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         Box::new(WorkingTree::new(repo.root()))
     };
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let mut report = rules::check_repo(tree.as_ref()).map_err(io)?;
+    let mut report = rules::check_canon(tree.as_ref()).map_err(io)?;
     let tracked = linked_in_index(tree.as_ref(), staged, repo.root());
     report.violations.extend(tracked.iter().cloned());
     report.violations.sort();

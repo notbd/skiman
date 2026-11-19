@@ -1226,7 +1226,7 @@ fn setup_with_source(sandbox: &Sandbox, local: bool) -> PathBuf {
 }
 
 /// Runs the import with `run` at the step between the confirmation and the
-/// repo lock: it must refuse (exit 1) before anything is written or moved,
+/// canon lock: it must refuse (exit 1) before anything is written or moved,
 /// making no backup folder after `run`, and no backup folder may hold a link
 /// into the canon.
 #[track_caller]

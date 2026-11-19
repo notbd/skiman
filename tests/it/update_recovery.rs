@@ -1,5 +1,5 @@
 //! `skiman update` failure paths (spec Merge semantics; ADR 0005): a change
-//! between the merge and the repo lock, or while the update writes; a write
+//! between the merge and the canon lock, or while the update writes; a write
 //! that fails or is killed part-way, which the same command finishes when
 //! it runs again; an unwritable backups directory.
 //!
@@ -64,7 +64,7 @@ fn update_with_hook(
         .assert()
 }
 
-/// update fetches and merges without the repo lock: another command run
+/// update fetches and merges without the canon lock: another command run
 /// meanwhile goes through, and the merge leaves no folder behind.
 #[test]
 #[cfg_attr(
@@ -93,7 +93,7 @@ fn another_command_runs_while_update_fetches_and_merges() {
     assert_eq!(std::fs::read_dir(sandbox.tmp_dir()).unwrap().count(), 0);
 }
 
-/// Under the repo lock, update checks what it decided from: a change to
+/// Under the canon lock, update checks what it decided from: a change to
 /// `skills/<name>` or the skill's records after the merge refuses the skill
 /// (exit 1), and nothing of it changes. Another update of the same skill
 /// meanwhile changes its lock entry: its result stays. `upstream/<name>` is
@@ -208,7 +208,7 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_canon_lock() {
     sandbox.skiman().arg("check").assert().code(0);
 }
 
-/// update reads a skill's records without the repo lock. Read while another
+/// update reads a skill's records without the canon lock. Read while another
 /// command was writing them (here: the lock entry not there yet), they
 /// refuse the skill; read again under the lock they are whole, so the
 /// update goes on with them instead of sending the user to repair a canon
@@ -244,7 +244,7 @@ fn records_read_while_another_command_writes_them_are_read_again_under_the_lock(
 
 const NEWER: &str = "edit made during the update\n";
 
-/// An edit to `skills/<name>` between the repo lock and the swap stops the
+/// An edit to `skills/<name>` between the canon lock and the swap stops the
 /// skill before it is touched: exit 4, nothing written, the newer edit kept.
 #[test]
 #[cfg_attr(

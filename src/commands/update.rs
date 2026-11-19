@@ -4,12 +4,12 @@
 //! Each skill is processed on its own; the exit code is the highest per-skill
 //! result. Ends with a sync; never commits.
 //!
-//! First, without the repo lock, so that fetching (network, credentials)
+//! First, without the canon lock, so that fetching (network, credentials)
 //! holds up no other command, each skill is [`prepare`]d:
 //!
 //! 1. [`Current::read`]: the skill's records; refusals before anything is
 //!    fetched (unresolved conflicts, a missing record or skill folder).
-//!    A refusal is read again under the repo lock, as another command may
+//!    A refusal is read again under the canon lock, as another command may
 //!    have been writing the skill; only a refusal there stands.
 //! 2. [`fetch`]: the version to move to (spec Version semantics) and its
 //!    snapshot; a local folder is re-read.
@@ -24,7 +24,7 @@
 //! `--dry-run` stops there: [`plan`] checks each merge against the rules
 //! and [`report`] prints what an update would do, conflicts included; it
 //! writes nothing in the canon or the tool directories (fetching
-//! fills the upstream cache). Otherwise, under the repo lock,
+//! fills the upstream cache). Otherwise, under the canon lock,
 //! [`update_to`] refuses a skill whose records or `skills/<name>` changed
 //! since, and writes the others ([`crate::change`]) in this order:
 //! `skills/<name>` (when the merge changes it), `source.ref` and `ref_kind`,
@@ -68,7 +68,7 @@ pub fn run(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Exit {
     finish(update(names, git_ref, dry_run))
 }
 
-/// What every skill's write shares, under the repo lock.
+/// What every skill's write shares, under the canon lock.
 struct Context<'a> {
     home: &'a Path,
     repo: &'a Canon,
@@ -485,7 +485,7 @@ fn report(skill: &Prepared, plan: &Plan, up_to_date: bool, dry_run: bool) {
     print_not_installed(&skill.target.snapshot, "  ");
 }
 
-/// Under the repo lock: refuses the skill (exit 1) when its records or
+/// Under the canon lock: refuses the skill (exit 1) when its records or
 /// `skills/<name>` changed since [`prepare`] read them, then writes what
 /// its [`Plan`] does not find in place. `NeedsAttention` when conflicts
 /// were written.

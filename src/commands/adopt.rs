@@ -1,7 +1,7 @@
 //! `skiman adopt <name> --from <tool id> [--group <group>]`: bring a foreign
 //! skill in as an own skill, in a group folder when one is given. Reads the entry's resolved content (path safety applies, `.git/`
 //! is not skill content), rewrites the `name` line when needed, locates and
-//! reads the entry again under the repo lock (refusing when the copy
+//! reads the entry again under the canon lock (refusing when the copy
 //! changed), checks the whole copy as new content, stages it under
 //! `.skiman/tmp/`, renames it to `skills/[<group>/]<name>`, moves the original entry
 //! (a link as a link) to `backups/<timestamp>/<tool id>/<name>`, then syncs,

@@ -453,7 +453,7 @@ fn adopt_refuses_an_entry_that_is_missing_owned_or_not_a_skill() {
 }
 
 /// `skiman adopt notes --from claude-code --yes` running the shell command
-/// `run` between the confirmation and the repo lock (debug builds only).
+/// `run` between the confirmation and the canon lock (debug builds only).
 fn adopt_with_hook(sandbox: &Sandbox, run: &str) -> std::process::Output {
     sandbox
         .skiman()

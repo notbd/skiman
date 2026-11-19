@@ -1,4 +1,4 @@
-//! `skiman sync [--hook]`: link distribution, `skiman-manual` and the repo lock.
+//! `skiman sync [--hook]`: link distribution, `skiman-manual` and the canon lock.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;

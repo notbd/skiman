@@ -1,5 +1,5 @@
 //! Reading `skiman.lock` (spec Data formats). Not to be confused with the
-//! repo lock `.skiman/lock` (`canon_lock`).
+//! canon lock `.skiman/lock` (`canon_lock`).
 
 use std::collections::BTreeSet;
 

@@ -11,9 +11,9 @@
 //! ([`progress`]; if so, nothing is fetched or written and the run goes on
 //! at the takeover plan) -> fetch every declared source -> phase 2
 //! on the complete result (Consistency, secrets, everything) -> what the
-//! canon holds against what the import writes ([`repo_todo`]) ->
+//! canon holds against what the import writes ([`canon_todo`]) ->
 //! takeover plan, no special file in it and no local source it moves away
-//! -> preview -> confirm -> repo lock, checks again (the takeover plan
+//! -> preview -> confirm -> canon lock, checks again (the takeover plan
 //! included) -> tmp leftovers -> `skiman.toml`, `skiman.lock`, `upstream/`,
 //! `instructions/shared.md`, `skills/`, each not yet in place ([`crate::change`],
 //! which backs up what it replaces) -> originals in tool directories and instruction
@@ -75,7 +75,7 @@ pub fn run(folder: Option<&Path>, yes: bool) -> Exit {
 const SHARED_BODY: &str = "instructions/shared.md";
 
 /// The canon's files the import replaces whole, each a regular file.
-const REPO_FILES: [&str; 3] = [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY];
+const CANON_FILES: [&str; 3] = [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY];
 
 fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let terminal = has_terminal();
@@ -97,8 +97,8 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     // Which way the run goes, the skiman.toml it writes and the one its
     // takeover follows come from these as first read: under the lock, any
     // byte of them that changed refuses.
-    let repo_files = || REPO_FILES.map(|rel| std::fs::read(repo.root().join(rel)).ok());
-    let first_read = repo_files();
+    let canon_files = || CANON_FILES.map(|rel| std::fs::read(repo.root().join(rel)).ok());
+    let first_read = canon_files();
     let repo_manifest = std::fs::read_to_string(repo.manifest_file()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Failure::refused(format!(
@@ -117,7 +117,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
 
     let content = Folder::read(&folder)?;
     refuse_linked_tables(&content)?;
-    let manifest_text = merge_repo_config(&content.manifest, &repo_manifest)?;
+    let manifest_text = merge_canon_config(&content.manifest, &repo_manifest)?;
     check_folder(&content, &manifest_text)?;
     let folder_manifest = Manifest::parse(&manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
@@ -147,7 +147,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
                 thirds,
             };
             let change = candidate.change();
-            let todo = repo_todo(&repo, &candidate, &change)?;
+            let todo = canon_todo(&repo, &candidate, &change)?;
             (Some((candidate, change, todo)), manifest)
         }
     };
@@ -183,9 +183,9 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     test_hook::at("import", "confirmed");
     let lock = CanonLock::wait(&paths, &repo)?;
     refuse_irregular_files(&repo)?;
-    let changed = repo_files() != first_read
+    let changed = canon_files() != first_read
         || match &writes {
-            Some((candidate, change, todo)) => repo_todo(&repo, candidate, change)? != *todo,
+            Some((candidate, change, todo)) => canon_todo(&repo, candidate, change)? != *todo,
             None => progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done,
         };
     if changed {
@@ -405,25 +405,25 @@ impl Folder {
 }
 
 /// The folder's `skiman.toml` with the canon's configuration merged in
-/// by key, since an import brings skills and instructions only: the repo's
-/// `[tools]` when the folder has none, each repo `[projects.<id>]` and
-/// `[linked.<id>]` whose id the folder does not define (it defines no
-/// `[linked]`: [`refuse_linked_tables`]), and each repo `[[secrets.allow]]`
+/// by key, since an import brings skills and instructions only: the
+/// canon's `[tools]` when the folder has none, each canon `[projects.<id>]`
+/// and `[linked.<id>]` whose id the folder does not define (it defines no
+/// `[linked]`: [`refuse_linked_tables`]), and each canon `[[secrets.allow]]`
 /// entry for a path below `projects/` the folder does not hold already.
 /// Tables written inline count on both sides. The folder's own text keeps
-/// its bytes, except an inline `projects` or `secrets` table that takes repo
-/// entries, which becomes a standard table.
-fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
+/// its bytes, except an inline `projects` or `secrets` table that takes
+/// canon entries, which becomes a standard table.
+fn merge_canon_config(folder: &str, canon: &str) -> Result<String, Failure> {
     let Ok(mut doc) = folder.parse::<DocumentMut>() else {
         // The rules report the syntax error with its line.
         return Ok(folder.to_owned());
     };
-    let Ok(repo) = repo.parse::<DocumentMut>() else {
+    let Ok(canon) = canon.parse::<DocumentMut>() else {
         return Ok(folder.to_owned());
     };
     let mut merged = false;
     if !doc.contains_key("tools")
-        && let Some(mut tools) = repo.get("tools").cloned()
+        && let Some(mut tools) = canon.get("tools").cloned()
     {
         if let Some(table) = tools.as_table_mut() {
             table.set_position(Some(-1));
@@ -432,7 +432,7 @@ fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
         merged = true;
     }
     for key in ["projects", "linked"] {
-        let Some(tables) = repo.get(key).and_then(Item::as_table_like) else {
+        let Some(tables) = canon.get(key).and_then(Item::as_table_like) else {
             continue;
         };
         for (id, table) in tables.iter() {
@@ -446,7 +446,7 @@ fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
         }
     }
     let mirror = format!("{MIRROR_DIR}/");
-    let allows = repo
+    let allows = canon
         .get("secrets")
         .and_then(|secrets| secrets.get("allow"))
         .and_then(Item::as_array_of_tables);
@@ -823,7 +823,7 @@ struct Move {
 }
 
 /// What happens to the tool directories and instruction locations. Worked
-/// out again under the repo lock: a plan that differs from the previewed
+/// out again under the canon lock: a plan that differs from the previewed
 /// one refuses the run.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Plan {
@@ -1302,7 +1302,7 @@ fn names_in(dir: &Path) -> Result<Vec<String>, Failure> {
 /// the canon is there but is not a regular file.
 fn refuse_irregular_files(repo: &Canon) -> Result<(), Failure> {
     let mut lines = Vec::new();
-    for rel in REPO_FILES {
+    for rel in CANON_FILES {
         let path = repo.root().join(rel);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if !meta.is_file() => lines.push(format!("  {rel} is not a regular file")),
@@ -1333,7 +1333,7 @@ enum Progress {
     /// The repo holds everything but the import's shared body, and its own
     /// holds more than whitespace.
     OtherSharedBody,
-    /// Anything else: the whole import is worked out again ([`repo_todo`]).
+    /// Anything else: the whole import is worked out again ([`canon_todo`]).
     NotDone,
 }
 
@@ -1423,7 +1423,7 @@ fn other_shared_body(repo: &Canon, folder: &Path) -> Failure {
 /// `skills/<name>` that differs from the folder's, anything in `skills/`,
 /// `upstream/` or `skiman.lock` that the import does not write, and a piece
 /// that is not a regular file or folder.
-fn repo_todo(repo: &Canon, candidate: &Candidate, change: &Change) -> Result<Vec<Held>, Failure> {
+fn canon_todo(repo: &Canon, candidate: &Candidate, change: &Change) -> Result<Vec<Held>, Failure> {
     let todo = change.held(repo.root())?;
     let mut lines = Vec::new();
     for ((rel, want), held) in change.pieces.iter().zip(&todo) {
@@ -1499,7 +1499,7 @@ fn take_over(plan: &Plan, backups: &mut Backups, moved: &mut bool) -> Result<(),
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Move, merge_repo_config, move_order, resolution};
+    use super::{Move, merge_canon_config, move_order, resolution};
 
     fn entry(path: &str, hops: &[&str]) -> Move {
         Move {
@@ -1668,12 +1668,12 @@ mod tests {
                 tools.to_owned(),
             ),
         ];
-        for (repo, folder) in cases {
-            let merged = merge_repo_config(&folder, &repo).unwrap();
+        for (canon, folder) in cases {
+            let merged = merge_canon_config(&folder, &canon).unwrap();
             assert_eq!(
-                merge_repo_config(&folder, &merged).unwrap(),
+                merge_canon_config(&folder, &merged).unwrap(),
                 merged,
-                "repo:\n{repo}\nfolder:\n{folder}"
+                "canon:\n{canon}\nfolder:\n{folder}"
             );
         }
     }

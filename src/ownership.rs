@@ -41,7 +41,7 @@ pub struct Ownership {
     linked_dir: PathBuf,
     /// Realpath of the canon `init` just switched away from: links under
     /// it are owned for that one sync.
-    previous_repo: Option<PathBuf>,
+    previous_canon: Option<PathBuf>,
     /// Managed-elsewhere paths, as realpath of the parent plus the file name.
     managed_paths: Vec<PathBuf>,
     /// Realpaths of the directories whose content is managed elsewhere.
@@ -51,7 +51,7 @@ pub struct Ownership {
 }
 
 impl Ownership {
-    pub fn new(paths: &Paths, repo: &Canon, previous_repo: Option<PathBuf>) -> Ownership {
+    pub fn new(paths: &Paths, repo: &Canon, previous_canon: Option<PathBuf>) -> Ownership {
         let home = paths.home();
         let mut managed_paths = Vec::new();
         let mut managed_under = Vec::new();
@@ -78,7 +78,7 @@ impl Ownership {
             retired_manual_dir: repo.retired_manual_dir(),
             shared_body: repo.shared_body(),
             linked_dir: repo.linked_dir(),
-            previous_repo,
+            previous_canon,
             managed_paths,
             managed_under,
             backups: paths.state_dir().join("backups"),
@@ -133,7 +133,7 @@ impl Ownership {
             return None;
         }
         let target = link_target(location.parent()?, location)?;
-        (target == self.shared_body || self.is_under_previous_repo(&target)).then_some(target)
+        (target == self.shared_body || self.is_under_previous_canon(&target)).then_some(target)
     }
 
     /// A link to `skills/<name>`, or to `skills/<x>/<name>` (`<x>` one or
@@ -161,11 +161,11 @@ impl Ownership {
                 .is_some_and(|d| in_skills(d) || in_linked(d)))
             || *target == self.manual_dir
             || *target == self.retired_manual_dir
-            || self.is_under_previous_repo(target)
+            || self.is_under_previous_canon(target)
     }
 
-    fn is_under_previous_repo(&self, target: &Path) -> bool {
-        self.previous_repo
+    fn is_under_previous_canon(&self, target: &Path) -> bool {
+        self.previous_canon
             .as_ref()
             .is_some_and(|previous| target.starts_with(previous))
     }

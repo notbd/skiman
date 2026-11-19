@@ -112,7 +112,7 @@ impl Change {
     }
 
     /// [`Change::write`] over what the canon holds now (read under the
-    /// repo lock), printing each line; whether anything went to the backup.
+    /// canon lock), printing each line; whether anything went to the backup.
     pub fn apply(
         &self,
         repo: &Canon,
@@ -126,7 +126,7 @@ impl Change {
         Ok(self.backs_up(&held))
     }
 
-    /// Writes, in order, each piece that `held` (read under the repo lock)
+    /// Writes, in order, each piece that `held` (read under the canon lock)
     /// does not show as wanted, staged in a folder of its own below
     /// `.skiman/tmp/` (tmp leftovers go to `backups` first); refuses, before
     /// anything is written, a piece that is [`Held::WrongType`]. A piece that

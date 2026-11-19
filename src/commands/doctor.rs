@@ -7,7 +7,7 @@
 //! conflicts, leftover records and tmp leftovers.
 //!
 //! Read-only: never writes to the canon, its `.skiman/` folder, tool
-//! directories or machine state, and never takes the repo lock for longer
+//! directories or machine state, and never takes the canon lock for longer
 //! than a test of whether it is held. Exit 0 whenever the diagnosis ran.
 
 use std::collections::{BTreeMap, BTreeSet};

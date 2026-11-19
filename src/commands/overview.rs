@@ -26,7 +26,7 @@ use crate::rules;
 use crate::skiman_manual;
 use crate::tree::{Kind, Tree, WorkingTree};
 
-const REPO_HEADER: [&str; 7] = [
+const CANON_HEADER: [&str; 7] = [
     "Skill",
     "Summary",
     "Kind",
@@ -116,11 +116,11 @@ fn overview() -> Result<Exit, Failure> {
     out!("## In the canon ({count})\n");
     for (group, rows) in &groups {
         out!("### {} ({})\n", cell(group), rows.len());
-        table(&REPO_HEADER, rows);
+        table(&CANON_HEADER, rows);
     }
     if !ungrouped.is_empty() {
         out!("### No group ({})\n", ungrouped.len());
-        table(&REPO_HEADER, &ungrouped);
+        table(&CANON_HEADER, &ungrouped);
     }
     let linked = Linked::read(paths.home(), &repo, &manifest);
     for (folder, shown) in linked.shown(&repo.layout()?) {
@@ -165,7 +165,7 @@ fn overview() -> Result<Exit, Failure> {
     }
     out!("## Built into skiman (1)\n");
     table(
-        &REPO_HEADER,
+        &CANON_HEADER,
         &[[
             skiman_manual::NAME.to_owned(),
             MANUAL_SUMMARY.to_owned(),

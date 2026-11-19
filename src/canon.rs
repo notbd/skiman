@@ -97,7 +97,7 @@ impl Canon {
         self.root.join(".skiman")
     }
 
-    /// `.skiman/lock`: the repo lock file.
+    /// `.skiman/lock`: the canon lock file.
     pub fn canon_lock_file(&self) -> PathBuf {
         self.local_dir().join("lock")
     }

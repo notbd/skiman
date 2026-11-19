@@ -1,7 +1,7 @@
 //! Distribution: the reconcile loop behind `skiman sync`, `sync --hook` and
 //! the sync every write command ends with (spec Distribution and refresh).
 //!
-//! [`run`] is the entry point; it needs the repo lock. [`reconcile`] computes
+//! [`run`] is the entry point; it needs the canon lock. [`reconcile`] computes
 //! and applies the changes and returns a [`Report`] of what it did and found.
 //! Only owned entries and instruction locations are created, retargeted or
 //! removed (spec Ownership);
@@ -251,7 +251,7 @@ pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exi
     run_with(paths, repo, lock, output, None, &[]).0
 }
 
-/// [`run`], also returning the report. `previous_repo` is the realpath of the
+/// [`run`], also returning the report. `previous_canon` is the realpath of the
 /// canon `init` just switched away from: its links count as owned.
 /// Nothing is said about `failed`, paths whose write the command just
 /// reported failing: the way out sync names for them is that same write.
@@ -260,13 +260,13 @@ pub fn run_with(
     repo: &Canon,
     _lock: &CanonLock,
     output: Output,
-    previous_repo: Option<PathBuf>,
+    previous_canon: Option<PathBuf>,
     failed: &[PathBuf],
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
             let linked = Linked::read(paths.home(), repo, &manifest);
-            let mut report = reconcile(paths, repo, &manifest, &linked, previous_repo, output);
+            let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
             crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);
             report
         }
@@ -333,7 +333,7 @@ pub fn reconcile(
     repo: &Canon,
     manifest: &Manifest,
     linked: &Linked,
-    previous_repo: Option<PathBuf>,
+    previous_canon: Option<PathBuf>,
     output: Output,
 ) -> Report {
     let home = paths.home();
@@ -345,7 +345,7 @@ pub fn reconcile(
     }
     linked::canon::report_folders(linked, &mut report);
     let offered = linked::canon::reconcile(linked, &mut report);
-    let ownership = Ownership::new(paths, repo, previous_repo);
+    let ownership = Ownership::new(paths, repo, previous_canon);
     let kept = kept_names(home, manifest, linked, &ownership);
     let offers = |id: &str| offered.contains(id);
     let wanted = match wanted_entries(repo, manifest, linked, &kept, &offers, &mut report) {

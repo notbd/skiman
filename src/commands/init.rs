@@ -75,7 +75,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
             repo.root().join(".gitignore").display()
         );
     }
-    let previous_repo = UserConfig::load(&paths)
+    let previous_canon = UserConfig::load(&paths)
         .ok()
         .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
         .filter(|previous| previous != repo.root());
@@ -86,9 +86,9 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     }
     .save(&paths)?;
     install_git_hooks(&repo, &binary)?;
-    let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo, &[]);
+    let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_canon, &[]);
     hint_not_owned(&report, &repo);
-    // Settings files are outside the canon: do not hold the repo lock
+    // Settings files are outside the canon: do not hold the canon lock
     // while the preview waits for an answer; each write takes it again.
     drop(lock);
     let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks);

@@ -794,7 +794,7 @@ fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
     let commit = up.commit("v2");
     let files = "  modified forms.md\n  modified reference.md  [executable]\n  added scripts/fill.sh  [script, executable]\n";
     let before = tree(sandbox.canon());
-    // A dry run writes nothing, so it does not need the repo lock.
+    // A dry run writes nothing, so it does not need the canon lock.
     let lock = std::fs::File::open(sandbox.canon().join(".skiman/lock")).unwrap();
     lock.lock().unwrap();
 

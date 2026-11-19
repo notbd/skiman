@@ -66,13 +66,13 @@ impl CanonLock {
 
     /// The machine lock alone, for `init`: it decides what to do with a folder
     /// and which canon the user config names, so two inits wait for
-    /// each other; [`CanonLock::of_init`] adds the repo lock.
+    /// each other; [`CanonLock::of_init`] adds the canon lock.
     pub fn machine(paths: &Paths) -> Result<File, Failure> {
         let deadline = Instant::now() + WAIT;
         Ok(take(&paths.state_dir().join("lock"), &Acquire::Wait, deadline)?.expect("waits"))
     }
 
-    /// `init`'s locks: `machine` from [`CanonLock::machine`], then the repo lock.
+    /// `init`'s locks: `machine` from [`CanonLock::machine`], then the canon lock.
     pub fn of_init(machine: File, repo: &Canon) -> Result<CanonLock, Failure> {
         let deadline = Instant::now() + WAIT;
         let file = take(&repo.canon_lock_file(), &Acquire::Wait, deadline)?.expect("waits");
@@ -82,7 +82,7 @@ impl CanonLock {
         })
     }
 
-    /// Whether another process holds the repo lock. Read-only: a missing
+    /// Whether another process holds the canon lock. Read-only: a missing
     /// lock file means nobody holds it, and it is never created; when the
     /// lock is free, it is taken and released at once.
     pub fn is_held(repo: &Canon) -> std::io::Result<bool> {

@@ -54,7 +54,7 @@ impl Staging {
     /// The command's staging in `.skiman/tmp/`, after its tmp leftovers went
     /// to `backups` ([`Staging::open`]), printing where; a leftover that
     /// cannot be moved stops the command with exit 4. Call while holding the
-    /// repo lock, after every check that can refuse the command without
+    /// canon lock, after every check that can refuse the command without
     /// writing (exit 1 or 2), and before its first write.
     pub fn begin(
         repo: &Canon,

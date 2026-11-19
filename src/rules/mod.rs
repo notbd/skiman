@@ -3,7 +3,7 @@
 //!
 //! Entry points:
 //! - [`check_all`]: every rule on a whole [`Tree`] (the warnings a write
-//!   command prints); [`check_repo`] adds the unused secret exemptions
+//!   command prints); [`check_canon`] adds the unused secret exemptions
 //!   (`skiman check`).
 //! - [`check`]: only what a [`Scope`] names: what a write command writes.
 //! - [`allow_hint`]: the ready-to-paste `[[secrets.allow]]` entries for the
@@ -336,7 +336,7 @@ impl fmt::Display for UnusedAllow {
 }
 
 /// Every rule on everything in `tree`, plus the unused secret exemptions.
-pub fn check_repo(tree: &dyn Tree) -> io::Result<Report> {
+pub fn check_canon(tree: &dyn Tree) -> io::Result<Report> {
     let (violations, found, records) = run(tree, &Scope::all(tree)?)?;
     let unused_allows = records
         .secret_allows()

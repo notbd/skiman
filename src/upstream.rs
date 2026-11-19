@@ -1,7 +1,7 @@
 //! Reading a third-party skill's upstream (spec Source fetching): a commit
 //! a ref names, fetched into the cache, or a local folder as it is now; then
 //! the files of one folder of it. `add`, `update` and `import` read every
-//! upstream through here, before they take the repo lock, as fetching may
+//! upstream through here, before they take the canon lock, as fetching may
 //! use the network and ask for credentials.
 
 use std::path::{Path, PathBuf};

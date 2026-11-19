@@ -100,3 +100,41 @@ fn a_settings_file_linked_into_the_previous_canons_folder_gets_no_hook_entry() {
     assert_eq!(read(company.join("settings.json")), "{}\n");
     assert_eq!(contents(&[&company]), before);
 }
+
+/// Switching canons cleans up skiman's own links into the previous
+/// canon's `linked/`, which have the two exact shapes, and leaves a link
+/// of any other shape there alone, as a sync of that canon would.
+#[test]
+fn a_switch_removes_only_skimans_own_links_into_the_previous_canons_linked_folder() {
+    let sandbox = Sandbox::new();
+    first(&sandbox);
+    let linked = sandbox.canon().join("linked");
+    folder(&sandbox, "work/solo", &[]);
+    write(
+        sandbox.home().join("work/solo/SKILL.md"),
+        crate::support::skill_md("solo"),
+    );
+    append_manifest(&sandbox, "\n[linked.solo]\npath = \"~/work/solo\"\n");
+    assert_eq!(sync(&sandbox).0, 0);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    symlink(linked.join("company/alpha"), claude.join("alias")).unwrap();
+    symlink(linked.join("solo"), claude.join("other")).unwrap();
+
+    let output = init_at(&sandbox, &sandbox.root().join("second"), "none");
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for name in ["alpha", "solo"] {
+        assert!(
+            std::fs::symlink_metadata(claude.join(name)).is_err(),
+            "{name}\n{stderr}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_link(claude.join("alias")).unwrap(),
+        linked.join("company/alpha")
+    );
+    assert_eq!(
+        std::fs::read_link(claude.join("other")).unwrap(),
+        linked.join("solo")
+    );
+}

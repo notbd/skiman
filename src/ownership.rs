@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::backup::noted_copy;
 use crate::canon::Canon;
 use crate::fsutil::absolute_lexical;
+use crate::linked::LINKED_DIR;
 use crate::paths::Paths;
 use crate::tools::{ManagedElsewhere, PLUGIN_MARKER, TOOLS};
 
@@ -40,7 +41,8 @@ pub struct Ownership {
     /// `<canon>/linked`: links to `<id>/<name>` or `<id>` in it are owned.
     linked_dir: PathBuf,
     /// Realpath of the canon `init` just switched away from: links under
-    /// it are owned for that one sync.
+    /// it are owned for that one sync, those under its `linked/` only in
+    /// the two shapes of a linked skill's link.
     previous_canon: Option<PathBuf>,
     /// Managed-elsewhere paths, as realpath of the parent plus the file name.
     managed_paths: Vec<PathBuf>,
@@ -127,7 +129,8 @@ impl Ownership {
 
     /// The normalised target of the instruction location `location` (the
     /// realpath of its parent joined with the file name) when skiman owns it:
-    /// a symlink to the shared body, or under the previous canon.
+    /// a symlink to the shared body, or under the previous canon outside
+    /// its `linked/`.
     pub fn owned_instruction(&self, location: &Path, meta: &Metadata) -> Option<PathBuf> {
         if !meta.is_symlink() {
             return None;
@@ -152,9 +155,14 @@ impl Ownership {
                     .all(|d| std::fs::symlink_metadata(d.join("SKILL.md")).is_err())
         };
         // A linked skill: `linked/<id>/<name>`, or `linked/<id>` for a
-        // folder that is one skill (ADR 0010).
-        let in_linked =
-            |dir: &Path| dir == self.linked_dir || dir.parent() == Some(self.linked_dir.as_path());
+        // folder that is one skill (ADR 0010), in this canon or the previous one.
+        let previous_linked = self.previous_canon.as_ref().map(|p| p.join(LINKED_DIR));
+        let in_linked = |dir: &Path| {
+            [Some(&self.linked_dir), previous_linked.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|linked| dir == linked || dir.parent() == Some(linked.as_path()))
+        };
         (target.file_name() == Some(name)
             && target
                 .parent()
@@ -164,10 +172,11 @@ impl Ownership {
             || self.is_under_previous_canon(target)
     }
 
+    /// Under the previous canon, outside its `linked/`.
     fn is_under_previous_canon(&self, target: &Path) -> bool {
-        self.previous_canon
-            .as_ref()
-            .is_some_and(|previous| target.starts_with(previous))
+        self.previous_canon.as_ref().is_some_and(|previous| {
+            target.starts_with(previous) && !target.starts_with(previous.join(LINKED_DIR))
+        })
     }
 }
 

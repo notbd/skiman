@@ -21,7 +21,7 @@ use crate::failure::{Failure, finish};
 use crate::git;
 use crate::git_hooks::{self, Hook};
 use crate::layout::Layout;
-use crate::linked::Linked;
+use crate::linked::{self, Linked, State};
 use crate::manifest::Manifest;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -61,6 +61,7 @@ fn doctor() -> Result<Exit, Failure> {
     report_session_hooks(home, &installed, &root, &config.binary);
     report_tools(home, &manifest, &installed);
     let linked = Linked::read(home, &repo, &manifest);
+    report_linked(&repo, &linked).map_err(io)?;
     report_entries(&paths, &repo, &manifest, &linked, &installed).map_err(io)?;
     report_instruction_locations(&paths, &repo, &installed);
     report_skill_repo(&repo).map_err(io)?;
@@ -191,6 +192,54 @@ fn alias_note<'a>(
             String::new()
         }
     }
+}
+
+/// Each linked folder, and what sync would report about it: missing,
+/// breaking a rule, not read, a skill that loses its name, and `linked/`
+/// or `linked/<id>` in the way. Nothing when no folder is registered.
+fn report_linked(repo: &SkillRepo, linked: &Linked) -> std::io::Result<()> {
+    for folder in &linked.folders {
+        let id = &folder.id;
+        let path = folder
+            .path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        match &folder.state {
+            State::Read(contents) => {
+                let skills = if contents.single {
+                    "one skill".to_owned()
+                } else if contents.skills.is_empty() {
+                    "no skills yet".to_owned()
+                } else {
+                    format!("skills: {}", contents.skills.join(", "))
+                };
+                out!("linked folder {id}: {path} ({skills})");
+                for (entry, problem) in &contents.problems {
+                    out!("{} {problem}", entry.display());
+                }
+                for (name, why) in &contents.unprobed {
+                    out!("linked skill {name} of `{id}` cannot be checked: {why}");
+                }
+            }
+            State::Missing => out!(
+                "linked folder {id}: {path} is not on this machine, so its skills are not distributed"
+            ),
+            State::Broken(why) => {
+                out!("linked folder {id}: skipped: {why}; fix [linked.{id}] in skiman.toml")
+            }
+            State::Unreadable(why) => out!("linked folder {id}: cannot be read: {why}"),
+        }
+    }
+    let layout = Layout::read(&WorkingTree::new(repo.root()))?;
+    let (_, collisions) = linked.names(&layout, &BTreeMap::new(), |_| true);
+    for collision in collisions {
+        out!("{}", collision.message());
+    }
+    for problem in linked::canon::problems(linked) {
+        out!("{problem}");
+    }
+    Ok(())
 }
 
 /// Every tool-directory entry skiman does not own, classified like sync

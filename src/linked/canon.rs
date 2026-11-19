@@ -51,20 +51,9 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
             return confirmed;
         }
         Ok(meta) if !meta.is_dir() => {
-            let what = if meta.is_symlink() {
-                "a link"
-            } else {
-                "a file"
-            };
-            report.items.push(note(
-                dir,
-                dir.to_owned(),
-                "blocked",
-                format!(
-                    "{} is {what}, not a folder, so no linked skill is linked; move it away, then run `skiman sync`",
-                    dir.display()
-                ),
-            ));
+            report
+                .items
+                .push(note(dir, dir.to_owned(), "blocked", blocked(dir, &meta)));
             return confirmed;
         }
         Ok(_) => {}
@@ -92,10 +81,7 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
         }
         if !is_link {
             let message = match want {
-                Some(_) => format!(
-                    "{} is not a link, so linked folder `{text}` is not linked; move it away, then run `skiman sync`",
-                    path.display()
-                ),
+                Some(_) => occupied(&path, &text),
                 None => format!(
                     "{} is not a link skiman made, so skiman leaves it alone; move it out of {}",
                     path.display(),
@@ -152,6 +138,47 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
         }
     }
     confirmed
+}
+
+/// The problems `<canon>/linked` has for distribution, read-only (for
+/// `doctor`): `linked` that is not a folder, and a `linked/<id>` of a read
+/// folder that is not a link.
+pub fn problems(linked: &Linked) -> Vec<String> {
+    let dir = linked.dir();
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if !meta.is_dir() => return vec![blocked(dir, &meta)],
+        Ok(_) => {}
+        Err(_) => return Vec::new(),
+    }
+    linked
+        .folders
+        .iter()
+        .filter(|f| matches!(f.state, State::Read(_)))
+        .map(|f| (dir.join(&f.id), &f.id))
+        .filter(|(path, _)| std::fs::symlink_metadata(path).is_ok_and(|m| !m.is_symlink()))
+        .map(|(path, id)| occupied(&path, id))
+        .collect()
+}
+
+/// `<canon>/linked` (`dir`, metadata `meta`) is a link or a file.
+fn blocked(dir: &Path, meta: &std::fs::Metadata) -> String {
+    let what = if meta.is_symlink() {
+        "a link"
+    } else {
+        "a file"
+    };
+    format!(
+        "{} is {what}, not a folder, so no linked skill is linked; move it away, then run `skiman sync`",
+        dir.display()
+    )
+}
+
+/// `<canon>/linked/<id>` (`path`) is not a link.
+fn occupied(path: &Path, id: &str) -> String {
+    format!(
+        "{} is not a link, so linked folder `{id}` is not linked; move it away, then run `skiman sync`",
+        path.display()
+    )
 }
 
 /// Reports every linked folder that is not read in full: one that breaks a

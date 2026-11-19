@@ -11,6 +11,7 @@ mod canon;
 mod check;
 mod commands;
 mod distribution;
+mod doctor;
 mod gitignore;
 mod missing;
 mod names;

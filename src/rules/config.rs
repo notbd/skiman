@@ -144,19 +144,19 @@ struct Section<'a> {
 impl Section<'_> {
     /// Reports every key not in `allowed`.
     fn unknown_keys(&self, allowed: &[&str], out: &mut BTreeSet<Violation>) {
-        self.unknown_keys_besides(allowed, &[], out);
+        self.unknown_keys_besides(allowed, None, out);
     }
 
-    /// [`Self::unknown_keys`], leaving out the `retired` keys, which the
-    /// caller reports with their own message.
+    /// [`Self::unknown_keys`], leaving out the `retired` key, which the
+    /// caller reports with its own message.
     fn unknown_keys_besides(
         &self,
         allowed: &[&str],
-        retired: &[&str],
+        retired: Option<&str>,
         out: &mut BTreeSet<Violation>,
     ) {
         for (key, _) in self.table.iter() {
-            if !allowed.contains(&key) && !retired.contains(&key) {
+            if !allowed.contains(&key) && retired != Some(key) {
                 let line = self.file.key_line(self.table, key, self.line);
                 out.insert(self.file.violation(
                     line,
@@ -459,7 +459,7 @@ impl Records {
                 ));
             }
             let section = m.section(table, format!("[projects.{id}]"), line);
-            section.unknown_keys_besides(&["path", "exclude"], &[RETIRED_SKILL_DIRS], out);
+            section.unknown_keys_besides(&["path", "exclude"], Some(RETIRED_SKILL_DIRS), out);
             if table.contains_key(RETIRED_SKILL_DIRS) {
                 out.insert(m.violation(
                     m.key_line(table, RETIRED_SKILL_DIRS, line),

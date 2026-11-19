@@ -145,6 +145,25 @@ fingerprint = "sha256:<hash of the matched text>"
   a path under `projects/`. A project root the folder adds must not contain,
   or lie inside, a root the skill repo already has; otherwise skiman skips
   both roots, and `skiman sync` and `skiman doctor` name them.
+- skiman keeps the skill repo's linked folders too: every `[linked.<id>]`
+  table stays. The import folder's `skiman.toml` holds no `[linked]` table
+  (see "Skill folders kept elsewhere").
+
+## Skill folders kept elsewhere
+
+Some skills have their home outside the tool directories: a folder the user
+edits in another place, such as a folder of company skills in a work
+directory, which a script or the user linked into the tool directories. Do
+not copy such a folder's skills into `skills/`. Tell the user which folders
+you left out; after the import, the user registers each one with
+`skiman linked add <path>`, and skiman distributes its skills from where
+they are, as linked skills. The links to it in the tool directories go to
+the backup like any foreign entry; the folder itself stays as it is.
+
+The skill repo may already register linked folders (`skiman list` shows their
+skills, of kind `linked`). Their skills are distributed already: leave them
+out too, and give no skill in the import folder a linked skill's name. While
+a registered linked folder cannot be read, the import refuses.
 
 ## Choose the canonical copy among diverged copies
 
@@ -279,8 +298,8 @@ import writes it, writes the rest, and moves each original still in place.
   than the shared body (a skill removed from it, a skill added to the import
   folder or a source's `url` or `path` changed there, `skiman.lock`
   deleted), a run is a full import again: the shared body and `skiman.toml`
-  become the import folder's (the skill repo's project roots stay), the old
-  ones go to the backup, and the preview shows it.
+  become the import folder's (the skill repo's project roots and linked
+  folders stay), the old ones go to the backup, and the preview shows it.
 - A skill in the skill repo that changed since the import wrote it (for
   example through its link in a session), or one the import folder does not
   hold, is refused and named with the two ways to go on.

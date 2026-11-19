@@ -533,6 +533,68 @@ fn init_refuses_a_folder_inside_a_linked_folder_of_the_current_canon() {
     }
 }
 
+/// `init` into the target of a valid child link of a registered folder
+/// refuses before creating anything: that target is protected like the
+/// registered path.
+#[test]
+fn init_refuses_the_target_of_a_child_link() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &[]);
+    let outside = sandbox.home().join("work/outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink("../outside", company.join("side")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let config = sandbox.config_home().join("skiman");
+    let before = (contents(&[&outside]), crate::support::tree(&config));
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&outside)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("linked folder `company`"), "{stderr}");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    assert_eq!(
+        (contents(&[&outside]), crate::support::tree(&config)),
+        before
+    );
+}
+
+/// `init` reads the registrations under the lock: a folder registered
+/// while it waited for the lock is protected too.
+#[test]
+fn init_refuses_a_folder_registered_while_it_waited_for_the_lock() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let other = folder(&sandbox, "work/other", &[]);
+    let manifest = sandbox.canon().join("skiman.toml");
+    let register = format!(
+        "printf '\\n[linked.other]\\npath = \"%s\"\\n' '{}' >> '{}'",
+        other.display(),
+        manifest.display()
+    );
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&other)
+        .env("SKIMAN_TEST_HOOK", "init:locking")
+        .env("SKIMAN_TEST_HOOK_RUN", register)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(read(&manifest).contains("[linked.other]"));
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("linked folder `other`"), "{stderr}");
+    assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
+}
+
 /// A new registration that would take the place of an existing one (its id
 /// sorts first and the folders overlap) is refused: the existing one keeps
 /// working and nothing is written.

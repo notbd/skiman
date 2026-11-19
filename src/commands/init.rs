@@ -23,6 +23,7 @@ use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::session_hooks;
 use crate::sync::{self, ItemKind, Output};
+use crate::test_hook;
 use crate::tools::TOOLS;
 
 /// `session_hooks` is the validated `--session-hooks` value (`none` or tool ids).
@@ -51,8 +52,11 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current directory: {e}")))?;
     let path = absolute_lexical(&cwd, path);
-    refuse_inside_linked(&paths, &path)?;
+    test_hook::at("init", "locking");
     let machine = CanonLock::machine(&paths)?;
+    // Every command that changes `skiman.toml` holds the machine lock while
+    // it does, so the registrations read now hold until init is done.
+    refuse_inside_linked(&paths, &path)?;
     let target = inspect(&path)?;
 
     if target == Target::Create {
@@ -97,8 +101,9 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
 }
 
 /// Refuses a canon at `path` when `path` is, or lies inside, a linked
-/// folder of the current canon: making it would write there. With no
-/// current canon whose `skiman.toml` can be read, no folder is known.
+/// folder of the current canon or the target of one of its valid child
+/// links: making it would write there. With no current canon whose
+/// `skiman.toml` can be read, no folder is known.
 fn refuse_inside_linked(paths: &Paths, path: &Path) -> Result<(), Failure> {
     let Some(linked) = UserConfig::load(paths)
         .and_then(|config| Canon::at(&config.repo))
@@ -107,14 +112,23 @@ fn refuse_inside_linked(paths: &Paths, path: &Path) -> Result<(), Failure> {
     else {
         return Ok(());
     };
-    match linked.holding(&linked::written_through(path)) {
-        Some(folder) => Err(Failure::refused(format!(
+    let target = linked::written_through(path);
+    if let Some(folder) = linked.holding(&target) {
+        return Err(Failure::refused(format!(
             "{} is, or lies inside, linked folder `{id}` of the current canon, where skiman writes nothing; to make a canon there, first run `skiman linked remove {id}`",
             path.display(),
             id = folder.id
-        ))),
-        None => Ok(()),
+        )));
     }
+    if let Some((folder, child)) = linked.led_to(&target) {
+        return Err(Failure::refused(format!(
+            "{} is, or lies inside, {}, where a link in linked folder `{id}` of the current canon leads, so skiman writes nothing there; to make a canon there, first remove that link or run `skiman linked remove {id}`",
+            path.display(),
+            child.display(),
+            id = folder.id
+        )));
+    }
+    Ok(())
 }
 
 /// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag

@@ -234,6 +234,20 @@ impl Linked {
             .find(|f| f.registered().any(|p| target.starts_with(p)))
     }
 
+    /// The registered folder one of whose valid child targets `target` (a
+    /// realpath, or resolved as far as it goes) is or lies inside, and that
+    /// target.
+    pub fn led_to(&self, target: &Path) -> Option<(&Folder, &Path)> {
+        self.folders.iter().find_map(|folder| match &folder.state {
+            State::Read(contents) => contents
+                .targets
+                .iter()
+                .find(|t| target.starts_with(t))
+                .map(|t| (folder, t.as_path())),
+            _ => None,
+        })
+    }
+
     /// The first folder that cannot be read: while one cannot, its child
     /// links are unknown, so nothing may be moved out of it and project
     /// items are not changed.

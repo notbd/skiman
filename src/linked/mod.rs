@@ -294,15 +294,7 @@ impl Linked {
         let mut wanted = Vec::new();
         let mut collisions = Vec::new();
         for folder in self.folders.iter().filter(|f| offers(&f.id)) {
-            let State::Read(contents) = &folder.state else {
-                continue;
-            };
-            let names: Vec<String> = if contents.single {
-                vec![folder.id.clone()]
-            } else {
-                contents.skills.clone()
-            };
-            for name in names {
+            for name in folder.skill_names() {
                 let holder = if let Some(placed) = layout.find(&name) {
                     Some(Holder::Canon(placed.path()))
                 } else if let Some(id) = kept.get(&name) {
@@ -326,6 +318,49 @@ impl Linked {
         }
         (wanted, collisions)
     }
+
+    /// What `list` and `overview` show of each folder, in id order (spec
+    /// "Display"): one not on this machine, or the linked skills of one that
+    /// was read, each with the skill that holds its name when it lost a
+    /// collision ([`Linked::names`] with every folder taking part). A folder
+    /// that breaks a rule or cannot be read is left out: sync, `check` and
+    /// `doctor` report it.
+    pub fn shown(&self, layout: &Layout) -> Vec<(&Folder, Shown)> {
+        let (_, collisions) = self.names(layout, &BTreeMap::new(), |_| true);
+        self.folders
+            .iter()
+            .filter_map(|folder| {
+                let shown = match &folder.state {
+                    State::Missing => Shown::Missing,
+                    State::Read(_) => Shown::Skills(
+                        folder
+                            .skill_names()
+                            .into_iter()
+                            .map(|name| {
+                                let lost = collisions
+                                    .iter()
+                                    .find(|c| c.id == folder.id && c.name == name)
+                                    .map(|c| c.holder.clone());
+                                (name, lost)
+                            })
+                            .collect(),
+                    ),
+                    State::Broken(_) | State::Unreadable(_) => return None,
+                };
+                Some((folder, shown))
+            })
+            .collect()
+    }
+}
+
+/// A linked folder as `list` and `overview` show it.
+#[derive(Debug, Clone)]
+pub enum Shown {
+    /// Nothing is at its path on this machine.
+    Missing,
+    /// Its linked skills in name order, each with what holds its name when
+    /// it is not distributed.
+    Skills(Vec<(String, Option<Holder>)>),
 }
 
 /// A linked skill that is not distributed: another skill holds its name.
@@ -347,6 +382,19 @@ pub enum Holder {
     Linked(String),
     /// A link kept for a linked folder that cannot be read now.
     Kept(String),
+}
+
+impl Holder {
+    /// The holder, as `list` and `overview` show it.
+    pub fn holds_the_name(&self) -> String {
+        match self {
+            Holder::Canon(path) => format!("{path} holds the name"),
+            Holder::Linked(id) => format!("linked folder `{id}` holds the name"),
+            Holder::Kept(id) => {
+                format!("linked folder `{id}`, which cannot be read now, keeps the name")
+            }
+        }
+    }
 }
 
 impl Collision {
@@ -435,6 +483,16 @@ impl Folder {
         [self.path.as_ref(), self.resolved.as_ref()]
             .into_iter()
             .flatten()
+    }
+
+    /// The names of its linked skills, in name order: the id for a folder
+    /// that is one skill; none for a folder that was not read.
+    pub fn skill_names(&self) -> Vec<String> {
+        match &self.state {
+            State::Read(contents) if contents.single => vec![self.id.clone()],
+            State::Read(contents) => contents.skills.clone(),
+            _ => Vec::new(),
+        }
     }
 
     /// The folder of the linked skill `name`: the registered path itself

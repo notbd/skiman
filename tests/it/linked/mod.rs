@@ -10,6 +10,7 @@ use crate::support::{Sandbox, skill_md, tree, write};
 mod canon;
 mod check;
 mod commands;
+mod display;
 mod distribution;
 mod doctor;
 mod gitignore;

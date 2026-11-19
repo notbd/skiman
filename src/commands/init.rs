@@ -68,13 +68,17 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
                 .ok()
                 .map(|l| (current, l))
         });
-    refuse_inside_linked(current.as_ref(), &path)?;
-    let target = inspect(&path)?;
+    // Where the canon lands, checked once and made there: never through a
+    // link on `path` again, which may change meanwhile.
+    let place = linked::written_through(&path);
+    refuse_inside_linked(current.as_ref(), &path, &place)?;
+    test_hook::at("init", "checked");
+    let target = inspect(&place)?;
 
     if target == Target::Create {
-        git_init(&path)?;
+        git_init(&place)?;
     }
-    let repo = Canon::at(&path)?;
+    let repo = Canon::at(&place)?;
     let lock = CanonLock::of_init(machine, &repo)?;
     // The canon switched away from: its registrations guard every write
     // below, and its links are owned for the closing sync.
@@ -119,17 +123,21 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     Ok(guarded.combine(exit).combine(hooks))
 }
 
-/// Refuses a canon at `path` when `path` is, or lies inside, a linked
+/// Refuses a canon at `path`, which lands at `target`
+/// ([`linked::written_through`]), when `target` is, or lies inside, a linked
 /// folder of the current canon or the target of one of its valid child
 /// links: making it would write there. While a folder cannot be read its
 /// child links are unknown, so any new canon is refused; the current canon
 /// itself is reused. With no current canon whose `skiman.toml` can be
 /// read, no folder is known.
-fn refuse_inside_linked(current: Option<&(Canon, Linked)>, path: &Path) -> Result<(), Failure> {
+fn refuse_inside_linked(
+    current: Option<&(Canon, Linked)>,
+    path: &Path,
+    target: &Path,
+) -> Result<(), Failure> {
     let Some((current, linked)) = current else {
         return Ok(());
     };
-    let target = linked::written_through(path);
     if let Some(folder) = linked.unreadable()
         && target != current.root()
     {
@@ -139,14 +147,14 @@ fn refuse_inside_linked(current: Option<&(Canon, Linked)>, path: &Path) -> Resul
             path.display()
         )));
     }
-    if let Some(folder) = linked.holding(&target) {
+    if let Some(folder) = linked.holding(target) {
         return Err(Failure::refused(format!(
             "{} is, or lies inside, linked folder `{id}` of the current canon, where skiman writes nothing; to make a canon there, first run `skiman linked remove {id}`",
             path.display(),
             id = folder.id
         )));
     }
-    if let Some((folder, child)) = linked.led_to(&target) {
+    if let Some((folder, child)) = linked.led_to(target) {
         let place = if target == child {
             "is where".to_owned()
         } else {

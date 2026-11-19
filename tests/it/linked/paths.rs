@@ -564,6 +564,44 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     assert_eq!(contents(&[&company]), before);
 }
 
+/// A new canon path through a link to a plain folder, re-pointed into a
+/// registered folder right after `init` checked it: the canon is made
+/// where it was checked, and the registered folder stays byte for byte.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn init_makes_the_canon_where_it_checked_the_path() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    let plain = sandbox.home().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let through = sandbox.home().join("through");
+    symlink(&plain, &through).unwrap();
+    let before = contents(&[&company]);
+    let run = format!(
+        "rm '{0}' && ln -s '{1}' '{0}'",
+        through.display(),
+        company.display()
+    );
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(through.join("next"))
+        .env("SKIMAN_TEST_HOOK", "init:checked")
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(contents(&[&company]), before, "{stderr}");
+    assert!(plain.join("next/skiman.toml").is_file(), "{stderr}");
+}
+
 /// A settings file that is a link into a registered folder when `init`
 /// reads it and is pointed elsewhere before the write: the guard checks
 /// the file that is written, so nothing is written into the folder.

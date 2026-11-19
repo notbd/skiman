@@ -10,7 +10,7 @@ use std::io;
 use std::os::unix::fs::{DirEntryExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
-use super::path::{self, Listings, Stop, resolve_in};
+use super::path::{self, Checked, Listings, Stop, resolve_in};
 use crate::fsutil::absolute_lexical;
 use crate::names;
 
@@ -44,11 +44,12 @@ pub struct Contents {
 pub type ReadError = String;
 
 /// Reads the folder at `dir`, the registered path's realpath.
-/// `breaks` says why a child link's path breaks the path rules; child
-/// links resolve with `listings`, which gets this folder's listing too.
+/// `breaks` says why a path of a child link, or a link met on the way to
+/// it, breaks the path rules; child links resolve with `listings`, which
+/// gets this folder's listing too.
 pub fn read(
     dir: &Path,
-    breaks: &dyn Fn(&Path) -> Option<String>,
+    breaks: &dyn Fn(&Path, Checked) -> Option<String>,
     listings: &mut Listings,
 ) -> Result<Contents, ReadError> {
     let cannot = |what: &Path, e: io::Error| format!("cannot read {}: {e}", what.display());
@@ -133,7 +134,7 @@ pub fn read(
 fn child_link(
     entry: &Path,
     target: &Path,
-    breaks: &dyn Fn(&Path) -> Option<String>,
+    breaks: &dyn Fn(&Path, Checked) -> Option<String>,
     listings: &mut Listings,
     contents: &mut Contents,
 ) -> bool {
@@ -153,11 +154,14 @@ fn child_link(
     // every link met after the entry itself (which is in the linked
     // folder), and the realpath.
     let written = absolute_lexical(Path::new("/"), target);
-    let broken = [&written]
-        .into_iter()
-        .chain(&resolved.links)
-        .chain([&resolved.path])
-        .find_map(|path| breaks(path));
+    let broken = breaks(&written, Checked::Path)
+        .or_else(|| {
+            resolved
+                .links
+                .iter()
+                .find_map(|link| breaks(link, Checked::Link))
+        })
+        .or_else(|| breaks(&resolved.path, Checked::Path));
     if let Some(why) = broken {
         contents.problems.push((
             entry.to_owned(),

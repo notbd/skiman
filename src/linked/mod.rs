@@ -29,7 +29,7 @@ use crate::manifest::Manifest;
 use crate::names;
 use crate::project::root::expand;
 pub use folder::Contents;
-use path::{Listings, Places, Stop, overlap, resolve, resolve_in};
+use path::{Checked, Listings, Places, Stop, overlap, resolve, resolve_in};
 pub use summary::stand_in;
 
 /// The canon's folder of links to linked folders.
@@ -109,7 +109,7 @@ impl Linked {
         for i in 0..folders.len() {
             if let State::Read(_) = folders[i].state {
                 let own = &folders[i];
-                let breaks = |p: &Path| child_breaks(p, own, &folders, &places);
+                let breaks = |p: &Path, checked| child_breaks(p, checked, own, &folders, &places);
                 // The realpath: the first link met under it is the entry itself.
                 let dir = own.resolved.as_ref().expect("a read folder resolved");
                 let state = match folder::read(dir, &breaks, &mut listings) {
@@ -537,7 +537,7 @@ fn check(
     if let Some((link, why)) = resolved
         .links
         .iter()
-        .find_map(|link| places.breaks(link).map(|why| (link, why)))
+        .find_map(|link| places.breaks_link(link).map(|why| (link, why)))
     {
         return State::Broken(format!(
             "{} goes through the link {}: {why}{hint}",
@@ -622,8 +622,18 @@ impl Folder {
 
 /// Why a child link of `own` that resolves through `path` breaks the path
 /// rules: the rules on any registered path, and it must neither overlap
-/// another linked folder nor be or contain its own.
-fn child_breaks(path: &Path, own: &Folder, all: &[Folder], places: &Places) -> Option<String> {
+/// another linked folder nor be or contain its own. A link met on the way
+/// that [leads home](Places::leads_home) breaks none.
+fn child_breaks(
+    path: &Path,
+    checked: Checked,
+    own: &Folder,
+    all: &[Folder],
+    places: &Places,
+) -> Option<String> {
+    if checked == Checked::Link && places.leads_home(path) {
+        return None;
+    }
     if let Some(why) = places.breaks(path) {
         return Some(why);
     }

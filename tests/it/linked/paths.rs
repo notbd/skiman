@@ -830,3 +830,41 @@ fn adopt_refuses_while_a_linked_folder_cannot_be_read() {
     );
     assert_eq!(code, 0, "{stderr}");
 }
+
+/// HOME reached through a link, itself one (`/home -> /var/home`) or with
+/// a parent that is one (macOS `/var -> private/var` under `mktemp -d`):
+/// that link is no break of the path rules, for a registration or a child
+/// link written through it.
+#[test]
+fn a_home_reached_through_a_link_can_hold_a_linked_folder() {
+    for (link, to, home) in [
+        ("home-link", "home", "home-link"),
+        ("alias", ".", "alias/home"),
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let root = sandbox.root();
+        symlink(root.join(to), root.join(link)).unwrap();
+        let home = root.join(home);
+        let company = folder(&sandbox, "work/company", &["alpha"]);
+        let independent = sandbox.root().join("independent/tool");
+        write(independent.join("SKILL.md"), skill_md("tool"));
+        symlink(home.join("../independent/tool"), company.join("tool")).unwrap();
+
+        let output = sandbox
+            .skiman()
+            .env("HOME", &home)
+            .args(["linked", "add", "~/work/company"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{link}: {stderr}");
+        for tool in Tool::ALL {
+            let dir = sandbox.tool_dir(tool);
+            for name in ["alpha", "tool"] {
+                assert!(dir.join(name).join("SKILL.md").is_file(), "{link}: {name}");
+            }
+        }
+    }
+}

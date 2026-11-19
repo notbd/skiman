@@ -194,6 +194,24 @@ impl Places {
         }
     }
 
+    /// Whether `link`, met on the way to a path, is HOME itself or one of
+    /// its ancestors (`/var -> private/var` on macOS, `/home -> /var/home`):
+    /// HOME is reached through it, so it breaks no rule; the path it leads
+    /// to is checked on its own.
+    pub fn leads_home(&self, link: &Path) -> bool {
+        self.homes.iter().any(|home| home.starts_with(link))
+    }
+
+    /// Why `link`, met on the way to a path, breaks a path rule: as
+    /// [`Places::breaks`], unless it [leads home](Places::leads_home).
+    pub fn breaks_link(&self, link: &Path) -> Option<String> {
+        if self.leads_home(link) {
+            None
+        } else {
+            self.breaks(link)
+        }
+    }
+
     /// Why `path` (absolute) breaks a path rule on its own: it is `/`, HOME
     /// or one of its ancestors, or it lies in or contains a place skiman
     /// writes. `None` when it breaks none.
@@ -222,6 +240,14 @@ impl Places {
             }
         })
     }
+}
+
+/// What a path checked against the path rules is: the path itself (as
+/// written or resolved), or a link met on the way to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Checked {
+    Path,
+    Link,
 }
 
 /// Whether one of `a` and `b` is, or lies inside, the other.
@@ -378,5 +404,10 @@ mod tests {
         for path in [home.join("work/company"), root.join("elsewhere")] {
             assert_eq!(places.breaks(&path), None, "{}", path.display());
         }
+        // HOME reached through a link on the way: no break for that link.
+        for link in [root.clone(), home.clone()] {
+            assert_eq!(places.breaks_link(&link), None, "{}", link.display());
+        }
+        assert!(places.breaks_link(&home.join(".claude")).is_some());
     }
 }

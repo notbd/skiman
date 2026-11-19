@@ -8,6 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::path::{self, Stop, resolve};
+use crate::fsutil::absolute_lexical;
 use crate::names;
 
 /// What one linked folder holds.
@@ -120,10 +121,13 @@ fn child_link(
         ));
         return false;
     }
-    // Every link met after the entry itself, which is in the linked folder.
-    let broken = resolved
-        .links
-        .iter()
+    // As for a registration: the target as written, normalised lexically,
+    // every link met after the entry itself (which is in the linked
+    // folder), and the realpath.
+    let written = absolute_lexical(Path::new("/"), target);
+    let broken = [&written]
+        .into_iter()
+        .chain(&resolved.links)
         .chain([&resolved.path])
         .find_map(|path| breaks(path));
     if let Some(why) = broken {

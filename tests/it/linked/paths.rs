@@ -305,6 +305,45 @@ fn child_links_into_home_or_a_tool_directory_are_not_distributed() {
     assert_eq!(contents(&[&company, &independent]), before);
 }
 
+/// A child link whose target, as written and normalised lexically, lies
+/// in a tool directory breaks the path rules even where its realpath does
+/// not: only that link is reported, and the rest of the folder distributes.
+#[test]
+fn a_child_link_whose_written_target_lies_in_a_tool_directory_is_not_distributed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    folder(&sandbox, "other/.claude/skills", &["demo"]);
+    std::fs::create_dir_all(home.join("other/deep")).unwrap();
+    symlink("other/deep", home.join("jump")).unwrap();
+    symlink(
+        home.join("jump/../.claude/skills/demo"),
+        company.join("demo"),
+    )
+    .unwrap();
+    append_manifest(&sandbox, COMPANY);
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 0, "{stderr}");
+    let line = format!(
+        "warning: {} is a link that breaks the path rules",
+        company.join("demo").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(
+        stderr.matches("breaks the path rules").count(),
+        1,
+        "{stderr}"
+    );
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert!(!exists(dir.join("demo")), "{}", dir.display());
+        assert!(dir.join("alpha/SKILL.md").is_file());
+    }
+}
+
 /// A tool directory turned into a link into a registered folder after the
 /// registration: sync writes nothing there (exit 3), the rest syncs, and
 /// the folder stays byte for byte as it was.

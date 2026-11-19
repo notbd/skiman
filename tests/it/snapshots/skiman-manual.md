@@ -1,6 +1,6 @@
 ---
 name: skiman-manual
-description: skiman's manual on where this machine's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, or to import an existing setup.
+description: skiman's manual on where this machine's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, to register or remove a linked folder (skills kept outside the canon), or to import an existing setup.
 ---
 
 # skiman manual
@@ -25,8 +25,9 @@ hold links to the canon.
   writes it; leave its content as it is.
 - `instructions/shared.md`: the shared body of the global instructions, loaded
   by every agent tool.
-- `skiman.toml`: enabled agent tools, per-skill settings and sources. You may
-  edit it.
+- `skiman.toml`: enabled agent tools, per-skill settings and sources,
+  linked folders (`[linked.<id>]`) and project roots (`[projects.<id>]`).
+  You may edit it.
 - `skiman.lock`: the version each third-party skill is at. skiman writes it.
 - `projects/<root id>/`: the mirror of project instruction files and project
   skills under each project root (see below). skiman writes it.
@@ -55,7 +56,9 @@ hold links to the canon.
   violation with file and line. A skill needs `SKILL.md` with YAML frontmatter
   from line 1 holding `name` (lowercase letters, digits and single hyphens, at
   most 64 characters, equal to the folder name) and `description` (1 to 1024
-  characters), and no symlinks or secrets inside.
+  characters), and no symlinks or secrets inside. While Antigravity is
+  enabled, it also warns about a body over 24000 bytes, which Antigravity
+  cuts without a message.
 
 ## Create a skill
 
@@ -242,5 +245,5 @@ may hold only skills the import folder holds too, with the same content.
   its summary, source and install day, and each linked folder as one
   section; then the skills other managers keep
   (plugins, claude.ai sync, the tools' own), which skiman never changes.
-- `skiman doctor`: locations, hooks, foreign skills, occupied paths, project
-  roots and items, and other problems.
+- `skiman doctor`: locations, hooks, foreign skills, occupied paths, linked
+  folders, project roots and items, and other problems.

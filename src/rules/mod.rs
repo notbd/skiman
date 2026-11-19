@@ -114,7 +114,7 @@ pub const LIMITS: Limits = Limits {
 /// One rule violation. Printed as `<path>[:<line>]: <rule>: <message>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Violation {
-    /// Relative to the skill repo root.
+    /// Relative to the canon root.
     pub path: String,
     /// 1-based line, where a line applies.
     pub line: Option<usize>,
@@ -258,7 +258,7 @@ impl Scope {
     }
 }
 
-/// Every top-level path of the skill repo that the rules read: everything
+/// Every top-level path of the canon that the rules read: everything
 /// [`Scope::all`] names lives below one of them.
 pub const TOP_LEVEL_PATHS: [&str; 6] = [
     MANIFEST,

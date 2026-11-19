@@ -15,10 +15,10 @@ use super::state::{State, classify};
 use super::swap::{Expect, Outcome, Previous, Replace};
 use super::synced::Synced;
 use crate::backup::Backups;
+use crate::canon::Canon;
 use crate::linked::Linked;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::staging::Staging;
 use crate::sync::{Change, Item as Report, ItemKind, Report as SyncReport};
 use crate::tree::WorkingTree;
@@ -28,7 +28,7 @@ use crate::tree::WorkingTree;
 /// is (`crate::linked`).
 pub fn reconcile(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
     linked: &Linked,
     report: &mut SyncReport,
@@ -261,7 +261,7 @@ fn reconcile_root(
 
 /// Writes project changes into the mirror (row 13).
 struct Writer<'a> {
-    repo: &'a SkillRepo,
+    repo: &'a Canon,
     backups: Backups,
     /// A staging for the mirror could not be opened: that is reported
     /// once, and nothing more is mirrored this run.
@@ -344,7 +344,7 @@ impl Writer<'_> {
 }
 
 /// `<repo>/.skiman/swap` (mirror staging folders) and its path in a backup.
-pub fn swap_parent(repo: &SkillRepo) -> (PathBuf, &'static Path) {
+pub fn swap_parent(repo: &Canon) -> (PathBuf, &'static Path) {
     (repo.local_dir().join("swap"), "repo/.skiman/swap".as_ref())
 }
 

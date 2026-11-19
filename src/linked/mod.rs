@@ -21,13 +21,13 @@ pub mod summary;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::canon::Canon;
 use crate::failure::Failure;
 use crate::fsutil::realpath_as_far_as_exists;
 use crate::layout::Layout;
 use crate::manifest::Manifest;
 use crate::names;
 use crate::project::root::expand;
-use crate::repo::SkillRepo;
 pub use folder::Contents;
 use path::{Places, Stop, overlap, resolve};
 pub use summary::stand_in;
@@ -73,7 +73,7 @@ pub enum State {
 impl Linked {
     /// Reads every `[linked.<id>]` table of `manifest`: checks its path
     /// against the path rules and reads the folder of each that passes.
-    pub fn read(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Linked {
+    pub fn read(home: &Path, repo: &Canon, manifest: &Manifest) -> Linked {
         let places = Places::new(home, repo);
         let mut folders: Vec<Folder> = Vec::new();
         for entry in manifest.linked() {
@@ -116,7 +116,7 @@ impl Linked {
     }
 
     /// [`Linked::read`] on the canon's own `skiman.toml`.
-    pub fn load(home: &Path, repo: &SkillRepo) -> Result<Linked, Failure> {
+    pub fn load(home: &Path, repo: &Canon) -> Result<Linked, Failure> {
         Ok(Linked::read(home, repo, &Manifest::load(repo)?))
     }
 

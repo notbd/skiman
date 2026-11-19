@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
@@ -18,8 +20,6 @@ use crate::linked::Linked;
 use crate::lockfile::Lockfile;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::sync::{self, Output};
 use crate::tree::WorkingTree;
@@ -33,7 +33,7 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
         return Err(Failure::usage("missing flag without a terminal: --yes"));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     check_single_name(name)?;
     let found = Found::read(paths.home(), &repo, name)?;
     if !yes {
@@ -43,7 +43,7 @@ fn remove(name: &str, yes: bool) -> Result<Exit, Failure> {
         }
     }
 
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     Found::read(paths.home(), &repo, name)?;
     let skill = repo.layout()?.path(name);
     let change = change(&repo, &skill, name)?;
@@ -79,7 +79,7 @@ impl Found {
     /// Refuses (exit 1) a name with neither a folder nor any record (naming
     /// the linked folder of a linked skill of that name), and the name of a
     /// group folder.
-    fn read(home: &Path, repo: &SkillRepo, name: &str) -> Result<Found, Failure> {
+    fn read(home: &Path, repo: &Canon, name: &str) -> Result<Found, Failure> {
         let layout = repo.layout()?;
         if layout.find(name).is_none()
             && let Some(group) = layout.group_named(name)
@@ -116,7 +116,7 @@ impl Found {
         })
     }
 
-    fn print(&self, repo: &SkillRepo) {
+    fn print(&self, repo: &Canon) {
         for (path, _) in &self.folders {
             out!("move to a backup: {}", path.display());
         }
@@ -131,7 +131,7 @@ impl Found {
 
 /// Both folders absent, then `skiman.toml` without the skill's table and
 /// secret exemptions, then `skiman.lock` without its entry.
-fn change(repo: &SkillRepo, skill: &str, name: &str) -> Result<Change, Failure> {
+fn change(repo: &Canon, skill: &str, name: &str) -> Result<Change, Failure> {
     let mut pieces = vec![
         (skill.to_owned(), Want::Absent),
         (format!("upstream/{name}"), Want::Absent),
@@ -153,9 +153,9 @@ fn change(repo: &SkillRepo, skill: &str, name: &str) -> Result<Change, Failure> 
     })
 }
 
-/// The rules on the skill repo as it will be: the removed skill must leave
+/// The rules on the canon as it will be: the removed skill must leave
 /// nothing inconsistent; everything else is a warning.
-fn validate(repo: &SkillRepo, name: &str, change: &Change) -> Result<(), Failure> {
+fn validate(repo: &Canon, name: &str, change: &Change) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
     let scope = Scope {
         consistency: BTreeSet::from([name.to_owned()]),

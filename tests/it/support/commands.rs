@@ -4,12 +4,12 @@ use std::path::PathBuf;
 
 use super::sandbox::Sandbox;
 
-/// `skiman init` of `sandbox.skill_repo()` without session hooks; it must succeed.
+/// `skiman init` of `sandbox.canon()` without session hooks; it must succeed.
 pub fn init(sandbox: &Sandbox) {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
 }

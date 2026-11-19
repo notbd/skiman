@@ -16,6 +16,8 @@ use std::path::PathBuf;
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{Change, Want};
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
@@ -26,8 +28,6 @@ use crate::lockfile::{self, Lockfile};
 use crate::manifest::{self, Manifest};
 use crate::names;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::sync::{self, Output};
@@ -50,11 +50,11 @@ pub fn run(old: &str, new: Option<&str>, to: To) -> Exit {
 
 fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     check_single_name(old)?;
     names::check_new_name(new)?;
 
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     let layout = repo.layout()?;
     let folder = |name: &str| {
         let placed = layout.find(name)?;
@@ -109,12 +109,12 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 
-/// Whether the skill repo is where a rename of `old` (in the skill folder
+/// Whether the canon is where a rename of `old` (in the skill folder
 /// `from`) to `new` stopped part-way: `from/SKILL.md` names `new` (the first
 /// thing mv writes), no skill folder of `new` is there (the last), and each
 /// of the `skiman.toml` table, the lock entry and `upstream/` has one of the
 /// two names at most (each is written in one step).
-fn half_renamed(repo: &SkillRepo, from: &str, old: &str, new: &str) -> Result<bool, Failure> {
+fn half_renamed(repo: &Canon, from: &str, old: &str, new: &str) -> Result<bool, Failure> {
     let (manifest, lock) = (
         Manifest::load(repo)?.skills(),
         Lockfile::load(repo)?.skill_names(),
@@ -148,7 +148,7 @@ struct Plan {
 
 impl Plan {
     fn build(
-        repo: &SkillRepo,
+        repo: &Canon,
         old: &str,
         new: &str,
         from: String,
@@ -200,9 +200,9 @@ impl Plan {
     }
 
     /// Moved content is checked only for the name rules of the new name
-    /// (done before), so nothing here blocks; every violation of the skill
-    /// repo as it will be is printed as a warning.
-    fn validate(&self, repo: &SkillRepo) -> Result<(), Failure> {
+    /// (done before), so nothing here blocks; every violation of the canon
+    /// as it will be is printed as a warning.
+    fn validate(&self, repo: &Canon) -> Result<(), Failure> {
         let working_tree = WorkingTree::new(repo.root());
         let io = |e: std::io::Error| Failure::operational(format!("cannot read the canon: {e}"));
         let mut files = Vec::new();

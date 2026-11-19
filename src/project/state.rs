@@ -1,6 +1,6 @@
 //! The state table (project-scope.md "Sync: the state table"), rows 4 to 15,
 //! for one item, and the words every command uses for each state. Rows 1 to 3
-//! (the skill repo mid-operation, an unusable root, a mirror path with no item
+//! (the canon mid-operation, an unusable root, a mirror path with no item
 //! shape) are decided by the callers before an item is classified. Sync,
 //! `adopt`, `restore` and `doctor` all call [`classify`], so every command
 //! agrees on what an item's state is and how to settle it.
@@ -13,8 +13,8 @@ use super::content::{self, Content, Side};
 use super::item::Item;
 use super::pattern::Kind;
 use super::root::Root;
+use crate::canon::Canon;
 use crate::fsutil::broken_chain;
-use crate::repo::SkillRepo;
 use crate::rules::{self, Scope, Violation};
 use crate::tree::{Overlay, WorkingTree};
 
@@ -160,7 +160,7 @@ impl Evaluated {
 /// [`evaluate`], with a project change that breaks the safety rules (a
 /// secret, conflict markers) classified as blocked, as sync treats it.
 pub fn classify(
-    repo: &SkillRepo,
+    repo: &Canon,
     root: &Root,
     item: &Item,
     synced: Option<&str>,
@@ -180,7 +180,7 @@ pub fn classify(
 }
 
 /// The safety rules on `content` as it would sit at the item's mirror.
-pub fn check_rules(repo: &SkillRepo, item: &Item, content: &Content) -> Result<(), Vec<Violation>> {
+pub fn check_rules(repo: &Canon, item: &Item, content: &Content) -> Result<(), Vec<Violation>> {
     let tree = WorkingTree::new(repo.root());
     let base = item.mirror_rel();
     let below = |path: &str| {
@@ -222,7 +222,7 @@ pub fn check_rules(repo: &SkillRepo, item: &Item, content: &Content) -> Result<(
     }
 }
 
-/// Evaluates `item` of `root`; `repo_root` is the skill repo's realpath and
+/// Evaluates `item` of `root`; `repo_root` is the canon's realpath and
 /// `synced` the item's synced hash (`None` when nothing is recorded).
 pub fn evaluate(
     root: &Root,

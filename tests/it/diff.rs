@@ -27,7 +27,7 @@ fn diff_after_a_local_edit_shows_exactly_that_edit() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox, &[]);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     write(
         skill.join("SKILL.md"),
         PDF_SKILL_MD.replace("# pdf\n", "# pdf, edited\n"),
@@ -98,7 +98,7 @@ fn diff_shows_added_deleted_binary_and_mode_changes() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox, &[]);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     std::fs::remove_file(skill.join("reference.md")).unwrap();
     std::fs::create_dir_all(skill.join("notes")).unwrap();
     write(skill.join("notes/todo.md"), "one\ntwo");

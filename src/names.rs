@@ -5,12 +5,12 @@
 
 use std::path::Path;
 
+use crate::canon::Canon;
 use crate::failure::Failure;
 use crate::layout::Layout;
 use crate::linked::Linked;
 use crate::lockfile::Lockfile;
 use crate::manifest::Manifest;
-use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
 /// Reserved by skiman itself; each agent tool can reserve more (`AgentTool::reserved_names`).
@@ -76,7 +76,7 @@ pub fn check_group(group: &str, name: &str, layout: &Layout) -> Result<(), Failu
     Ok(())
 }
 
-/// What can hold a skill name in the skill repo.
+/// What can hold a skill name in the canon.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Taken {
     Folder,
@@ -92,7 +92,7 @@ pub enum Taken {
 /// and a linked skill's name, always (spec "Names and collisions").
 pub fn check_not_taken(
     home: &Path,
-    repo: &SkillRepo,
+    repo: &Canon,
     name: &str,
     ours: impl Fn(Taken) -> Result<bool, Failure>,
 ) -> Result<(), Failure> {

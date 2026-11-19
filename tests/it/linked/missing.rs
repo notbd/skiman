@@ -23,7 +23,7 @@ fn sync(sandbox: &Sandbox, args: &[&str]) -> (i32, String, String) {
 }
 
 fn set_path(sandbox: &Sandbox, from: &str, to: &str) {
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     std::fs::write(&manifest, read(&manifest).replace(from, to)).unwrap();
 }
 
@@ -52,7 +52,7 @@ fn a_missing_folder_is_reported_once_its_links_go_and_come_back_with_it() {
         )
     };
     assert_eq!(stdout, missing("work/company"));
-    assert!(!exists(sandbox.skill_repo().join("linked/company")));
+    assert!(!exists(sandbox.canon().join("linked/company")));
     for tool in Tool::ALL {
         assert!(!exists(sandbox.tool_dir(tool).join("alpha")));
     }
@@ -86,11 +86,11 @@ fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
     for mode in [0o000, 0o444, 0o111] {
         let sandbox = company();
         let company = sandbox.home().join("work/company");
-        let linked = sandbox.skill_repo().join("linked");
+        let linked = sandbox.canon().join("linked");
         folder(&sandbox, "work/acme", &["alpha"]);
         append_manifest(&sandbox, "\n[linked.acme]\npath = \"~/work/acme\"\n");
         write(
-            sandbox.skill_repo().join("skills/notes/SKILL.md"),
+            sandbox.canon().join("skills/notes/SKILL.md"),
             skill_md("notes"),
         );
         set_path(
@@ -165,5 +165,5 @@ fn a_path_check_failing_with_a_permission_error_is_a_read_error() {
     for tool in Tool::ALL {
         assert!(exists(sandbox.tool_dir(tool).join("alpha")));
     }
-    assert!(exists(sandbox.skill_repo().join("linked/company")));
+    assert!(exists(sandbox.canon().join("linked/company")));
 }

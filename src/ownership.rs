@@ -7,9 +7,9 @@ use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
 use crate::backup::noted_copy;
+use crate::canon::Canon;
 use crate::fsutil::absolute_lexical;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::tools::{ManagedElsewhere, PLUGIN_MARKER, TOOLS};
 
 /// What a tool-directory entry is, decided in the spec's order: ownership first.
@@ -30,7 +30,7 @@ pub enum Entry {
     Moved(PathBuf),
 }
 
-/// Classifies tool-directory entries for one skill repo.
+/// Classifies tool-directory entries for one canon.
 #[derive(Debug, Clone)]
 pub struct Ownership {
     skills_dir: PathBuf,
@@ -39,7 +39,7 @@ pub struct Ownership {
     shared_body: PathBuf,
     /// `<canon>/linked`: links to `<id>/<name>` or `<id>` in it are owned.
     linked_dir: PathBuf,
-    /// Realpath of the skill repo `init` just switched away from: links under
+    /// Realpath of the canon `init` just switched away from: links under
     /// it are owned for that one sync.
     previous_repo: Option<PathBuf>,
     /// Managed-elsewhere paths, as realpath of the parent plus the file name.
@@ -51,7 +51,7 @@ pub struct Ownership {
 }
 
 impl Ownership {
-    pub fn new(paths: &Paths, repo: &SkillRepo, previous_repo: Option<PathBuf>) -> Ownership {
+    pub fn new(paths: &Paths, repo: &Canon, previous_repo: Option<PathBuf>) -> Ownership {
         let home = paths.home();
         let mut managed_paths = Vec::new();
         let mut managed_under = Vec::new();
@@ -127,7 +127,7 @@ impl Ownership {
 
     /// The normalised target of the instruction location `location` (the
     /// realpath of its parent joined with the file name) when skiman owns it:
-    /// a symlink to the shared body, or under the previous skill repo.
+    /// a symlink to the shared body, or under the previous canon.
     pub fn owned_instruction(&self, location: &Path, meta: &Metadata) -> Option<PathBuf> {
         if !meta.is_symlink() {
             return None;
@@ -195,7 +195,7 @@ mod tests {
         std::fs::create_dir_all(&tool_dir).unwrap();
         std::fs::create_dir_all(&canon).unwrap();
         symlink(canon.join(target), tool_dir.join(name)).unwrap();
-        let repo = SkillRepo::at(&canon).unwrap();
+        let repo = Canon::at(&canon).unwrap();
         let ownership = Ownership::new(&Paths::under(&home), &repo, None);
         let meta = std::fs::symlink_metadata(tool_dir.join(name)).unwrap();
         ownership.classify(&tool_dir, OsStr::new(name), &meta)

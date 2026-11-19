@@ -1,5 +1,5 @@
 //! Project items and the mirror tree (project-scope.md "Mirror layout"):
-//! `<root>/<rel>` on disk pairs with `projects/<id>/<rel>` in the skill repo,
+//! `<root>/<rel>` on disk pairs with `projects/<id>/<rel>` in the canon,
 //! so the mirror tree is the only record of what is managed.
 
 use std::path::PathBuf;
@@ -9,7 +9,7 @@ use super::root::Root;
 use super::synced::Synced;
 use crate::tree::{self, Tree};
 
-/// The folder of the skill repo that holds every mirror.
+/// The folder of the canon that holds every mirror.
 pub const MIRROR_DIR: &str = "projects";
 
 /// One project item: its root, its root-relative path, kind and anchor.
@@ -61,7 +61,7 @@ pub struct Mirror {
     pub strays: Vec<String>,
 }
 
-/// Reads the mirror of `root` from `tree` (the skill repo or a view of it).
+/// Reads the mirror of `root` from `tree` (the canon or a view of it).
 /// Skill folders are not entered; ignored names ([`tree::IGNORED_NAMES`]) are
 /// skipped.
 pub fn read_mirror(tree: &dyn Tree, root: &Root) -> std::io::Result<Mirror> {

@@ -33,7 +33,7 @@ pub fn folder(sandbox: &Sandbox, rel: &str, names: &[&str]) -> PathBuf {
 
 /// Appends `text` to the canon's `skiman.toml`, as a user editing it by hand.
 pub fn append_manifest(sandbox: &Sandbox, text: &str) {
-    let path = sandbox.skill_repo().join("skiman.toml");
+    let path = sandbox.canon().join("skiman.toml");
     let mut old = std::fs::read_to_string(&path).unwrap();
     old.push_str(text);
     std::fs::write(path, old).unwrap();

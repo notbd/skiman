@@ -10,12 +10,12 @@ use std::io::Write;
 use similar::TextDiff;
 
 use crate::Exit;
+use crate::canon::Canon;
 use crate::failure::{Failure, finish};
 use crate::linked::Linked;
 use crate::manifest::Manifest;
 use crate::names;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::tree::{Kind, Tree, WorkingTree, is_ignored};
 
 pub fn run(name: &str) -> Exit {
@@ -24,7 +24,7 @@ pub fn run(name: &str) -> Exit {
 
 fn diff(name: &str) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let tree = WorkingTree::new(repo.root());
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
     let skill = repo.layout()?.path(name);

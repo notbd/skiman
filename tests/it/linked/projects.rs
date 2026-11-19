@@ -16,7 +16,7 @@ fn work(sandbox: &Sandbox, rel: &str) -> PathBuf {
 }
 
 fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
-    sandbox.skill_repo().join("projects/work").join(rel)
+    sandbox.canon().join("projects/work").join(rel)
 }
 
 /// The project root `~/work` with `files` (each holding [`OLD`]) and the
@@ -149,7 +149,7 @@ fn an_unlistable_folder_pauses_project_items_but_not_distribution() {
     write(company.join("alpha/SKILL.md"), skill_md("alpha"));
     append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
     write(
-        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        sandbox.canon().join("skills/notes/SKILL.md"),
         skill_md("notes"),
     );
     std::fs::write(work(&sandbox, "AGENTS.md"), NEW).unwrap();

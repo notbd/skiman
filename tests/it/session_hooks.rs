@@ -64,7 +64,7 @@ fn init(sandbox: &Sandbox, session_hooks: &str) -> snapbox::cmd::OutputAssert {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", session_hooks])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
 }
 
@@ -134,7 +134,7 @@ fn session_hooks_claude_code_and_codex_adds_one_claude_code_entry_and_keeps_ever
     init(&sandbox, "claude-code,codex")
         .code(0)
         .stdout_eq(str![[r#"
-created canon [..]/skill-repo
+created canon [..]/canon
 ...
 added the session-start hook entry to [..]/home/.claude/settings.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 
@@ -260,7 +260,7 @@ error: [..]/home/.claude/settings.json is not valid JSON (key must be a string a
         broken
     );
     // The rest of init still happened.
-    assert!(sandbox.skill_repo().join("skiman.toml").is_file());
+    assert!(sandbox.canon().join("skiman.toml").is_file());
 }
 
 #[test]
@@ -343,7 +343,7 @@ fn session_hooks_none_removes_only_skimans_entries() {
     write_json(&codex_hooks(&sandbox), &codex);
 
     init(&sandbox, "none").code(0).stdout_eq(str![[r#"
-created canon [..]/skill-repo
+created canon [..]/canon
 ...
 removed the session-start hook entries from [..]/home/.claude/settings.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 removed the session-start hook entries from [..]/home/.codex/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
@@ -395,7 +395,7 @@ fn the_entry_command_runs_when_the_binary_path_has_a_space() {
         .command("skiman")
         .env("PATH", path)
         .args(["init", "--session-hooks", "claude-code"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
 
@@ -435,7 +435,7 @@ fn without_antigravity() -> Sandbox {
 fn init_pty(sandbox: &Sandbox) -> crate::support::Pty {
     sandbox.skiman_pty([
         std::ffi::OsString::from("init"),
-        sandbox.skill_repo().into_os_string(),
+        sandbox.canon().into_os_string(),
     ])
 }
 
@@ -507,7 +507,7 @@ fn init_through_a_renamed_link_keeps_one_entry_and_none_through_it_removes_it() 
         sandbox
             .command(&sk)
             .args(["init", "--session-hooks", session_hooks])
-            .arg(sandbox.skill_repo())
+            .arg(sandbox.canon())
             .assert()
             .code(0);
     };
@@ -592,7 +592,7 @@ fn session_hooks_antigravity_adds_a_named_skiman_hook_and_keeps_every_other_entr
     write_json(&antigravity_hooks(&sandbox), &antigravity_user_hooks());
 
     init(&sandbox, "antigravity").code(0).stdout_eq(str![[r#"
-created canon [..]/skill-repo
+created canon [..]/canon
 ...
 added the session-start hook entry to [..]/home/.gemini/config/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 
@@ -634,7 +634,7 @@ fn session_hooks_none_removes_only_skimans_antigravity_handlers() {
     write_json(&antigravity_hooks(&sandbox), &hooks);
 
     init(&sandbox, "none").code(0).stdout_eq(str![[r#"
-created canon [..]/skill-repo
+created canon [..]/canon
 ...
 removed the session-start hook entries from [..]/home/.gemini/config/hooks.json; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits
 

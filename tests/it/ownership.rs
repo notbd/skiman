@@ -17,8 +17,8 @@ fn write_skill(dir: &Path, name: &str) {
 }
 
 fn own_skill(sandbox: &Sandbox, name: &str) -> PathBuf {
-    write_skill(&sandbox.skill_repo().join("skills"), name);
-    sandbox.skill_repo().join("skills").join(name)
+    write_skill(&sandbox.canon().join("skills"), name);
+    sandbox.canon().join("skills").join(name)
 }
 
 fn sync_hook_stdout(sandbox: &Sandbox) -> String {
@@ -265,7 +265,7 @@ fn after_a_hand_rename_of_an_own_skill_sync_removes_the_old_link_and_creates_the
     init(&sandbox);
     let old = own_skill(&sandbox, "pdf");
     sandbox.skiman().arg("sync").assert().code(0);
-    let new = sandbox.skill_repo().join("skills/pdf-tools");
+    let new = sandbox.canon().join("skills/pdf-tools");
     std::fs::rename(&old, &new).unwrap();
     std::fs::write(
         new.join("SKILL.md"),
@@ -293,7 +293,7 @@ fn enabled_false_removes_the_links_and_enabled_true_recreates_them() {
     init(&sandbox);
     let target = own_skill(&sandbox, "pdf");
     sandbox.skiman().arg("sync").assert().code(0);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let tools = std::fs::read_to_string(&manifest).unwrap();
 
     std::fs::write(
@@ -348,7 +348,7 @@ fn folders_under_skills_that_are_not_distributable_are_not_linked_and_sync_hook_
 {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     write_skill(&skills, "Bad_Name");
     write_skill(&skills, "synced");
     std::fs::create_dir(skills.join("no-skill-md")).unwrap();
@@ -363,9 +363,9 @@ fn folders_under_skills_that_are_not_distributable_are_not_linked_and_sync_hook_
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-skiman: skill folder [..]/skill-repo/skills/Bad_Name is not distributed: its name is not a valid skill name
-skiman: skill folder [..]/skill-repo/skills/no-skill-md is not distributed: it holds no SKILL.md
-skiman: skill folder [..]/skill-repo/skills/synced is not distributed: its name is reserved
+skiman: skill folder [..]/canon/skills/Bad_Name is not distributed: its name is not a valid skill name
+skiman: skill folder [..]/canon/skills/no-skill-md is not distributed: it holds no SKILL.md
+skiman: skill folder [..]/canon/skills/synced is not distributed: its name is reserved
 
 "#]])
         .stderr_eq("");
@@ -422,7 +422,7 @@ fn removing_a_tool_from_tools_enabled_removes_only_skimans_links_from_its_tool_d
     std::fs::write(gemini.join("loose.txt"), "x").unwrap();
     std::os::unix::fs::symlink("/nowhere", gemini.join("dangling")).unwrap();
     std::fs::write(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
     )
     .unwrap();
@@ -452,7 +452,7 @@ removed [..]/home/.gemini/GEMINI.md
 }
 
 #[test]
-fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_previous_one() {
+fn init_pointed_at_a_different_canon_retargets_or_removes_the_links_of_the_previous_one() {
     let sandbox = Sandbox::new();
     let first = sandbox.root().join("first-repo");
     sandbox
@@ -465,7 +465,7 @@ fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_
         write_skill(&first.join("skills"), name);
     }
     sandbox.skiman().arg("sync").assert().code(0);
-    let second = sandbox.skill_repo();
+    let second = sandbox.canon();
     std::fs::create_dir_all(second.join("skills")).unwrap();
     sandbox.git(&second, ["init", "--quiet"]);
     std::fs::write(
@@ -482,13 +482,13 @@ fn init_pointed_at_a_different_skill_repo_retargets_or_removes_the_links_of_the_
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-added .skiman/ to [..]/skill-repo/.gitignore
-added /linked/ to [..]/skill-repo/.gitignore
-installed git hook [..]/skill-repo/.git/hooks/pre-commit
-installed git hook [..]/skill-repo/.git/hooks/post-commit
-installed git hook [..]/skill-repo/.git/hooks/post-merge
-installed git hook [..]/skill-repo/.git/hooks/post-checkout
-installed git hook [..]/skill-repo/.git/hooks/post-rewrite
+added .skiman/ to [..]/canon/.gitignore
+added /linked/ to [..]/canon/.gitignore
+installed git hook [..]/canon/.git/hooks/pre-commit
+installed git hook [..]/canon/.git/hooks/post-commit
+installed git hook [..]/canon/.git/hooks/post-merge
+installed git hook [..]/canon/.git/hooks/post-checkout
+installed git hook [..]/canon/.git/hooks/post-rewrite
 removed [..]/home/.claude/skills/notes
 retargeted [..]/home/.claude/skills/pdf
 retargeted [..]/home/.claude/skills/skiman-manual
@@ -517,14 +517,14 @@ retargeted [..]/home/.gemini/GEMINI.md
 }
 
 #[test]
-fn init_with_a_foreign_skill_points_to_import_when_the_skill_repo_has_no_skills() {
+fn init_with_a_foreign_skill_points_to_import_when_the_canon_has_no_skills() {
     let sandbox = Sandbox::new();
     write_skill(&sandbox.tool_dir(Tool::ClaudeCode), "theirs");
 
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0)
         .stderr_eq(str![[r#"
@@ -535,10 +535,10 @@ hint: the canon has no skills yet and the tool directories or instruction locati
 }
 
 #[test]
-fn init_with_a_foreign_skill_points_to_adopt_when_the_skill_repo_has_skills() {
+fn init_with_a_foreign_skill_points_to_adopt_when_the_canon_has_skills() {
     let sandbox = Sandbox::new();
     write_skill(&sandbox.tool_dir(Tool::ClaudeCode), "theirs");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir_all(repo.join("skills")).unwrap();
     sandbox.git(&repo, ["init", "--quiet"]);
     std::fs::write(
@@ -573,12 +573,12 @@ fn a_relative_link_to_the_skill_is_owned_and_resolves_against_the_real_tool_dire
     // The kernel resolves it against `home/.gemini/config/skills`, not against
     // the alias `home/.agents/skills` that sync reaches the directory through.
     std::os::unix::fs::symlink(
-        "../../../../skill-repo/skills/../skills/./pdf",
+        "../../../../canon/skills/../skills/./pdf",
         codex.join("pdf"),
     )
     .unwrap();
     std::os::unix::fs::symlink(
-        "../../.claude/skills/../../../skill-repo/skills/pdf",
+        "../../.claude/skills/../../../canon/skills/pdf",
         sandbox.tool_dir(Tool::ClaudeCode).join("pdf"),
     )
     .unwrap();

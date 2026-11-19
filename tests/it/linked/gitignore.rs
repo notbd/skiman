@@ -18,7 +18,7 @@ fn linked_add(sandbox: &Sandbox, rel: &str) -> snapbox::cmd::OutputAssert {
 fn linked_add_appends_the_line_once_to_a_canon_without_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let gitignore = sandbox.skill_repo().join(".gitignore");
+    let gitignore = sandbox.canon().join(".gitignore");
     std::fs::write(&gitignore, ".skiman/").unwrap();
     folder(&sandbox, "work/company", &["alpha"]);
     folder(&sandbox, "work/tools", &["beta"]);
@@ -29,10 +29,7 @@ fn linked_add_appends_the_line_once_to_a_canon_without_it() {
     linked_add(&sandbox, "work/tools").code(0);
     assert_eq!(read(&gitignore), ".skiman/\n/linked/\n");
     assert_eq!(
-        sandbox.git(
-            sandbox.skill_repo(),
-            ["status", "--porcelain", "--", "linked"]
-        ),
+        sandbox.git(sandbox.canon(), ["status", "--porcelain", "--", "linked"]),
         ""
     );
 }
@@ -42,7 +39,7 @@ fn linked_add_appends_the_line_once_to_a_canon_without_it() {
 #[test]
 fn in_a_canon_that_is_not_a_git_repo_the_line_is_added_unless_one_is_there() {
     let sandbox = Sandbox::new();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(
         repo.join("skiman.toml"),
@@ -78,7 +75,7 @@ fn in_a_canon_that_is_not_a_git_repo_the_line_is_added_unless_one_is_there() {
 fn a_gitignore_that_is_a_link_stops_linked_add_with_nothing_written() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let real = sandbox.root().join("dotfiles/gitignore");
     std::fs::create_dir_all(real.parent().unwrap()).unwrap();
     std::fs::write(&real, ".skiman/\n").unwrap();
@@ -89,7 +86,7 @@ fn a_gitignore_that_is_a_link_stops_linked_add_with_nothing_written() {
 
     linked_add(&sandbox, "work/company")
         .code(1)
-        .stderr_eq("error: [..]/skill-repo/.gitignore is a link, so skiman cannot add `/linked/` to it; replace the link with a file holding the same lines, then run this again\n");
+        .stderr_eq("error: [..]/canon/.gitignore is a link, so skiman cannot add `/linked/` to it; replace the link with a file holding the same lines, then run this again\n");
 
     assert_eq!(read(&real), ".skiman/\n");
     assert_eq!(read(repo.join("skiman.toml")), manifest);
@@ -102,7 +99,7 @@ fn a_gitignore_that_is_a_link_stops_linked_add_with_nothing_written() {
 fn check_warns_while_linked_is_not_ignored() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::write(repo.join(".gitignore"), ".skiman/\n").unwrap();
     sandbox.skiman().arg("check").assert().code(0).stderr_eq("");
 
@@ -112,7 +109,7 @@ fn check_warns_while_linked_is_not_ignored() {
         .arg("check")
         .assert()
         .code(0)
-        .stderr_eq("warning: git does not ignore `linked/`, so the links in it could be committed; add the line `/linked/` to [..]/skill-repo/.gitignore\n");
+        .stderr_eq("warning: git does not ignore `linked/`, so the links in it could be committed; add the line `/linked/` to [..]/canon/.gitignore\n");
 
     let real = sandbox.root().join("gitignore");
     std::fs::write(&real, ".skiman/\n").unwrap();
@@ -123,7 +120,7 @@ fn check_warns_while_linked_is_not_ignored() {
         .arg("check")
         .assert()
         .code(0)
-        .stderr_eq("warning: git does not ignore `linked/`, so the links in it could be committed; [..]/skill-repo/.gitignore is a link, and git does not read a `.gitignore` that is a link: replace it with a file that holds the line `/linked/`\n");
+        .stderr_eq("warning: git does not ignore `linked/`, so the links in it could be committed; [..]/canon/.gitignore is a link, and git does not read a `.gitignore` that is a link: replace it with a file that holds the line `/linked/`\n");
 
     std::fs::remove_file(repo.join(".gitignore")).unwrap();
     std::fs::write(repo.join(".gitignore"), ".skiman/\n/linked/\n").unwrap();

@@ -1,5 +1,5 @@
-//! `skiman overview`: every skill on this machine as Markdown, the skill
-//! repo's by group, then the skills other managers keep. Read-only.
+//! `skiman overview`: every skill on this machine as Markdown, the canon's
+//! by group, then the skills other managers keep. Read-only.
 
 use std::os::unix::fs::symlink;
 use std::path::Path;
@@ -20,9 +20,9 @@ fn append(path: impl AsRef<Path>, text: &str) {
     std::fs::write(path, old).unwrap();
 }
 
-/// Commits everything in the skill repo as made on `day`.
+/// Commits everything in the canon as made on `day`.
 fn commit_on(sandbox: &Sandbox, day: &str) {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(&repo, ["add", "--all"]);
     sandbox
         .command("git")
@@ -37,7 +37,7 @@ fn commit_on(sandbox: &Sandbox, day: &str) {
 }
 
 #[test]
-fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
+fn the_canon_comes_by_group_and_other_managers_skills_are_listed_once() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     sandbox
@@ -59,7 +59,7 @@ fn the_skill_repo_comes_by_group_and_other_managers_skills_are_listed_once() {
         .assert()
         .code(0);
     append(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         "\n[skills.notes]\nsummary = \"Keep notes quickly\"\n\
          origin = \"adapted from a blog post\"\ninstalled = 2026-01-31\n\
          \n[skills.pdf]\nsummary = \"Fill PDF forms\"\nenabled = false\n",
@@ -258,7 +258,7 @@ fn a_skill_adapted_from_another_shows_the_day_it_was_added() {
     let body: String = (1..=40)
         .map(|i| format!("Step {i} of the routine.\n"))
         .collect();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(
         repo.join("skills/alpha/SKILL.md"),
         format!("---\nname: alpha\ndescription: d\n---\n\n{body}"),

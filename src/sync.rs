@@ -13,6 +13,8 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
 use crate::layout::Layout;
@@ -21,8 +23,6 @@ use crate::manifest::Manifest;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::reported::Reported;
 use crate::skiman_manual;
 use crate::test_hook;
@@ -101,7 +101,7 @@ pub fn foreign(
     tool: &'static str,
     path: &Path,
     meta: &std::fs::Metadata,
-    repo: &SkillRepo,
+    repo: &Canon,
     linked: &Linked,
 ) -> ItemKind {
     let real = path.canonicalize().ok();
@@ -247,18 +247,18 @@ impl Report {
 }
 
 /// Syncs `repo` while the caller holds its lock and prints the result for `output`.
-pub fn run(paths: &Paths, repo: &SkillRepo, lock: &RepoLock, output: Output) -> Exit {
+pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exit {
     run_with(paths, repo, lock, output, None, &[]).0
 }
 
 /// [`run`], also returning the report. `previous_repo` is the realpath of the
-/// skill repo `init` just switched away from: its links count as owned.
+/// canon `init` just switched away from: its links count as owned.
 /// Nothing is said about `failed`, paths whose write the command just
 /// reported failing: the way out sync names for them is that same write.
 pub fn run_with(
     paths: &Paths,
-    repo: &SkillRepo,
-    _lock: &RepoLock,
+    repo: &Canon,
+    _lock: &CanonLock,
     output: Output,
     previous_repo: Option<PathBuf>,
     failed: &[PathBuf],
@@ -330,7 +330,7 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
 /// enabled. Then does the same for instruction locations and the shared body.
 pub fn reconcile(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
     linked: &Linked,
     previous_repo: Option<PathBuf>,
@@ -428,7 +428,7 @@ pub fn reconcile(
 /// are reconciled once and a link from one location to another is not owned.
 fn reconcile_instruction_locations(
     home: &Path,
-    (repo, manifest, linked, ownership): (&SkillRepo, &Manifest, &Linked, &Ownership),
+    (repo, manifest, linked, ownership): (&Canon, &Manifest, &Linked, &Ownership),
     sweep: bool,
     report: &mut Report,
 ) {
@@ -626,7 +626,7 @@ pub struct Wanted {
 /// `skills/` that are not distributable and linked skills that lose their
 /// name are added to `report.items`.
 pub fn wanted_entries(
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
     linked: &Linked,
     kept: &BTreeMap<String, String>,
@@ -729,7 +729,7 @@ struct ToolDir<'a> {
 /// stay exactly as they are and keep their name.
 fn reconcile_tool_dir(
     tool_dir: &ToolDir,
-    repo: &SkillRepo,
+    repo: &Canon,
     linked: &Linked,
     wanted: &[Wanted],
     frozen: &[PathBuf],

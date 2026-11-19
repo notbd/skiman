@@ -1,7 +1,7 @@
-//! What git says about project items: whether the skill repo is in the
+//! What git says about project items: whether the canon is in the
 //! middle of an operation (read as files, so sync spawns no git), whether a
 //! project's own git repo tracks an item (gate 1), and which mirror paths the
-//! skill repo ignores.
+//! canon ignores.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -156,7 +156,7 @@ fn tracked_under(top: &Path, items: &[PathBuf]) -> Result<Vec<PathBuf>, String> 
         .collect())
 }
 
-/// The repo-relative `paths` the skill repo at `root` ignores, each with the
+/// The repo-relative `paths` the canon at `root` ignores, each with the
 /// rule that ignores it (`<source>:<line>:<pattern>`). Empty when git
 /// cannot tell (the repo is not a git repo, git fails).
 pub fn ignored(root: &Path, paths: &[String]) -> Vec<(String, String)> {

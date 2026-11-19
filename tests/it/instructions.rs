@@ -9,7 +9,7 @@ use snapbox::str;
 use crate::support::{Sandbox, Tool, assert_symlink, init};
 
 fn shared_body(sandbox: &Sandbox) -> PathBuf {
-    sandbox.skill_repo().join("instructions/shared.md")
+    sandbox.canon().join("instructions/shared.md")
 }
 
 const ALL: [Tool; 3] = [Tool::ClaudeCode, Tool::Codex, Tool::Antigravity];
@@ -42,11 +42,11 @@ fn an_existing_regular_claude_md_stays_byte_identical_and_init_points_to_import(
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(3)
         .stdout_eq(str![[r#"
-created canon [..]/skill-repo
+created canon [..]/canon
 ...
 linked [..]/home/.claude/skills/skiman-manual
 linked [..]/home/.agents/skills/skiman-manual
@@ -150,7 +150,7 @@ fn removing_a_tool_from_tools_enabled_removes_its_owned_instruction_link() {
     std::fs::remove_file(&codex_md).unwrap();
     std::fs::write(&codex_md, "codex rules\n").unwrap();
     std::fs::write(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\"]\n",
     )
     .unwrap();
@@ -174,7 +174,7 @@ removed [..]/home/.gemini/GEMINI.md
 }
 
 #[test]
-fn init_with_another_skill_repo_retargets_the_instruction_links() {
+fn init_with_another_canon_retargets_the_instruction_links() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let other = sandbox.root().join("other-repo");
@@ -212,7 +212,7 @@ fn write_shared_body(sandbox: &Sandbox, bytes: usize) {
 
 fn set_enabled(sandbox: &Sandbox, ids: &str) {
     std::fs::write(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         format!("[tools]\nenabled = [{ids}]\n"),
     )
     .unwrap();
@@ -331,7 +331,7 @@ instructions/shared.md:15: at-import: `@open` is read as a file import by Claude
 }
 
 /// A file of the user's that takes the place of an instruction link right
-/// before `init` retargets it to another skill repo is kept, and nothing is
+/// before `init` retargets it to another canon is kept, and nothing is
 /// left under a temporary name.
 #[test]
 #[cfg_attr(

@@ -2,16 +2,16 @@
 //! import folder (ADR 0001), and `skiman import --guide`, the guide an agent
 //! follows to prepare one (read-only).
 //!
-//! Order: no TTY and no `--yes` -> exit 2 -> config -> the skill repo's
+//! Order: no TTY and no `--yes` -> exit 2 -> config -> the canon's
 //! `skiman.toml`, `skiman.lock` and shared body are regular files, and it is
 //! initialised -> phase 1 on the folder (layout, path safety, no `[linked]`
 //! table, every rule except Consistency) -> the canon's linked folders
 //! ([`linked_folders`]: none unreadable, none of their names, no write into
-//! one) -> whether the skill repo already holds the whole import
+//! one) -> whether the canon already holds the whole import
 //! ([`progress`]; if so, nothing is fetched or written and the run goes on
 //! at the takeover plan) -> fetch every declared source -> phase 2
 //! on the complete result (Consistency, secrets, everything) -> what the
-//! skill repo holds against what the import writes ([`repo_todo`]) ->
+//! canon holds against what the import writes ([`repo_todo`]) ->
 //! takeover plan, no special file in it and no local source it moves away
 //! -> preview -> confirm -> repo lock, checks again (the takeover plan
 //! included) -> tmp leftovers -> `skiman.toml`, `skiman.lock`, `upstream/`,
@@ -32,6 +32,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
 use crate::backup::{self, Backups};
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{self, Change, Held, Want};
 use crate::commands::{confirm, has_terminal, prompts};
 use crate::failure::{Failure, finish};
@@ -46,8 +48,6 @@ use crate::ownership::{Entry, Ownership};
 use crate::path_safety::{self, Content};
 use crate::paths::Paths;
 use crate::project::item::MIRROR_DIR;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skiman_manual;
 use crate::snapshot::Snapshot;
@@ -67,14 +67,14 @@ pub fn guide() -> Exit {
     )
 }
 
-/// `folder` defaults to `<skill repo>/.skiman/import/`.
+/// `folder` defaults to `<canon>/.skiman/import/`.
 pub fn run(folder: Option<&Path>, yes: bool) -> Exit {
     finish(import(folder, yes))
 }
 
 const SHARED_BODY: &str = "instructions/shared.md";
 
-/// The skill repo's files the import replaces whole, each a regular file.
+/// The canon's files the import replaces whole, each a regular file.
 const REPO_FILES: [&str; 3] = [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY];
 
 fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
@@ -85,7 +85,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         ));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let folder = folder.map_or_else(|| repo.default_import_dir(), Path::to_path_buf);
     let folder = folder.canonicalize().map_err(|e| {
         Failure::refused(format!(
@@ -123,7 +123,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
     // Before anything is fetched; again with the takeover plan.
     linked_folders(&paths, &repo, &folder_manifest, &content)?;
-    // `None` when the skill repo already holds the whole import (an earlier
+    // `None` when the canon already holds the whole import (an earlier
     // run wrote it): nothing is fetched or written, and the takeover follows
     // the repo's own skiman.toml.
     let (writes, manifest) = match progress(&repo, &content, &folder_manifest, &repo_manifest)? {
@@ -181,7 +181,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     }
 
     test_hook::at("import", "confirmed");
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     refuse_irregular_files(&repo)?;
     let changed = repo_files() != first_read
         || match &writes {
@@ -255,7 +255,7 @@ struct Folder {
 
 /// One skill folder of the import folder.
 struct Skill {
-    /// `skills/[<group>/]<name>`, the same in the skill repo.
+    /// `skills/[<group>/]<name>`, the same in the canon.
     path: String,
     snapshot: Snapshot,
 }
@@ -404,7 +404,7 @@ impl Folder {
     }
 }
 
-/// The folder's `skiman.toml` with the skill repo's configuration merged in
+/// The folder's `skiman.toml` with the canon's configuration merged in
 /// by key, since an import brings skills and instructions only: the repo's
 /// `[tools]` when the folder has none, each repo `[projects.<id>]` and
 /// `[linked.<id>]` whose id the folder does not define (it defines no
@@ -495,7 +495,7 @@ fn appended(mut table: Table) -> Table {
     table
 }
 
-/// The folder as the skill repo would hold it, with `manifest` as its `skiman.toml`.
+/// The folder as the canon would hold it, with `manifest` as its `skiman.toml`.
 fn folder_tree<'a>(working_tree: &'a WorkingTree, manifest: &str) -> Overlay<'a> {
     Overlay::new(
         working_tree,
@@ -549,7 +549,7 @@ struct Third {
     source: SourceRecord,
     snapshot: Snapshot,
     entry: LockEntry,
-    /// The kind of `source.ref`: derived when fetched, else the skill repo's.
+    /// The kind of `source.ref`: derived when fetched, else the canon's.
     ref_kind: Option<&'static str>,
     /// `at <commit> (tag v1)`, `(local folder)`: after the source in the preview.
     version: String,
@@ -557,11 +557,11 @@ struct Third {
 
 /// Fetches every declared source at its declared `ref` (the default branch
 /// when there is none) and reads its snapshot; path safety runs on each. A
-/// source the skill repo already holds ([`fetched_before`]) is not fetched
+/// source the canon already holds ([`fetched_before`]) is not fetched
 /// again.
 fn fetch_sources(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     content: &Folder,
     manifest_text: &str,
     prompts: Prompts,
@@ -605,7 +605,7 @@ fn fetch_sources(
     Ok(thirds)
 }
 
-/// The third-party skill `name` as the skill repo holds it, when an earlier
+/// The third-party skill `name` as the canon holds it, when an earlier
 /// run fetched it from a git upstream as `source` declares it: the repo's
 /// source table names the same `url`, `path` and `ref`, and its lock entry
 /// has that `ref` and a commit. Its snapshot is `upstream/<name>` when that
@@ -615,7 +615,7 @@ fn fetch_sources(
 /// moved since, and needs the network.
 fn fetched_before(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     name: &str,
     source: &SourceRecord,
     prompts: Prompts,
@@ -740,7 +740,7 @@ fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
 /// compares them (spec "Write targets never reach into a linked folder").
 fn linked_folders(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
     content: &Folder,
 ) -> Result<Linked, Failure> {
@@ -852,7 +852,7 @@ impl Plan {
     /// 1) what [`linked_folders`] refuses.
     fn make(
         paths: &Paths,
-        repo: &SkillRepo,
+        repo: &Canon,
         manifest: &Manifest,
         content: &Folder,
     ) -> Result<Plan, Failure> {
@@ -1109,10 +1109,10 @@ fn refuse_moving_sources(
     )))
 }
 
-/// Where the import folder's `skiman.toml` (`folder`, merged with the skill
-/// repo's as the import would write it) differs from the skill repo's
+/// Where the import folder's `skiman.toml` (`folder`, merged with the canon's
+/// as the import would write it) differs from the canon's
 /// (`repo`) in what is distributed: `[tools] enabled` as a set, `enabled` of
-/// each skill, and the `ref` of each source. Shown when the skill repo
+/// each skill, and the `ref` of each source. Shown when the canon
 /// already holds the import, which keeps the repo's.
 fn config_differences(folder: &Manifest, repo: &Manifest, content: &Folder) -> Vec<String> {
     let mut differs = Vec::new();
@@ -1164,8 +1164,8 @@ fn local_modifications(skill: &Snapshot, upstream: &Snapshot) -> Vec<String> {
     out
 }
 
-/// The preview lines for what the import writes to the skill repo.
-fn print_writes(repo: &SkillRepo, candidate: &Candidate, change: &Change, todo: &[Held]) {
+/// The preview lines for what the import writes to the canon.
+fn print_writes(repo: &Canon, candidate: &Candidate, change: &Change, todo: &[Held]) {
     let held = |rel: &str| {
         let i = change.pieces.iter().position(|(r, _)| r == rel);
         i.map(|i| &todo[i])
@@ -1210,7 +1210,7 @@ fn print_writes(repo: &SkillRepo, candidate: &Candidate, change: &Change, todo: 
 }
 
 /// The preview lines for the tool directories and instruction locations.
-fn print_plan(repo: &SkillRepo, plan: &Plan, paths: &Paths) {
+fn print_plan(repo: &Canon, plan: &Plan, paths: &Paths) {
     for location in &plan.moves {
         match &location.link {
             Some(target) if target == &repo.shared_body() => out!(
@@ -1253,7 +1253,7 @@ impl Candidate<'_> {
     /// Every piece, in the order the import writes them: `skiman.toml`,
     /// `skiman.lock`, `upstream/`, the shared body, `skills/`. [`progress`]
     /// and [`fetched_before`] depend on that order:
-    /// - `skiman.toml` comes first, so a skill repo that holds any other
+    /// - `skiman.toml` comes first, so a canon that holds any other
     ///   piece as the import writes it holds the import's `skiman.toml` too,
     ///   and a shared body that is the import's says so.
     /// - The source tables and lock entries come before the snapshots, so a
@@ -1304,8 +1304,8 @@ fn names_in(dir: &Path) -> Result<Vec<String>, Failure> {
 }
 
 /// Refuses (exit 1) when `skiman.toml`, `skiman.lock` or the shared body of
-/// the skill repo is there but is not a regular file.
-fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
+/// the canon is there but is not a regular file.
+fn refuse_irregular_files(repo: &Canon) -> Result<(), Failure> {
     let mut lines = Vec::new();
     for rel in REPO_FILES {
         let path = repo.root().join(rel);
@@ -1330,7 +1330,7 @@ fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
     )))
 }
 
-/// How far the skill repo is with this import, decided before anything is fetched.
+/// How far the canon is with this import, decided before anything is fetched.
 #[derive(Debug, PartialEq, Eq)]
 enum Progress {
     /// The repo holds everything the import writes.
@@ -1352,7 +1352,7 @@ enum Progress {
 /// that holds something. `repo_manifest` is the repo's `skiman.toml`; one
 /// that does not parse is not done.
 fn progress(
-    repo: &SkillRepo,
+    repo: &Canon,
     content: &Folder,
     folder_manifest: &Manifest,
     repo_manifest: &str,
@@ -1408,7 +1408,7 @@ fn progress(
 /// The refusal for [`Progress::OtherSharedBody`]. The repo alone cannot tell
 /// an import that ran (finished or stopped part-way) from one that never
 /// did, so the way on depends on which it is.
-fn other_shared_body(repo: &SkillRepo, folder: &Path) -> Failure {
+fn other_shared_body(repo: &Canon, folder: &Path) -> Failure {
     let theirs = folder.join(SHARED_BODY).display().to_string();
     let ours = repo.shared_body().display().to_string();
     Failure::refused(format!(
@@ -1423,16 +1423,12 @@ fn other_shared_body(repo: &SkillRepo, folder: &Path) -> Failure {
     ))
 }
 
-/// What the skill repo holds where each piece of `change` goes. Refuses
+/// What the canon holds where each piece of `change` goes. Refuses
 /// (exit 1, nothing changed), naming each with its ways out, a
 /// `skills/<name>` that differs from the folder's, anything in `skills/`,
 /// `upstream/` or `skiman.lock` that the import does not write, and a piece
 /// that is not a regular file or folder.
-fn repo_todo(
-    repo: &SkillRepo,
-    candidate: &Candidate,
-    change: &Change,
-) -> Result<Vec<Held>, Failure> {
+fn repo_todo(repo: &Canon, candidate: &Candidate, change: &Change) -> Result<Vec<Held>, Failure> {
     let todo = change.held(repo.root())?;
     let mut lines = Vec::new();
     for ((rel, want), held) in change.pieces.iter().zip(&todo) {
@@ -1631,11 +1627,11 @@ mod tests {
     }
 
     #[test]
-    fn merging_the_skill_repos_configuration_into_its_own_result_changes_no_byte() {
+    fn merging_the_canons_configuration_into_its_own_result_changes_no_byte() {
         let tools = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
         let allow = "[[secrets.allow]]\npath = \"projects/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n";
         let proj = "[projects.proj]\npath = \"~/proj\"\n";
-        // (the skill repo's skiman.toml, the import folder's)
+        // (the canon's skiman.toml, the import folder's)
         let cases = [
             (format!("{tools}\n{proj}\n{allow}"), tools.to_owned()),
             (

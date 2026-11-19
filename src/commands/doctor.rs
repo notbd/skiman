@@ -1,12 +1,12 @@
 //! `skiman doctor`: every problem of the setup in one place (stories 59, 79).
-//! One line per fact on stdout: the skill repo, the recorded binary, git,
+//! One line per fact on stdout: the canon, the recorded binary, git,
 //! the git hooks and session-start hooks, each agent tool's locations and
 //! aliasing, then every entry skiman does not own (foreign entries on every
 //! run, occupied paths, dangling links, managed-elsewhere content), refused
 //! instruction locations, override and added instruction files, unresolved
 //! conflicts, leftover records and tmp leftovers.
 //!
-//! Read-only: never writes to the skill repo, its `.skiman/` folder, tool
+//! Read-only: never writes to the canon, its `.skiman/` folder, tool
 //! directories or machine state, and never takes the repo lock for longer
 //! than a test of whether it is held. Exit 0 whenever the diagnosis ran.
 
@@ -16,6 +16,8 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::git;
@@ -25,8 +27,6 @@ use crate::linked::{self, Linked, State};
 use crate::manifest::Manifest;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope, rule};
 use crate::session_hooks;
 use crate::sync::{self, Item, ItemKind};
@@ -41,7 +41,7 @@ fn doctor() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let home = paths.home();
     let config = UserConfig::load(&paths)?;
-    let repo = SkillRepo::at(&config.repo)?;
+    let repo = Canon::at(&config.repo)?;
     let manifest = Manifest::load(&repo)?;
     let root = repo.root().display().to_string();
     let io = |e| Failure::operational(format!("cannot read {root}: {e}"));
@@ -64,7 +64,7 @@ fn doctor() -> Result<Exit, Failure> {
     report_linked(&repo, &linked).map_err(io)?;
     report_entries(&paths, &repo, &manifest, &linked, &installed).map_err(io)?;
     report_instruction_locations(&paths, &repo, &installed);
-    report_skill_repo(&repo).map_err(io)?;
+    report_canon(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
     report_projects(&paths, &repo, &manifest);
     Ok(Exit::Success)
@@ -81,7 +81,7 @@ fn report_git() {
     }
 }
 
-fn report_git_hooks(repo: &SkillRepo, binary: &Path) {
+fn report_git_hooks(repo: &Canon, binary: &Path) {
     let root = repo.root().display();
     match git_hooks::status(repo.root(), binary) {
         Err(failure) => out!("git hooks: unknown: {}", failure.message),
@@ -197,7 +197,7 @@ fn alias_note<'a>(
 /// Each linked folder, and what sync would report about it: missing,
 /// breaking a rule, not read, a skill that loses its name, and `linked/`
 /// or `linked/<id>` in the way. Nothing when no folder is registered.
-fn report_linked(repo: &SkillRepo, linked: &Linked) -> std::io::Result<()> {
+fn report_linked(repo: &Canon, linked: &Linked) -> std::io::Result<()> {
     for folder in &linked.folders {
         let id = &folder.id;
         let path = folder
@@ -246,7 +246,7 @@ fn report_linked(repo: &SkillRepo, linked: &Linked) -> std::io::Result<()> {
 /// does, plus the managed-elsewhere paths that exist.
 fn report_entries(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
     linked: &Linked,
     installed: &[&AgentTool],
@@ -346,7 +346,7 @@ fn entries(dir: &Path) -> std::io::Result<Vec<(OsString, std::fs::Metadata)>> {
 }
 
 /// Instruction locations skiman does not own, and files a tool loads instead of them.
-fn report_instruction_locations(paths: &Paths, repo: &SkillRepo, installed: &[&AgentTool]) {
+fn report_instruction_locations(paths: &Paths, repo: &Canon, installed: &[&AgentTool]) {
     let home = paths.home();
     let ownership = Ownership::new(paths, repo, None);
     let mut seen = Vec::new();
@@ -398,7 +398,7 @@ fn report_instruction_locations(paths: &Paths, repo: &SkillRepo, installed: &[&A
 }
 
 /// Unresolved conflicts in every skill folder, and leftover records.
-fn report_skill_repo(repo: &SkillRepo) -> std::io::Result<()> {
+fn report_canon(repo: &Canon) -> std::io::Result<()> {
     let tree = WorkingTree::new(repo.root());
     for placed in Layout::read(&tree)?.skills() {
         if tree.kind(&placed.path())? == Some(Kind::Dir) {
@@ -421,7 +421,7 @@ fn report_skill_repo(repo: &SkillRepo) -> std::io::Result<()> {
 
 /// Every entry of `.skiman/tmp/`: a tmp leftover, or in use by the command
 /// that holds the canon lock.
-fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
+fn report_tmp(repo: &Canon) -> std::io::Result<()> {
     let mut leftovers = match std::fs::read_dir(repo.tmp_dir()) {
         Ok(read) => read
             .map(|entry| entry.map(|e| e.path()))
@@ -433,7 +433,7 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
         return Ok(());
     }
     leftovers.sort();
-    let in_use = RepoLock::is_held(repo)?;
+    let in_use = CanonLock::is_held(repo)?;
     for path in leftovers {
         if in_use {
             out!(
@@ -454,7 +454,7 @@ fn report_tmp(repo: &SkillRepo) -> std::io::Result<()> {
 /// its fix, managed items a project repo now tracks, candidates not adopted
 /// yet, items only the mirror holds, staging folders left by an earlier
 /// write, mirror paths git ignores, and uncommitted mirror changes.
-fn report_projects(paths: &Paths, repo: &SkillRepo, manifest: &Manifest) {
+fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest) {
     use crate::project::state::{State, classify};
     use crate::project::{command, discover, git as pgit, item, root, synced::Synced};
     if manifest.projects().is_empty() {

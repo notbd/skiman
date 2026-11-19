@@ -29,7 +29,7 @@ fn a_canon_skill_enabled_or_not_wins_over_a_linked_skill() {
     for name in ["pdf", "docx"] {
         write(
             sandbox
-                .skill_repo()
+                .canon()
                 .join("skills/office")
                 .join(name)
                 .join("SKILL.md"),
@@ -52,7 +52,7 @@ fn a_canon_skill_enabled_or_not_wins_over_a_linked_skill() {
     }
     assert_eq!(
         target(&sandbox, "pdf"),
-        sandbox.skill_repo().join("skills/office/pdf")
+        sandbox.canon().join("skills/office/pdf")
     );
     assert!(!sandbox.tool_dir(Tool::ClaudeCode).join("docx").exists());
     assert!(
@@ -75,7 +75,7 @@ fn between_linked_folders_the_first_id_wins_and_the_next_takes_over() {
         &sandbox,
         "\n[linked.zeta]\npath = \"~/work/zeta\"\n\n[linked.acme]\npath = \"~/work/acme\"\n",
     );
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
 
     let (code, stderr) = sync(&sandbox);
     assert_eq!(code, 3, "{stderr}");
@@ -116,7 +116,7 @@ fn an_occupied_name_whose_link_resolves_to_the_same_folder_says_it_is_safe_to_de
     assert_eq!(sync(&sandbox).0, 0);
     assert_eq!(
         target(&sandbox, "alpha"),
-        sandbox.skill_repo().join("linked/company/alpha")
+        sandbox.canon().join("linked/company/alpha")
     );
 }
 
@@ -151,7 +151,7 @@ fn a_foreign_link_into_a_registered_folder_gets_no_adopt_hint() {
     let output = sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .output()
         .unwrap();
     let init_stderr = String::from_utf8(output.stderr).unwrap();
@@ -167,7 +167,7 @@ fn a_foreign_link_into_a_registered_folder_gets_no_adopt_hint() {
 /// The canon, every tool directory and the linked folder `company`: a
 /// refused command leaves all of them as they were.
 fn world(sandbox: &Sandbox, company: &std::path::Path) -> Vec<BTreeMap<PathBuf, String>> {
-    let mut world = vec![tree(sandbox.skill_repo()), tree(company)];
+    let mut world = vec![tree(sandbox.canon()), tree(company)];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
 }
@@ -204,7 +204,7 @@ fn commands_that_act_on_a_skill_refuse_a_name_that_is_only_a_linked_skill() {
     let sandbox = Sandbox::new();
     let company = registered(&sandbox);
     write(
-        sandbox.skill_repo().join("skills/beta/SKILL.md"),
+        sandbox.canon().join("skills/beta/SKILL.md"),
         skill_md("beta"),
     );
     assert_eq!(sync(&sandbox).0, 0);
@@ -245,7 +245,7 @@ fn commands_that_act_on_a_skill_work_on_a_canon_skill_that_collides_with_a_linke
     up.commit("v1");
     assert_eq!(run(&sandbox, &["add", "acme/pdf", "--yes"]).0, 0);
     assert_eq!(register(&sandbox).1, 3, "the linked `pdf` loses the name");
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
 
     let (code, stderr) = run(&sandbox, &["diff", "pdf"]);
     assert_eq!(code, 0, "{stderr}");
@@ -256,27 +256,22 @@ fn commands_that_act_on_a_skill_work_on_a_canon_skill_that_collides_with_a_linke
     // A move to another group under the same name gives no new name.
     let (code, stderr) = run(&sandbox, &["mv", "pdf", "--group", "office"]);
     assert_eq!(code, 3, "{stderr}");
-    assert!(
-        sandbox
-            .skill_repo()
-            .join("skills/office/pdf/SKILL.md")
-            .is_file()
-    );
+    assert!(sandbox.canon().join("skills/office/pdf/SKILL.md").is_file());
     assert_eq!(
         target(&sandbox, "pdf"),
-        sandbox.skill_repo().join("skills/office/pdf")
+        sandbox.canon().join("skills/office/pdf")
     );
 
     let (code, stderr) = run(&sandbox, &["remove", "pdf", "--yes"]);
     assert_eq!(code, 0, "{stderr}");
-    assert!(!sandbox.skill_repo().join("skills/office/pdf").exists());
+    assert!(!sandbox.canon().join("skills/office/pdf").exists());
     assert_eq!(target(&sandbox, "pdf"), linked.join("company/pdf"));
 
     // A leftover record under a linked skill's name is still the canon's to clean up.
     append_manifest(&sandbox, "\n[skills.alpha]\nsummary = \"Alpha\"\n");
     let (code, stderr) = run(&sandbox, &["remove", "alpha", "--yes"]);
     assert_eq!(code, 0, "{stderr}");
-    let manifest = std::fs::read_to_string(sandbox.skill_repo().join("skiman.toml")).unwrap();
+    let manifest = std::fs::read_to_string(sandbox.canon().join("skiman.toml")).unwrap();
     assert!(!manifest.contains("[skills.alpha]"), "{manifest}");
     assert_eq!(target(&sandbox, "alpha"), linked.join("company/alpha"));
 }
@@ -288,7 +283,7 @@ fn commands_that_create_a_name_refuse_a_linked_skills_name() {
     let sandbox = Sandbox::new();
     let company = registered(&sandbox);
     write(
-        sandbox.skill_repo().join("skills/beta/SKILL.md"),
+        sandbox.canon().join("skills/beta/SKILL.md"),
         skill_md("beta"),
     );
     assert_eq!(sync(&sandbox).0, 0);
@@ -333,12 +328,12 @@ fn commands_that_create_a_name_refuse_a_linked_skills_name() {
         let (code, stderr) = run(&sandbox, args);
         assert_eq!(code, 0, "{args:?}: {stderr}");
     }
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     for name in ["delta", "gamma", "alpha-two", "beta-two"] {
         assert!(skills.join(name).join("SKILL.md").is_file(), "{name}");
     }
     assert_eq!(
         target(&sandbox, "alpha"),
-        sandbox.skill_repo().join("linked/company/alpha")
+        sandbox.canon().join("linked/company/alpha")
     );
 }

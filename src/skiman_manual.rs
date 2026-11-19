@@ -1,20 +1,20 @@
 //! skiman's manual, the `skiman-manual` skill shipped in the binary. Sync
-//! materialises it, with the skill repo path filled in, into
+//! materialises it, with the canon path filled in, into
 //! `<repo>/.skiman/skiman-manual/`.
 
 use std::io;
 
+use crate::canon::Canon;
 use crate::fsutil;
-use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
 pub const NAME: &str = "skiman-manual";
 
 const TEMPLATE: &str = include_str!("../assets/skiman-manual/SKILL.md");
-const REPO_PLACEHOLDER: &str = "{{SKILL_REPO}}";
+const CANON_PLACEHOLDER: &str = "{{CANON}}";
 
-/// The `SKILL.md` content for this skill repo.
-pub fn content(repo: &SkillRepo) -> String {
+/// The `SKILL.md` content for this canon.
+pub fn content(repo: &Canon) -> String {
     let home_paths = |path: fn(&crate::tools::AgentTool) -> &'static str| {
         TOOLS
             .iter()
@@ -23,7 +23,7 @@ pub fn content(repo: &SkillRepo) -> String {
             .join(", ")
     };
     TEMPLATE
-        .replace(REPO_PLACEHOLDER, &repo.root().display().to_string())
+        .replace(CANON_PLACEHOLDER, &repo.root().display().to_string())
         .replace("{{TOOL_DIRECTORIES}}", &home_paths(|t| t.tool_dir))
         .replace("{{INSTRUCTION_FILES}}", &home_paths(|t| t.instruction_file))
         .replace(
@@ -50,7 +50,7 @@ fn code_list(items: &[&str]) -> String {
 /// so no backup; a link there is removed, not followed). Returns whether it
 /// wrote. Fails without writing when a folder on the way is not a real
 /// folder: a link there could lead the write out of the repo.
-pub fn materialise(repo: &SkillRepo) -> io::Result<bool> {
+pub fn materialise(repo: &Canon) -> io::Result<bool> {
     let dir = repo.manual_dir();
     let file = dir.join("SKILL.md");
     if let Some(why) = fsutil::broken_chain(repo.root(), &file) {

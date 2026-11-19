@@ -5,7 +5,7 @@ description: skiman's manual on where this machine's agent skills and global ins
 
 # skiman manual
 
-The canon is `<SKILL_REPO>`. It is a git repo that holds the canonical
+The canon is `<CANON>`. It is a git repo that holds the canonical
 copy of every skill and of the global instructions. skiman distributes it to
 every agent tool: tool directories (`~/.claude/skills`, `~/.agents/skills`, `~/.gemini/config/skills`) and global
 instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) hold links to the canon.
@@ -56,9 +56,9 @@ instruction files (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMIN
 ## Create a skill
 
 1. Run `skiman new <name> -d "<what it does and when to use it>" --group
-   <group>`. It creates `<SKILL_REPO>/skills/<group>/<name>/SKILL.md` and
+   <group>`. It creates `<CANON>/skills/<group>/<name>/SKILL.md` and
    links it into every agent tool. Pick a group the canon already has
-   (`ls <SKILL_REPO>/skills`); a new group needs the user's approval.
+   (`ls <CANON>/skills`); a new group needs the user's approval.
    Without `--group` the skill sits in no group.
 2. Write the body in that `SKILL.md` below the frontmatter, and any further
    files in the same folder.
@@ -96,14 +96,14 @@ own git, so skiman never installs them (the file list marks them
 
 ## Edit a skill
 
-Edit the files in `<SKILL_REPO>/skills/<name>/`, for own and third-party
+Edit the files in `<CANON>/skills/<name>/`, for own and third-party
 skills alike. This is the canonical copy for every agent tool. Edits to a
 third-party skill are local modifications that updates keep; `skiman diff
 <name>` shows them.
 
 ## Edit the global instructions
 
-Edit the shared body in `<SKILL_REPO>/instructions/shared.md`. Every agent
+Edit the shared body in `<CANON>/instructions/shared.md`. Every agent
 tool loads it at its next session. Write the text itself: a word starting with
 `@` outside code (a file import) is a rule violation. `skiman check` also
 reports the size limit of the enabled agent tools.
@@ -117,7 +117,7 @@ reports the size limit of the enabled agent tools.
    in the canon; show that to the user before updating a skill they
    have not reviewed.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
-   it in `<SKILL_REPO>/skills/<name>/`:
+   it in `<CANON>/skills/<name>/`:
    - Text between `<<<<<<< local (skiman)`, `=======` and
      `>>>>>>> upstream (skiman)`: write the wanted text and delete the three
      marker lines.
@@ -132,7 +132,7 @@ reports the size limit of the enabled agent tools.
 
 ## Describe a skill
 
-A skill's `[skills.<name>]` table in `<SKILL_REPO>/skiman.toml` tells a
+A skill's `[skills.<name>]` table in `<CANON>/skiman.toml` tells a
 person what the skill is; `skiman overview` shows it. Every value is one line.
 
 ```toml
@@ -161,7 +161,7 @@ installed = 2026-01-31           # optional: the day it was installed
 - Move to another group: `skiman mv <name> --group <group>` (`--no-group`
   takes it out of its group). It renames only the folder; the links follow.
   A group folder left empty is removed.
-- Disable: in `<SKILL_REPO>/skiman.toml`, set `enabled = false` in the
+- Disable: in `<CANON>/skiman.toml`, set `enabled = false` in the
   skill's `[skills.<name>]` table, then run `skiman sync`. Delete the line to
   enable it again.
 
@@ -171,7 +171,7 @@ The user registers project roots (`[projects.<id>]` in `skiman.toml`).
 Under them, project instruction files (`.claude/CLAUDE.md`, `.claude/rules/**/*.md`, `AGENTS.md`, `AGENTS.override.md`, `CLAUDE.local.md`, `CLAUDE.md`, `GEMINI.md`) and
 project skills (a folder in `.agent/skills`, `.agents/skills`, `.claude/skills`) stay real files in the
 project.
-skiman keeps a copy of each in `<SKILL_REPO>/projects/<id>/<same path>` and
+skiman keeps a copy of each in `<CANON>/projects/<id>/<same path>` and
 copies every change made in the project into it at each sync.
 
 - Edit project items in place, in the project folder. Never edit the copy

@@ -1,6 +1,6 @@
 //! The project scope (`docs/project-scope.md`): project instruction files and
 //! project skills under user-registered project roots, kept as real files in
-//! the projects and mirrored into the skill repo under `projects/`.
+//! the projects and mirrored into the canon under `projects/`.
 //!
 //! The mirror follows the project: sync copies project changes into the
 //! mirror (`sync`); the project is written only by `skiman project restore`.

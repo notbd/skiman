@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::canon::Canon;
 use crate::discovery;
 use crate::failure::Failure;
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -13,7 +14,6 @@ use crate::git::Prompts;
 use crate::lockfile::LockEntry;
 use crate::manifest::SourceRecord;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::snapshot::{self, Snapshot};
 use crate::source::{Source, SourceKind};
 use crate::tree;
@@ -161,7 +161,7 @@ impl Upstream {
 pub fn locked_snapshot(
     paths: &Paths,
     prompts: Prompts,
-    repo: &SkillRepo,
+    repo: &Canon,
     name: &str,
     source: &SourceRecord,
     entry: &LockEntry,

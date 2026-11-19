@@ -1,6 +1,6 @@
 //! Where write commands stage content before renaming it into place: one
-//! folder per command in the skill repo, `.skiman/tmp/<ts>/` (spec Data
-//! formats, Skill repo layout; clarifications 3, 4 and 6 on #1), and one per
+//! folder per command in the canon, `.skiman/tmp/<ts>/` (spec Data
+//! formats, Canon layout; clarifications 3, 4 and 6 on #1), and one per
 //! replace for project mirrors, `.skiman/swap/<ts>/`, and in a project,
 //! `<anchor>/.skiman-swap-<ts>/` (`docs/project-scope.md`, "Writing").
 //!
@@ -15,10 +15,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::backup::{self, Backups};
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::test_hook;
 
 /// Prefix of a project's staging folder; discovery never enters one.
@@ -32,8 +32,8 @@ pub const PREV: &str = ".skiman-prev";
 #[derive(Debug)]
 pub struct Staging {
     dir: PathBuf,
-    /// The folder every write through this staging stays in: the skill
-    /// repo, or a project root.
+    /// The folder every write through this staging stays in: the canon,
+    /// or a project root.
     root: PathBuf,
 }
 
@@ -57,8 +57,8 @@ impl Staging {
     /// repo lock, after every check that can refuse the command without
     /// writing (exit 1 or 2), and before its first write.
     pub fn begin(
-        repo: &SkillRepo,
-        _lock: &RepoLock,
+        repo: &Canon,
+        _lock: &CanonLock,
         backups: &mut Backups,
     ) -> Result<Staging, Failure> {
         let (tmp, saved) = (repo.tmp_dir(), Path::new("repo/.skiman/tmp"));
@@ -136,7 +136,7 @@ impl Staging {
         self.dir.join("old")
     }
 
-    /// Renames `from` (staged here, or an entry of the skill repo that `mv`
+    /// Renames `from` (staged here, or an entry of the canon that `mv`
     /// renames) to `to`, where nothing may be: an entry that appeared there
     /// is never replaced ([`fsutil::place_new_or_rename`]). Every folder of
     /// `root` on the way to `to` must be a real folder. Fails with exit 4,

@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::{self, Backups};
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
@@ -23,8 +25,6 @@ use crate::linked::Linked;
 use crate::names::{self, Taken};
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
@@ -42,7 +42,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
         return Err(Failure::usage("missing flag without a terminal: --yes"));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let tool = TOOLS
         .iter()
         .find(|tool| tool.id == from)
@@ -70,7 +70,7 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
     }
 
     test_hook::at("adopt", "confirmed");
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     check_name(paths.home(), &repo, name, &entry, Some(&change))?;
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,
@@ -101,12 +101,12 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
 }
 
 /// Refuses (exit 1) a name that fails the name rules, is reserved or is
-/// taken in the skill repo, telling the user to rename or move the entry.
+/// taken in the canon, telling the user to rename or move the entry.
 /// With the `change` adopt writes, a `skills/<name>` that already holds the
 /// copy does not take the name.
 fn check_name(
     home: &Path,
-    repo: &SkillRepo,
+    repo: &Canon,
     name: &str,
     entry: &Path,
     change: Option<&Change>,
@@ -137,7 +137,7 @@ fn check_name(
 /// entry while a linked folder cannot be read.
 fn read(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     tool: &AgentTool,
     name: &str,
 ) -> Result<(PathBuf, Vec<SnapshotFile>), Failure> {
@@ -228,7 +228,7 @@ fn read_copy(entry: &Path, name: &str) -> Result<Vec<SnapshotFile>, Failure> {
 }
 
 /// The whole copy is new content.
-fn validate(repo: &SkillRepo, name: &str, change: &Change) -> Result<(), Failure> {
+fn validate(repo: &Canon, name: &str, change: &Change) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
     let scope = Scope {
         skills: BTreeSet::from([name.to_owned()]),

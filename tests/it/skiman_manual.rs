@@ -8,17 +8,17 @@ fn materialised(sandbox: &Sandbox) -> String {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
-    std::fs::read_to_string(sandbox.skill_repo().join(".skiman/skiman-manual/SKILL.md")).unwrap()
+    std::fs::read_to_string(sandbox.canon().join(".skiman/skiman-manual/SKILL.md")).unwrap()
 }
 
 #[test]
 fn materialised_skiman_manual_passes_every_skill_format_rule() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let folder = sandbox.skill_repo().join(".skiman/skiman-manual");
+    let folder = sandbox.canon().join(".skiman/skiman-manual");
 
     // Frontmatter starts on line 1 and is valid YAML without duplicate keys.
     let rest = content
@@ -51,14 +51,14 @@ fn materialised_skiman_manual_passes_every_skill_format_rule() {
 }
 
 #[test]
-fn skiman_manual_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
+fn skiman_manual_matches_its_snapshot_with_the_canon_path_filled_in() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let repo = sandbox.skill_repo().display().to_string();
+    let repo = sandbox.canon().display().to_string();
     assert!(content.contains(&format!("The canon is `{repo}`.")));
 
     snapbox::assert_data_eq!(
-        content.replace(&repo, "<SKILL_REPO>"),
+        content.replace(&repo, "<CANON>"),
         snapbox::file!["snapshots/skiman-manual.md"].raw()
     );
 }
@@ -69,7 +69,7 @@ fn skiman_manual_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
 fn skiman_manual_covers_every_everyday_operation() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let repo = sandbox.skill_repo().display().to_string();
+    let repo = sandbox.canon().display().to_string();
     let required = [
         ("find the canon", format!("The canon is `{repo}`.")),
         ("create", "skiman new <name> -d".to_owned()),

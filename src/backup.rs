@@ -1,5 +1,5 @@
 //! Backups under machine state (spec Data formats, Machine state):
-//! `backups/<timestamp>/` with `repo/<path relative to the skill repo>` and
+//! `backups/<timestamp>/` with `repo/<path relative to the canon>` and
 //! `<tool id>/<path relative to the tool directory>` inside, created when
 //! first needed. A backup destination is always a new path. A move across
 //! filesystems copies, compares the copy entry by entry, notes in

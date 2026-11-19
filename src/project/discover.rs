@@ -8,8 +8,8 @@ use super::git::is_linked_worktree;
 use super::item::Item;
 use super::pattern::Kind;
 use super::root::Root;
+use crate::canon::Canon;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::staging::PROJECT_PREFIX;
 
 /// Folder names discovery never enters, at any depth.
@@ -40,9 +40,9 @@ pub fn is_excluded(rel: &str, exclude: &[String]) -> bool {
 }
 
 /// The realpaths no project command works in, though a root may hold them:
-/// the skill repo and skiman's state folder. Discovery never enters them,
+/// the canon and skiman's state folder. Discovery never enters them,
 /// and `skiman project` refuses a path given inside them.
-pub fn never_entered(paths: &Paths, repo: &SkillRepo) -> [PathBuf; 2] {
+pub fn never_entered(paths: &Paths, repo: &Canon) -> [PathBuf; 2] {
     [
         repo.root().to_path_buf(),
         paths

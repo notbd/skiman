@@ -8,9 +8,9 @@ use snapbox::str;
 
 use crate::support::{Sandbox, Tool, Upstream, init, read, skill_md, tree};
 
-/// The whole skill repo and every tool directory, to prove a command changed nothing.
+/// The whole canon and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
-    let mut world = vec![tree(sandbox.skill_repo())];
+    let mut world = vec![tree(sandbox.canon())];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
 }
@@ -226,7 +226,7 @@ fn skill_flags_install_the_named_skills_and_record_each_path() {
     let up = flat_repo(&sandbox);
     up.write("skills/xlsx/SKILL.md", skill_md("xlsx"));
     let commit = up.commit("v2");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -247,12 +247,12 @@ skill pdf from https://github.com/acme/skills.git (skills/pdf) at [..] (default 
   reference.md
 skill xlsx from https://github.com/acme/skills.git (skills/xlsx) at [..] (default branch main):
   SKILL.md
-created [..]/skill-repo/upstream/pdf
-created [..]/skill-repo/skills/pdf
-created [..]/skill-repo/upstream/xlsx
-created [..]/skill-repo/skills/xlsx
-changed [..]/skill-repo/skiman.toml
-created [..]/skill-repo/skiman.lock
+created [..]/canon/upstream/pdf
+created [..]/canon/skills/pdf
+created [..]/canon/upstream/xlsx
+created [..]/canon/skills/xlsx
+changed [..]/canon/skiman.toml
+created [..]/canon/skiman.lock
 ...
 "#]])
         .stderr_eq("");
@@ -288,7 +288,7 @@ fn all_installs_every_candidate() {
         .assert()
         .code(0);
 
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for name in ["pdf", "docx"] {
         assert!(
             repo.join(format!("skills/{name}/SKILL.md")).is_file(),
@@ -379,7 +379,7 @@ fn a_skill_value_with_a_slash_names_a_folder_and_one_without_a_name() {
         std::fs::create_dir_all(dir.join(folder)).unwrap();
         std::fs::write(dir.join(folder).join("SKILL.md"), skill_md(name)).unwrap();
     }
-    let toml = || read(sandbox.skill_repo().join("skiman.toml"));
+    let toml = || read(sandbox.canon().join("skiman.toml"));
     let add = |args: &[&str]| {
         sandbox
             .skiman()
@@ -423,7 +423,7 @@ fn a_skill_value_with_a_slash_names_a_folder_and_one_without_a_name() {
             );
     }
     assert_eq!(world(&sandbox), before);
-    let toml = || read(sandbox.skill_repo().join("skiman.toml"));
+    let toml = || read(sandbox.canon().join("skiman.toml"));
     for (value, name, path) in [
         ("pdf/", "pdf-top", "pdf"),
         ("legacy/pdf", "pdf-legacy", "legacy/pdf"),
@@ -473,7 +473,7 @@ error: the name `docx` is taken: skills/docx already exists; nothing was install
 
 "#]]);
     assert_eq!(world(&sandbox), before);
-    assert!(!sandbox.skill_repo().join("skills/pdf").exists());
+    assert!(!sandbox.canon().join("skills/pdf").exists());
 }
 
 #[test]
@@ -493,7 +493,7 @@ fn with_a_terminal_the_user_picks_from_the_candidates() {
     let (code, rest) = pty.wait();
     assert_eq!(code, 0, "{rest}");
 
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(repo.join("skills/pdf/SKILL.md").is_file());
     assert!(!repo.join("skills/docx").exists());
 }
@@ -512,7 +512,7 @@ fn a_tree_url_with_a_slash_branch_installs_that_folder_at_that_branch() {
     up.switch("main");
     // A tag that matches a shorter prefix must lose to the longer branch.
     up.tag("feature");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -552,7 +552,7 @@ fn a_blob_url_to_skill_md_installs_its_folder() {
         .assert()
         .code(0);
 
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert_eq!(read(repo.join("skills/docx/SKILL.md")), skill_md("docx"));
     assert!(!repo.join("skills/pdf").exists());
     let toml = read(repo.join("skiman.toml"));
@@ -603,7 +603,7 @@ fn ref_installs_a_branch_a_tag_or_a_full_commit_and_records_its_kind() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let (_up, [one, two, three]) = versioned(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     for (git_ref, kind, commit, version) in [
         ("stable", "branch", &two, "2\n"),
@@ -670,7 +670,7 @@ fn a_name_that_is_both_a_branch_and_a_tag_installs_the_branch_and_reports_the_ta
     let (up, [one, _, three]) = versioned(&sandbox);
     up.branch("release");
     up.git(["tag", "release", &one]);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -733,7 +733,7 @@ fn a_local_folder_installs_without_git_content_and_without_a_commit() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = local_upstream(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -744,7 +744,7 @@ fn a_local_folder_installs_without_git_content_and_without_a_commit() {
 skill pdf from ~/src/pdf (local folder):
   SKILL.md
   lib/forms.md
-created [..]/skill-repo/upstream/pdf
+created [..]/canon/upstream/pdf
 ...
 "#]])
         .stderr_eq("");
@@ -783,7 +783,7 @@ fn absolute_and_dot_relative_local_folders_are_recorded_as_absolute_paths() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = local_upstream(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -828,7 +828,7 @@ fn a_local_folder_with_several_skills_installs_the_selected_one() {
         .assert()
         .code(0);
 
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(read(repo.join("skiman.toml")).ends_with("url = \"~/src/many\"\npath = \"pdf\"\n"));
     assert!(!repo.join("skills/docx").exists());
 }
@@ -887,7 +887,7 @@ fn a_local_folder_that_is_a_link_is_read_through_it_by_add_and_update() {
     let dir = local_upstream(&sandbox);
     std::fs::create_dir_all(sandbox.home().join("links")).unwrap();
     std::os::unix::fs::symlink(&dir, sandbox.home().join("links/pdf")).unwrap();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()

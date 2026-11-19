@@ -75,7 +75,7 @@ fn sandbox_creates_the_agent_tool_directories_it_is_asked_for() {
         sandbox.tool_dir(Tool::Codex),
         sandbox.home().join(".agents/skills")
     );
-    assert!(!sandbox.skill_repo().exists());
+    assert!(!sandbox.canon().exists());
 }
 
 #[cfg(target_os = "macos")]
@@ -167,12 +167,12 @@ fn github_urls_resolve_to_local_upstreams_without_network() {
 #[test]
 fn symlink_assertion_checks_lexical_and_resolved_target() {
     let sandbox = Sandbox::new();
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     std::fs::create_dir_all(&skill).unwrap();
-    // An alias of the skill repo: the lexical target goes through it, the
+    // An alias of the canon: the lexical target goes through it, the
     // resolved target does not.
     let alias = sandbox.root().join("repo-alias");
-    std::os::unix::fs::symlink(sandbox.skill_repo(), &alias).unwrap();
+    std::os::unix::fs::symlink(sandbox.canon(), &alias).unwrap();
     let link = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
     std::os::unix::fs::symlink(alias.join("skills/pdf"), &link).unwrap();
 
@@ -180,7 +180,7 @@ fn symlink_assertion_checks_lexical_and_resolved_target() {
 
     let wrong_lexical = std::panic::catch_unwind(|| assert_symlink(&link, &skill, &skill)).is_err();
     assert!(wrong_lexical, "a different link text must fail");
-    let other = sandbox.skill_repo().join("skills/other");
+    let other = sandbox.canon().join("skills/other");
     std::fs::create_dir_all(&other).unwrap();
     let wrong_resolved =
         std::panic::catch_unwind(|| assert_symlink(&link, alias.join("skills/pdf"), &other))

@@ -7,8 +7,8 @@ use std::ffi::OsString;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use crate::canon::Canon;
 use crate::fsutil::realpath_as_far_as_exists;
-use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
 /// At most this many links are followed on the way to one path; more is a loop.
@@ -122,7 +122,7 @@ pub struct Places {
 }
 
 impl Places {
-    pub fn new(home: &Path, repo: &SkillRepo) -> Places {
+    pub fn new(home: &Path, repo: &Canon) -> Places {
         let both = |path: PathBuf| {
             let real = realpath_as_far_as_exists(&path);
             if real == path {
@@ -255,7 +255,7 @@ mod tests {
         let repo_dir = root.join("canons/main");
         std::fs::create_dir_all(home.join(".claude/skills")).unwrap();
         std::fs::create_dir_all(&repo_dir).unwrap();
-        let repo = SkillRepo::at(&repo_dir).unwrap();
+        let repo = Canon::at(&repo_dir).unwrap();
         let places = Places::new(&home, &repo);
 
         for path in [

@@ -1,5 +1,5 @@
-//! `skiman init <path>`: create or reuse a skill repo, write the user config,
-//! then sync. When the user config pointed to another skill repo, that sync
+//! `skiman init <path>`: create or reuse a canon, write the user config,
+//! then sync. When the user config pointed to another canon, that sync
 //! treats the previous repo's links as owned. Before that sync it installs the
 //! git hooks, and finally it adds or removes the session-start hook entries.
 
@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::Exit;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::commands::has_terminal;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
@@ -19,8 +21,6 @@ use crate::linked::{self, Linked, gitignore};
 use crate::manifest::Manifest;
 use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::session_hooks;
 use crate::sync::{self, ItemKind, Output};
 use crate::tools::TOOLS;
@@ -51,14 +51,14 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current directory: {e}")))?;
     let path = absolute_lexical(&cwd, path);
-    let machine = RepoLock::machine(&paths)?;
+    let machine = CanonLock::machine(&paths)?;
     let target = inspect(&path)?;
 
     if target == Target::Create {
         git_init(&path)?;
     }
-    let repo = SkillRepo::at(&path)?;
-    let lock = RepoLock::of_init(machine, &repo)?;
+    let repo = Canon::at(&path)?;
+    let lock = CanonLock::of_init(machine, &repo)?;
     let mut guarded = Exit::Success;
     if target == Target::Reuse {
         guarded = ignore_machine_state(&repo, paths.home())?;
@@ -88,7 +88,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     install_git_hooks(&repo, &binary)?;
     let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo, &[]);
     hint_not_owned(&report, &repo);
-    // Settings files are outside the skill repo: do not hold the repo lock
+    // Settings files are outside the canon: do not hold the repo lock
     // while the preview waits for an answer; each write takes it again.
     drop(lock);
     let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks);
@@ -101,7 +101,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
 /// resolves into a linked folder registered at that moment.
 fn install_session_hooks(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     binary: &Path,
     session_hooks: Option<&str>,
 ) -> Exit {
@@ -110,8 +110,8 @@ fn install_session_hooks(
         Some(ids) => session_hooks::Request::Add(ids),
         None => session_hooks::Request::Ask,
     };
-    let guard = |file: &Path| -> Result<RepoLock, Failure> {
-        let lock = RepoLock::wait(paths, repo)?;
+    let guard = |file: &Path| -> Result<CanonLock, Failure> {
+        let lock = CanonLock::wait(paths, repo)?;
         let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?);
         match linked.refusal(file, &linked::written_through(file)) {
             Some(message) => Err(Failure {
@@ -125,10 +125,10 @@ fn install_session_hooks(
 }
 
 /// Story 5: content skiman does not own in the tool directories or the
-/// instruction locations. With no skills in the skill repo yet, the way in is
+/// instruction locations. With no skills in the canon yet, the way in is
 /// `skiman import`; otherwise `skiman adopt` for each foreign skill, and an
 /// instruction file is moved away by hand (skiman never replaces it).
-fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
+fn hint_not_owned(report: &sync::Report, repo: &Canon) {
     // A link into a linked folder is never adopted or imported.
     let foreign = report.items.iter().any(|item| {
         matches!(&item.kind, ItemKind::Foreign { into, .. } if !matches!(into, sync::Into::Linked(_)))
@@ -158,7 +158,7 @@ fn hint_not_owned(report: &sync::Report, repo: &SkillRepo) {
 
 /// Installs the git hooks and tells the user what to add by hand where
 /// skiman left a hook alone.
-fn install_git_hooks(repo: &SkillRepo, binary: &Path) -> Result<(), Failure> {
+fn install_git_hooks(repo: &Canon, binary: &Path) -> Result<(), Failure> {
     let installed = git_hooks::install(repo.root(), binary)?;
     if installed.not_a_git_repo {
         err!(
@@ -190,7 +190,7 @@ fn install_git_hooks(repo: &SkillRepo, binary: &Path) -> Result<(), Failure> {
 }
 
 /// Whether any skill folder under `skills/` holds a `SKILL.md`.
-fn has_skills(repo: &SkillRepo) -> bool {
+fn has_skills(repo: &Canon) -> bool {
     repo.layout().is_ok_and(|layout| {
         layout
             .skills()
@@ -251,7 +251,7 @@ fn git_init(path: &Path) -> Result<(), Failure> {
 /// `skills/`, an empty `instructions/shared.md`, `skiman.toml` listing the
 /// tools present right now, and the `.gitignore` entry for `.skiman/`
 /// (`init` adds the one for `linked/` next).
-fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
+fn write_layout(repo: &Canon, home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(repo.skills_dir())?;
     let shared = repo.shared_body();
     std::fs::create_dir_all(shared.parent().expect("shared body has a parent"))?;
@@ -265,13 +265,13 @@ fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
     std::fs::write(repo.root().join(".gitignore"), ".skiman/\n")
 }
 
-/// A reused skill repo gets the `.gitignore` entry for `.skiman/` when no
+/// A reused canon gets the `.gitignore` entry for `.skiman/` when no
 /// line ignores it yet (the file is created when missing); nothing else of
 /// it changes. The new content replaces the file in one step and keeps its
 /// mode. When `.gitignore` is a link (a repo managed with dotfiles), the
 /// file it points to is replaced and the link stays; a link to a missing
 /// file is refused.
-fn ignore_machine_state(repo: &SkillRepo, home: &Path) -> Result<Exit, Failure> {
+fn ignore_machine_state(repo: &Canon, home: &Path) -> Result<Exit, Failure> {
     let path = repo.root().join(".gitignore");
     let cannot_read =
         |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", path.display()));

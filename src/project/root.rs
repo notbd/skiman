@@ -5,10 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::canon::Canon;
 use crate::fsutil::{absolute_lexical, realpath_as_far_as_exists};
 use crate::manifest::{Manifest, ProjectEntry};
 use crate::names;
-use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
 /// A project root that passed validation.
@@ -65,7 +65,7 @@ pub fn written_form(home: &Path, path: &Path) -> String {
 
 /// Every configured root, validated: `Ok` for the usable ones, `Err` with the
 /// reason for the others, in file order.
-pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result<Root, Problem>> {
+pub fn resolve(home: &Path, repo: &Canon, manifest: &Manifest) -> Vec<Result<Root, Problem>> {
     let entries = manifest.projects();
     let candidates: Vec<Result<Root, Problem>> = entries
         .iter()
@@ -115,7 +115,7 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
         .collect()
 }
 
-fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root, Problem> {
+fn check_one(home: &Path, repo: &Canon, entry: &ProjectEntry) -> Result<Root, Problem> {
     let problem = |message: String| Problem {
         id: entry.id.clone(),
         message,
@@ -171,7 +171,7 @@ pub fn invalid_exclude(entry: &str) -> Option<&'static str> {
 }
 
 /// The checks on a root folder's realpath that do not depend on other roots.
-pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), String> {
+pub fn validate_dir(home: &Path, repo: &Canon, dir: &Path) -> Result<(), String> {
     let home_real = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
     if home_real.starts_with(dir) {
         return Err(format!(

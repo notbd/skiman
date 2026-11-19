@@ -23,9 +23,9 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::Exit;
+use crate::canon_lock::CanonLock;
 use crate::commands;
 use crate::failure::Failure;
-use crate::repo_lock::RepoLock;
 use crate::tools::{AgentTool, HookShape, SessionHook, TOOLS};
 
 /// Marks a hook command as skiman's.
@@ -49,7 +49,7 @@ pub enum Request<'a> {
 /// written: holds the canon lock while the write happens, or says why the
 /// file is left as it is (a settings file that resolves into a linked
 /// folder, exit 3).
-pub type Guard<'a> = &'a dyn Fn(&Path) -> Result<RepoLock, Failure>;
+pub type Guard<'a> = &'a dyn Fn(&Path) -> Result<CanonLock, Failure>;
 
 /// Applies `request`; `binary` is the recorded binary path. Every settings
 /// file is handled on its own, and the exit is the highest of them.

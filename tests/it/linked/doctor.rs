@@ -23,13 +23,10 @@ fn assert_line(stdout: &str, line: &str) {
 fn doctor_reports_each_linked_folder_and_its_problems() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write(
-        sandbox.skill_repo().join("skills/pdf/SKILL.md"),
-        skill_md("pdf"),
-    );
+    write(sandbox.canon().join("skills/pdf/SKILL.md"), skill_md("pdf"));
     let company = folder(&sandbox, "work/company", &["alpha", "pdf"]);
     folder(&sandbox, "work/tools", &["beta"]);
-    let inside = sandbox.skill_repo().join("skills");
+    let inside = sandbox.canon().join("skills");
     append_manifest(
         &sandbox,
         &format!(
@@ -38,15 +35,11 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
         ),
     );
     sandbox.skiman().arg("sync").output().unwrap();
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
     std::fs::remove_file(linked.join("tools")).unwrap();
     std::fs::create_dir(linked.join("tools")).unwrap();
     let home = sandbox.home();
-    let before = (
-        tree(sandbox.skill_repo()),
-        tree(&home),
-        contents(&[&company]),
-    );
+    let before = (tree(sandbox.canon()), tree(&home), contents(&[&company]));
 
     let stdout = doctor(&sandbox);
 
@@ -69,7 +62,7 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
         &format!(
             "linked folder inside: skipped: {} lies in {}, the canon, where skiman writes; fix [linked.inside] in skiman.toml",
             inside.display(),
-            sandbox.skill_repo().display()
+            sandbox.canon().display()
         ),
     );
     assert_line(
@@ -87,11 +80,7 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
         ),
     );
     assert_eq!(
-        (
-            tree(sandbox.skill_repo()),
-            tree(&home),
-            contents(&[&company])
-        ),
+        (tree(sandbox.canon()), tree(&home), contents(&[&company])),
         before
     );
 }
@@ -102,7 +91,7 @@ fn doctor_reports_linked_that_is_a_file() {
     init(&sandbox);
     folder(&sandbox, "work/company", &["alpha"]);
     append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
     std::fs::write(&linked, "x").unwrap();
 
     let stdout = doctor(&sandbox);

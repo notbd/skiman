@@ -129,7 +129,7 @@ fn a_file_and_a_symlink_move_to_a_backup_on_another_filesystem() {
         return;
     };
     init(&sandbox);
-    let tmp = sandbox.skill_repo().join(".skiman/tmp");
+    let tmp = sandbox.canon().join(".skiman/tmp");
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(tmp.join("stray.md"), "left behind\n").unwrap();
     std::os::unix::fs::symlink("stray.md", tmp.join("link")).unwrap();
@@ -189,7 +189,7 @@ fn restore_over_a_file_on_a_volume_without_hard_links_fails_and_leaves_the_file_
         .assert()
         .code(0);
     std::fs::write(
-        sandbox.skill_repo().join("projects/proj/AGENTS.md"),
+        sandbox.canon().join("projects/proj/AGENTS.md"),
         "mirror edit\n",
     )
     .unwrap();
@@ -247,7 +247,7 @@ fn restore_moves_the_replaced_version_into_a_backup_on_another_filesystem() {
     skiman(&["project", "add"]).arg(&project).assert().code(0);
     skiman(&["project", "adopt", "--yes"]).assert().code(0);
     std::fs::write(
-        sandbox.skill_repo().join("projects/work/AGENTS.md"),
+        sandbox.canon().join("projects/work/AGENTS.md"),
         "mirror edit\n",
     )
     .unwrap();
@@ -315,7 +315,7 @@ fn an_import_killed_at_each_step_of_a_move_to_another_filesystem_finishes_when_r
         let before = tree(&original);
         skiman()
             .args(["init", "--session-hooks", "none"])
-            .arg(sandbox.skill_repo())
+            .arg(sandbox.canon())
             .assert()
             .code(0);
         let folder = sandbox.root().join("import");
@@ -456,13 +456,13 @@ fn a_move_cut_short_in_a_swap_folder_tmp_or_an_instruction_location_is_finished_
         std::fs::create_dir_all(sandbox.home().join(".claude")).unwrap();
         skiman()
             .args(["init", "--session-hooks", "none"])
-            .arg(sandbox.skill_repo())
+            .arg(sandbox.canon())
             .assert()
             .code(0);
         let project = sandbox.home().join("work");
         let skill = project.join(".claude/skills/foo");
         let tmp = sandbox
-            .skill_repo()
+            .canon()
             .join(".skiman/tmp/20200101T000000Z/old/skills/keep");
         let folder = sandbox.root().join("import");
         let (name, text) = match place {
@@ -484,7 +484,7 @@ fn a_move_cut_short_in_a_swap_folder_tmp_or_an_instruction_location_is_finished_
                     .assert()
                     .code(0);
                 let mirror = sandbox
-                    .skill_repo()
+                    .canon()
                     .join("projects/work/.claude/skills/foo/SKILL.md");
                 write(mirror, format!("{}mirror edit\n", skill_md("foo")));
                 ("SKILL.md", "project original")
@@ -503,11 +503,11 @@ fn a_move_cut_short_in_a_swap_folder_tmp_or_an_instruction_location_is_finished_
                 write(sandbox.instruction_file(Tool::ClaudeCode), "user rules\n");
                 write(
                     folder.join("instructions/shared.md"),
-                    read_text(&sandbox.skill_repo().join("instructions/shared.md")),
+                    read_text(&sandbox.canon().join("instructions/shared.md")),
                 );
                 write(
                     folder.join("skiman.toml"),
-                    read_text(&sandbox.skill_repo().join("skiman.toml")),
+                    read_text(&sandbox.canon().join("skiman.toml")),
                 );
                 ("CLAUDE.md", "user rules")
             }
@@ -531,7 +531,7 @@ fn a_move_cut_short_in_a_swap_folder_tmp_or_an_instruction_location_is_finished_
         if place == "swap" {
             // Something to write, so the restore looks at the swap folder.
             let mirror = sandbox
-                .skill_repo()
+                .canon()
                 .join("projects/work/.claude/skills/foo/SKILL.md");
             write(mirror, format!("{}mirror edit 2\n", skill_md("foo")));
         }
@@ -642,7 +642,7 @@ fn an_update_killed_while_the_old_skill_moves_to_another_filesystem_finishes_whe
     );
 }
 
-/// A third-party pdf with ten local files in a skill repo on an HFS+ volume
+/// A third-party pdf with ten local files in a canon on an HFS+ volume
 /// (no swapping rename), and an upstream fix to update to.
 #[cfg(target_os = "macos")]
 fn pdf_on_a_volume_without_a_swap(sandbox: &Sandbox) -> Option<(DiskImage, PathBuf)> {
@@ -657,7 +657,7 @@ fn pdf_on_a_volume_without_a_swap_at(
     skill: &str,
 ) -> Option<(DiskImage, PathBuf)> {
     let disk = attached(DiskImage::attach(sandbox, "HFS+", "repo"))?;
-    let repo = disk.mount.join("skill-repo");
+    let repo = disk.mount.join("canon");
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
@@ -903,7 +903,7 @@ fn an_adopt_killed_while_the_original_moves_to_another_filesystem_finishes_when_
         let skiman = || sandbox.skiman().env("XDG_STATE_HOME", &state);
         skiman()
             .args(["init", "--session-hooks", "none"])
-            .arg(sandbox.skill_repo())
+            .arg(sandbox.canon())
             .assert()
             .code(0);
         let original = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
@@ -927,7 +927,7 @@ fn an_adopt_killed_while_the_original_moves_to_another_filesystem_finishes_when_
             String::from_utf8_lossy(&again.stderr)
         );
 
-        let skill = sandbox.skill_repo().join("skills/notes");
+        let skill = sandbox.canon().join("skills/notes");
         assert_eq!(std::fs::read_link(&original).unwrap(), skill, "{point}");
         assert_eq!(copies_of(&state, "4.md", "4\n"), copies, "{point}");
         let check = skiman().arg("check").output().unwrap();
@@ -1056,7 +1056,7 @@ fn a_project_file_edited_as_restore_took_it_out_goes_back() {
         .assert()
         .code(0);
     write(
-        sandbox.skill_repo().join("projects/proj/AGENTS.md"),
+        sandbox.canon().join("projects/proj/AGENTS.md"),
         "mirror edit\n",
     );
     let prev = format!(
@@ -1132,7 +1132,7 @@ fn a_restore_killed_between_its_two_renames_finishes_when_run_again() {
         .assert()
         .code(0);
     write(
-        sandbox.skill_repo().join("projects/proj/AGENTS.md"),
+        sandbox.canon().join("projects/proj/AGENTS.md"),
         "mirror edit\n",
     );
     let restore = || {
@@ -1183,7 +1183,7 @@ fn a_project_write_killed_between_its_two_renames_writes_the_source_as_it_is_now
         let Some(disk) = attached(DiskImage::attach(&sandbox, "HFS+", "vol")) else {
             return;
         };
-        let repo = disk.mount.join("skill-repo");
+        let repo = disk.mount.join("canon");
         sandbox
             .skiman()
             .args(["init", "--session-hooks", "none"])
@@ -1265,7 +1265,7 @@ fn a_restore_whose_previous_version_is_copied_but_not_deleted_says_what_to_delet
         .assert()
         .code(0);
     write(
-        sandbox.skill_repo().join("projects/work/AGENTS.md"),
+        sandbox.canon().join("projects/work/AGENTS.md"),
         "mirror edit\n",
     );
     let old = format!("{}/.skiman-swap-*/old", project.display());

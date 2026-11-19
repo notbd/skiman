@@ -1,6 +1,6 @@
 //! `skiman overview`: every skill on this machine as Markdown, for a person
-//! who wants to see what each one is and where it came from. The skill
-//! repo's skills come by group with their summary, kind, source, install
+//! who wants to see what each one is and where it came from. The canon's
+//! skills come by group with their summary, kind, source, install
 //! day, whether they are enabled and whether they have local modifications;
 //! then each linked folder as one section, with each linked skill's summary
 //! (ADR 0011) and whether it is distributed; then the skill skiman brings,
@@ -14,6 +14,7 @@ use std::process::Stdio;
 
 use super::list::{modified, source_text, yes_no};
 use crate::Exit;
+use crate::canon::Canon;
 use crate::elsewhere::{self, OutsideSkill};
 use crate::failure::{Failure, finish};
 use crate::git;
@@ -21,7 +22,6 @@ use crate::linked::summary::About;
 use crate::linked::{self, Linked, Shown};
 use crate::manifest::Manifest;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::rules;
 use crate::skiman_manual;
 use crate::tree::{Kind, Tree, WorkingTree};
@@ -53,7 +53,7 @@ pub fn run() -> Exit {
 
 fn overview() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let manifest = Manifest::load(&repo)?;
     let tree = WorkingTree::new(repo.root());
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
@@ -214,7 +214,7 @@ fn home_relative(path: &Path, home: &Path) -> String {
 /// of the skill folder `skill`, or created it as a copy of another file (a
 /// skill removed and installed again counts from its last install),
 /// following renames (a move to another group is one); `None` when the
-/// skill repo is not in a git repo or the file was never committed.
+/// canon is not in a git repo or the file was never committed.
 fn install_commit_day(root: &Path, skill: &str) -> Option<String> {
     let output = git::query_command(root)
         // `--follow` sees a skill adapted from another as a copy (C) of it:

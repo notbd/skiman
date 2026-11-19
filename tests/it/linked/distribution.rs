@@ -34,8 +34,8 @@ fn a_folder_of_skills_and_a_single_skill_folder_reach_every_tool_directory() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-linked [..]/skill-repo/linked/company
-linked [..]/skill-repo/linked/solo
+linked [..]/canon/linked/company
+linked [..]/canon/linked/solo
 linked [..]/home/.claude/skills/alpha
 linked [..]/home/.claude/skills/beta
 linked [..]/home/.claude/skills/solo
@@ -49,7 +49,7 @@ linked [..]/home/.gemini/config/skills/solo
 "#]])
         .stderr_eq("");
 
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
     assert_symlink(
         linked.join("company"),
         home.join("work/company"),
@@ -118,7 +118,7 @@ fn reserved_invalid_and_dot_entries_are_not_distributed() {
         );
     }
     write(
-        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        sandbox.canon().join("skills/notes/SKILL.md"),
         crate::support::skill_md("notes"),
     );
 
@@ -225,7 +225,7 @@ fn an_unreadable_sub_folder_keeps_its_link_and_needs_attention() {
         stderr.contains("linked skill alpha of `company` is not checked"),
         "{stderr}"
     );
-    let linked = sandbox.skill_repo().join("linked/company");
+    let linked = sandbox.canon().join("linked/company");
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);
         assert_eq!(
@@ -252,7 +252,7 @@ fn linked_remove_leaves_no_link_behind() {
         .code(0)
         .stdout_eq(str![[r#"
 unregistered linked folder company: ~/work/company
-removed [..]/skill-repo/linked/company
+removed [..]/canon/linked/company
 removed [..]/home/.claude/skills/alpha
 removed [..]/home/.claude/skills/beta
 removed [..]/home/.agents/skills/alpha
@@ -262,8 +262,8 @@ removed [..]/home/.gemini/config/skills/beta
 
 "#]]);
 
-    assert!(!exists(sandbox.skill_repo().join("linked/company")));
-    assert!(!crate::support::read(sandbox.skill_repo().join("skiman.toml")).contains("company"));
+    assert!(!exists(sandbox.canon().join("linked/company")));
+    assert!(!crate::support::read(sandbox.canon().join("skiman.toml")).contains("company"));
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);
         assert!(!exists(dir.join("alpha")) && !exists(dir.join("beta")));
@@ -290,7 +290,7 @@ fn a_moved_folder_needs_only_its_path_line() {
     std::fs::create_dir(home.join("moved")).unwrap();
     std::fs::rename(home.join("work/company"), home.join("moved/company")).unwrap();
     std::fs::rename(home.join("work/solo"), home.join("moved/solo-renamed")).unwrap();
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = crate::support::read(&manifest)
         .replace("~/work/company", "~/moved/company")
         .replace("~/work/solo", "~/moved/solo-renamed");
@@ -302,8 +302,8 @@ fn a_moved_folder_needs_only_its_path_line() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-retargeted [..]/skill-repo/linked/company
-retargeted [..]/skill-repo/linked/solo
+retargeted [..]/canon/linked/company
+retargeted [..]/canon/linked/solo
 
 "#]])
         .stderr_eq("");

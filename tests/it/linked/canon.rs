@@ -29,7 +29,7 @@ fn sync(sandbox: &Sandbox) -> (i32, String) {
 fn linked_as_a_link_or_a_file_links_no_linked_skill() {
     for make in ["link", "file"] {
         let sandbox = company();
-        let linked = sandbox.skill_repo().join("linked");
+        let linked = sandbox.canon().join("linked");
         let elsewhere = sandbox.root().join("elsewhere");
         std::fs::create_dir(&elsewhere).unwrap();
         match make {
@@ -60,7 +60,7 @@ fn linked_as_a_link_or_a_file_links_no_linked_skill() {
 #[test]
 fn entries_under_linked_that_are_not_links_are_reported_and_kept() {
     let sandbox = company();
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
     std::fs::create_dir_all(linked.join("company")).unwrap();
     std::fs::write(linked.join("notes.txt"), "mine").unwrap();
     std::fs::write(linked.join(".DS_Store"), "").unwrap();
@@ -104,16 +104,15 @@ fn a_sync_killed_while_it_retargets_linked_id_finishes_when_run_again() {
             folder(sandbox, "moved/company", &["alpha"]);
             append_manifest(sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
             sandbox.skiman().arg("sync").output().unwrap();
-            let manifest = sandbox.skill_repo().join("skiman.toml");
+            let manifest = sandbox.canon().join("skiman.toml");
             let text = read(&manifest).replace("~/work/company", "~/moved/company");
             std::fs::write(&manifest, text).unwrap();
-            std::os::unix::fs::symlink("/nowhere", sandbox.skill_repo().join("linked/gone"))
-                .unwrap();
+            std::os::unix::fs::symlink("/nowhere", sandbox.canon().join("linked/gone")).unwrap();
             vec!["sync".to_owned()]
         },
         &[
-            "link:aside:<root>/skill-repo/linked/company",
-            "link:aside:<root>/skill-repo/linked/gone",
+            "link:aside:<root>/canon/linked/company",
+            "link:aside:<root>/canon/linked/gone",
         ],
     );
 }

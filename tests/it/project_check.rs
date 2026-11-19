@@ -15,7 +15,7 @@ fn append(path: impl AsRef<Path>, text: &str) {
     std::fs::write(path, old).unwrap();
 }
 
-/// A skill repo with the project root `~/work` registered as `work`.
+/// A canon with the project root `~/work` registered as `work`.
 fn with_root() -> (Sandbox, PathBuf) {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -30,9 +30,9 @@ fn with_root() -> (Sandbox, PathBuf) {
     (sandbox, root)
 }
 
-/// `projects/<rel>` in the skill repo.
+/// `projects/<rel>` in the canon.
 fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
-    sandbox.skill_repo().join("projects").join(rel)
+    sandbox.canon().join("projects").join(rel)
 }
 
 fn adopt(sandbox: &Sandbox) {
@@ -158,7 +158,7 @@ fn a_secret_in_a_mirror_file_is_reported_and_an_allow_entry_for_its_projects_pat
     assert_lacks(&stdout, &key);
 
     append(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         &format!(
             "\n[[secrets.allow]]\npath = \"projects/work/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"{fp}\"\n"
         ),
@@ -376,7 +376,7 @@ fn doctor_reports_uncommitted_mirror_changes_until_they_are_committed() {
         "projects: 2 uncommitted change(s); skiman never commits, so commit them to keep their history",
     );
 
-    git_commit_all(&sandbox, &sandbox.skill_repo());
+    git_commit_all(&sandbox, &sandbox.canon());
     assert_lacks(&doctor(&sandbox), "uncommitted change");
 }
 
@@ -423,6 +423,6 @@ fn doctor_reports_a_project_change_the_rules_block() {
 #[test]
 fn a_mirror_folder_left_with_only_ignored_files_is_not_a_violation() {
     let (sandbox, _root) = with_root();
-    write(sandbox.skill_repo().join("projects/gone/.DS_Store"), "x");
+    write(sandbox.canon().join("projects/gone/.DS_Store"), "x");
     sandbox.skiman().arg("check").assert().code(0);
 }

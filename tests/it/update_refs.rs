@@ -28,7 +28,7 @@ fn add(sandbox: &Sandbox, extra: &[&str]) {
 }
 
 fn repo(sandbox: &Sandbox) -> PathBuf {
-    sandbox.skill_repo()
+    sandbox.canon()
 }
 
 fn version(sandbox: &Sandbox) -> String {

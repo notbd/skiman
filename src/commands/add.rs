@@ -10,6 +10,8 @@ use std::path::Path;
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{self, Change, Held, Want};
 use crate::cli::AddArgs as Args;
 use crate::commands::{ask, confirm, has_terminal, prompts};
@@ -24,8 +26,6 @@ use crate::manifest::{self, Manifest, SourceRecord};
 use crate::names::{self, Taken};
 use crate::path_safety;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, LIMITS, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
@@ -68,7 +68,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         ));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current folder: {e}")))?;
     let source = Source::parse(&args.source, paths.home(), &cwd)?;
@@ -137,7 +137,7 @@ fn add(args: Args) -> Result<Exit, Failure> {
         return Err(Failure::refused("not installed; nothing was written"));
     }
 
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     check_install_names(paths.home(), &repo, &installs, &upstream)?;
     let change = change(&repo, &installs, &upstream)?;
     validate(&repo, &installs, &change)?;
@@ -392,7 +392,7 @@ fn inspect(
 /// part-way finishes when it is run again.
 fn check_install_names(
     home: &Path,
-    repo: &SkillRepo,
+    repo: &Canon,
     installs: &[Install],
     upstream: &Upstream,
 ) -> Result<(), Failure> {
@@ -491,7 +491,7 @@ fn skill_files(install: &Install) -> Vec<SnapshotFile> {
 /// is written first, so the skill folder counts only with it), the source
 /// table and lock entry are this add's.
 fn ours(
-    repo: &SkillRepo,
+    repo: &Canon,
     install: &Install,
     upstream: &Upstream,
     taken: Taken,
@@ -512,7 +512,7 @@ fn ours(
 
 /// For each skill `upstream/<name>` and its skill folder, then `skiman.toml`
 /// with their source tables and, last, `skiman.lock` with their entries.
-fn change(repo: &SkillRepo, installs: &[Install], upstream: &Upstream) -> Result<Change, Failure> {
+fn change(repo: &Canon, installs: &[Install], upstream: &Upstream) -> Result<Change, Failure> {
     let refuse = |path: &Path, e: String| Failure::refused(format!("{}: {e}", path.display()));
     let (manifest_file, lock_file) = (repo.manifest_file(), repo.lockfile());
     let mut manifest = read_text(&manifest_file)?.unwrap_or_default();
@@ -545,7 +545,7 @@ fn change(repo: &SkillRepo, installs: &[Install], upstream: &Upstream) -> Result
 /// selected skill is in `scope.files` (the skills also in `scope.skills`,
 /// the snapshots in `scope.upstreams`), plus the new source tables and lock
 /// entries, so the secret rule scans the complete candidate output.
-fn validate(repo: &SkillRepo, installs: &[Install], change: &Change) -> Result<(), Failure> {
+fn validate(repo: &Canon, installs: &[Install], change: &Change) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
     let mut files = BTreeSet::new();
     for (rel, want) in &change.pieces {

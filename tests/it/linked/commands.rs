@@ -32,13 +32,13 @@ its skills: alpha
 alpha has no `metadata.summary`; add these lines to the frontmatter of [..]/home/work/company/alpha/SKILL.md:
   metadata:
     summary: "Does alpha things"
-linked [..]/skill-repo/linked/company
+linked [..]/canon/linked/company
 linked [..]/home/.claude/skills/alpha
 linked [..]/home/.agents/skills/alpha
 linked [..]/home/.gemini/config/skills/alpha
 
 "#]]);
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
     assert!(
         manifest.ends_with("\n[linked.company]\npath = \"~/work/company\"\n"),
         "{manifest}"
@@ -56,7 +56,7 @@ alpha has no `metadata.summary`; add these lines to the frontmatter of [..]/home
 linked [..]/home/.agents/skills/alpha
 
 "#]]);
-    assert_eq!(read(sandbox.skill_repo().join("skiman.toml")), manifest);
+    assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
     assert_eq!(contents(&[&company]), before);
 }
 
@@ -67,7 +67,7 @@ fn the_same_id_with_another_path_is_refused() {
     folder(&sandbox, "work/company", &["alpha"]);
     folder(&sandbox, "other/company", &["beta"]);
     linked_add(&sandbox, &[home(&sandbox, "work/company")]).code(0);
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
 
     linked_add(&sandbox, &[home(&sandbox, "other/company")])
         .code(1)
@@ -76,7 +76,7 @@ fn the_same_id_with_another_path_is_refused() {
 error: skiman.toml already has [linked.company] for another path; to move that folder, change its `path` line, or run `skiman linked remove company` first
 
 "#]]);
-    assert_eq!(read(sandbox.skill_repo().join("skiman.toml")), manifest);
+    assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
 }
 
 /// A folder called `skills` gets its parent's name, so `~/work/acme/skills`
@@ -92,7 +92,7 @@ fn a_folder_called_skills_is_named_after_its_parent() {
         .stdout_eq(str![[r#"
 registered linked folder acme-corp: ~/work/Acme Corp/skills
 it holds no skill yet; the next sync links each skill added to it
-linked [..]/skill-repo/linked/acme-corp
+linked [..]/canon/linked/acme-corp
 
 "#]]);
 }
@@ -173,7 +173,7 @@ fn linked_remove_refuses_an_id_that_is_not_registered() {
         .code(1)
         .stderr_eq("error: skiman.toml has no [linked.company]\n");
 
-    let leftover = sandbox.skill_repo().join("linked/company");
+    let leftover = sandbox.canon().join("linked/company");
     std::fs::create_dir_all(leftover.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink("/nowhere", &leftover).unwrap();
     sandbox
@@ -181,7 +181,7 @@ fn linked_remove_refuses_an_id_that_is_not_registered() {
         .args(["linked", "remove", "company"])
         .assert()
         .code(1)
-        .stderr_eq("error: skiman.toml has no [linked.company]; [..]/skill-repo/linked/company is left from an earlier registration, and `skiman sync` removes it\n");
+        .stderr_eq("error: skiman.toml has no [linked.company]; [..]/canon/linked/company is left from an earlier registration, and `skiman sync` removes it\n");
     sandbox.skiman().arg("sync").assert().code(0);
     assert!(std::fs::symlink_metadata(&leftover).is_err());
 }
@@ -201,7 +201,7 @@ fn linked_remove_works_when_the_folder_is_gone() {
         .assert()
         .code(0);
 
-    assert!(!read(sandbox.skill_repo().join("skiman.toml")).contains("[linked"));
+    assert!(!read(sandbox.canon().join("skiman.toml")).contains("[linked"));
     assert!(std::fs::symlink_metadata(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).is_err());
 }
 
@@ -216,7 +216,7 @@ fn a_linked_add_killed_before_its_record_finishes_when_run_again() {
     crate::support::assert_each_kill_finishes(
         |sandbox| {
             init(sandbox);
-            std::fs::write(sandbox.skill_repo().join(".gitignore"), ".skiman/\n").unwrap();
+            std::fs::write(sandbox.canon().join(".gitignore"), ".skiman/\n").unwrap();
             let company = folder(sandbox, "work/company", &["alpha"]);
             vec![
                 "linked".to_owned(),

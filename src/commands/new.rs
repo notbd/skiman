@@ -5,14 +5,14 @@ use std::collections::BTreeSet;
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{Change, Want};
 use crate::commands::{ask, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::layout::skill_path;
 use crate::names::{self, Taken};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::snapshot::SnapshotFile;
 use crate::sync::{self, Output};
@@ -31,7 +31,7 @@ fn new(name: &str, description: Option<String>, group: Option<&str>) -> Result<E
         ));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     names::check_new_name(name)?;
     if let Some(group) = group {
         names::check_group(group, name, &repo.layout()?)?;
@@ -47,7 +47,7 @@ fn new(name: &str, description: Option<String>, group: Option<&str>) -> Result<E
         )));
     }
 
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     // Staged whole, then put in place: never half a skill.
     let skill_md = SnapshotFile {
         path: "SKILL.md".to_owned(),

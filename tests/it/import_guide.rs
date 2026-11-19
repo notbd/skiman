@@ -21,7 +21,7 @@ fn import_guide_prints_the_installed_version_and_every_section_and_writes_nothin
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
     let before = tree(sandbox.root());
@@ -49,7 +49,7 @@ fn import_guide_prints_the_installed_version_and_every_section_and_writes_nothin
 }
 
 #[test]
-fn import_guide_works_before_a_skill_repo_exists_and_matches_its_snapshot() {
+fn import_guide_works_before_a_canon_exists_and_matches_its_snapshot() {
     let sandbox = Sandbox::new();
     let before = tree(sandbox.root());
 

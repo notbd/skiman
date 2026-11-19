@@ -23,7 +23,7 @@
 //!
 //! `--dry-run` stops there: [`plan`] checks each merge against the rules
 //! and [`report`] prints what an update would do, conflicts included; it
-//! writes nothing in the skill repo or the tool directories (fetching
+//! writes nothing in the canon or the tool directories (fetching
 //! fills the upstream cache). Otherwise, under the repo lock,
 //! [`update_to`] refuses a skill whose records or `skills/<name>` changed
 //! since, and writes the others ([`crate::change`]) in this order:
@@ -39,6 +39,8 @@ use std::path::Path;
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{Change, Held, Want};
 use crate::commands::prompts;
 use crate::failure::{Failure, finish};
@@ -52,8 +54,6 @@ use crate::manifest::{self, Manifest, SourceRecord};
 use crate::merge::{Conflict, ConflictKind, MergeRepo, Outcome};
 use crate::path_safety::{self, Content};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::skill_md::SkillMd;
 use crate::snapshot::Snapshot;
@@ -71,8 +71,8 @@ pub fn run(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Exit {
 /// What every skill's write shares, under the repo lock.
 struct Context<'a> {
     home: &'a Path,
-    repo: &'a SkillRepo,
-    lock: RepoLock,
+    repo: &'a Canon,
+    lock: CanonLock,
     /// One backup folder for the command: tmp leftovers and old folders.
     backups: Backups,
 }
@@ -82,7 +82,7 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
         return Err(Failure::usage("--ref needs exactly one skill name"));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let prompts = prompts();
     let names = if names.is_empty() {
         let manifest = Manifest::load(&repo)?;
@@ -121,7 +121,7 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
         Some(Context {
             home: paths.home(),
             repo: &repo,
-            lock: RepoLock::wait(&paths, &repo)?,
+            lock: CanonLock::wait(&paths, &repo)?,
             backups: Backups::new(&paths),
         })
     };
@@ -150,7 +150,7 @@ fn update(names: Vec<String>, git_ref: Option<String>, dry_run: bool) -> Result<
             }
         }
     }
-    // The warnings once for the command, on the skill repo as it leaves it,
+    // The warnings once for the command, on the canon as it leaves it,
     // excusing the conflicts each merge wrote.
     let excuses: Vec<_> = prepared
         .iter()
@@ -185,7 +185,7 @@ struct Current {
 impl Current {
     /// Reads the skill's records; refuses (exit 1) a skill that cannot be
     /// updated, before anything is fetched.
-    fn read(home: &Path, repo: &SkillRepo, name: &str) -> Result<Current, Failure> {
+    fn read(home: &Path, repo: &Canon, name: &str) -> Result<Current, Failure> {
         let manifest_text = read_text(&repo.manifest_file())?.unwrap_or_default();
         let manifest = Manifest::parse(&manifest_text)
             .map_err(|e| Failure::refused(format!("{}: {e}", repo.manifest_file().display())))?;
@@ -242,7 +242,7 @@ impl Current {
 
 /// Refuses (exit 1) a skill with unresolved conflicts, printing the
 /// `skiman check` lines.
-fn refuse_unresolved(repo: &SkillRepo, skill: &str, name: &str) -> Result<(), Failure> {
+fn refuse_unresolved(repo: &Canon, skill: &str, name: &str) -> Result<(), Failure> {
     let tree = WorkingTree::new(repo.root());
     let conflicts = rules::unresolved_conflicts(&tree, name)
         .map_err(|e| Failure::operational(format!("cannot read the canon: {e}")))?;
@@ -286,7 +286,7 @@ struct Merge {
 /// writes nothing.
 fn prepare(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     prompts: Prompts,
     name: &str,
     git_ref: Option<&str>,
@@ -297,7 +297,7 @@ fn prepare(
     // records read there are checked again by `update_to` like any others.
     let current = Current::read(paths.home(), repo, name).or_else(|_| {
         test_hook::at(name, "read-again");
-        let _lock = RepoLock::wait(paths, repo)?;
+        let _lock = CanonLock::wait(paths, repo)?;
         // A replace stopped between its two renames left the path empty and
         // the new one in tmp; a dry run writes nothing, so it leaves it there.
         // Only a skill that is in no folder now is looked for, and put back
@@ -375,7 +375,7 @@ fn prepare(
 /// Merging `ours` again could apply upstream's changes twice.
 fn merged_before(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     skill: &str,
     name: &str,
     snapshots: [&Snapshot; 3],
@@ -418,7 +418,7 @@ struct Plan {
     change: Change,
 }
 
-fn plan(repo: &SkillRepo, skill: &Prepared, current: &Current) -> Result<Plan, Failure> {
+fn plan(repo: &Canon, skill: &Prepared, current: &Current) -> Result<Plan, Failure> {
     let Prepared {
         name,
         target,
@@ -733,7 +733,7 @@ fn changes(ours: &Snapshot, merged: &Snapshot) -> Vec<(FileChange, String)> {
 /// are warnings, printed once when every skill is done. The conflict
 /// representation is excused ([`excused`]).
 fn validate(
-    repo: &SkillRepo,
+    repo: &Canon,
     skill: &str,
     name: &str,
     merge: &Merge,

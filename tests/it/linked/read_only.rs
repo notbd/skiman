@@ -25,10 +25,7 @@ fn no_command_writes_inside_a_linked_folder() {
     write(work.join("AGENTS.md"), "# work\n");
     let before = contents(&[&company, &independent]);
     let path = |p: &std::path::Path| p.display().to_string();
-    let (repo, agents) = (
-        path(&sandbox.skill_repo()),
-        path(&company.join("AGENTS.md")),
-    );
+    let (repo, agents) = (path(&sandbox.canon()), path(&company.join("AGENTS.md")));
     let (company_path, work_path) = (path(&company), path(&work));
     // Each command and the exit it must end with, so none passes by doing nothing.
     let steps: [(&[&str], i32); 17] = [
@@ -64,11 +61,6 @@ fn no_command_writes_inside_a_linked_folder() {
             "after skiman {args:?}"
         );
     }
-    assert!(
-        sandbox
-            .skill_repo()
-            .join("projects/work/AGENTS.md")
-            .is_file()
-    );
-    assert!(!sandbox.skill_repo().join("projects/work/company").exists());
+    assert!(sandbox.canon().join("projects/work/AGENTS.md").is_file());
+    assert!(!sandbox.canon().join("projects/work/company").exists());
 }

@@ -1,5 +1,5 @@
 //! `skiman add` refuses hostile upstream content (spec Source fetching,
-//! "Path safety", and Merge semantics): nothing outside the skill repo is
+//! "Path safety", and Merge semantics): nothing outside the canon is
 //! written, no upstream code runs, and `--yes` bypasses none of it.
 
 use std::path::PathBuf;
@@ -9,9 +9,9 @@ use crate::support::{Sandbox, Tool, Upstream, init, tree, write};
 const SKILL_MD: &str = "---\nname: pdf\ndescription: Fill PDF forms\n---\n\n# pdf\n";
 const MIB: usize = 1024 * 1024;
 
-/// The whole skill repo and every tool directory, to prove a command changed nothing.
+/// The whole canon and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
-    let mut world = vec![tree(sandbox.skill_repo())];
+    let mut world = vec![tree(sandbox.canon())];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
 }
@@ -230,7 +230,7 @@ fn names_in_other_scripts_and_with_combining_characters_are_installed_for_a_git_
         .code(0);
     for name in SCRIPT_NAMES {
         assert!(
-            sandbox.skill_repo().join("skills/pdf").join(name).is_file(),
+            sandbox.canon().join("skills/pdf").join(name).is_file(),
             "{name}"
         );
     }
@@ -248,7 +248,7 @@ fn names_in_other_scripts_and_with_combining_characters_are_installed_for_a_git_
         .code(0);
     for name in SCRIPT_NAMES {
         assert!(
-            sandbox.skill_repo().join("skills/pdf").join(name).is_file(),
+            sandbox.canon().join("skills/pdf").join(name).is_file(),
             "{name}"
         );
     }
@@ -267,7 +267,7 @@ fn a_macos_folder_icon_file_is_ignored_rather_than_refused() {
         .assert()
         .code(0);
 
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     assert!(skill.join("SKILL.md").is_file());
     assert!(!skill.join("Icon\r").exists());
 }
@@ -304,7 +304,7 @@ fn a_candidate_folder_with_an_unsafe_name_is_skipped_and_the_others_can_be_insta
         "{stderr}"
     );
     assert_eq!(rest, "");
-    assert!(sandbox.skill_repo().join("skills/good/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/good/SKILL.md").is_file());
 }
 
 #[test]
@@ -542,7 +542,7 @@ fn filter_drivers_hook_templates_and_fsmonitor_from_the_users_git_config_never_r
         .assert()
         .code(0);
 
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(repo.join("upstream/pdf/reference.md").is_file());
     for dir in ["skills/pdf", "upstream/pdf"] {
         assert!(
@@ -579,7 +579,7 @@ fn adopted_skills_and_project_skills_keep_their_own_git_files() {
         .assert()
         .code(0);
     for (path, content) in GIT_FILES {
-        let copy = sandbox.skill_repo().join("skills/pdf").join(path);
+        let copy = sandbox.canon().join("skills/pdf").join(path);
         assert_eq!(std::fs::read_to_string(copy).unwrap(), content, "{path}");
     }
 
@@ -603,9 +603,7 @@ fn adopted_skills_and_project_skills_keep_their_own_git_files() {
         .args(["project", "adopt", "--yes"])
         .assert()
         .code(0);
-    let mirror = sandbox
-        .skill_repo()
-        .join("projects/work/.claude/skills/forms");
+    let mirror = sandbox.canon().join("projects/work/.claude/skills/forms");
     for (path, content) in GIT_FILES {
         assert_eq!(
             std::fs::read_to_string(mirror.join(path)).unwrap(),

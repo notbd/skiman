@@ -10,14 +10,14 @@ use std::time::Duration;
 use crate::support::{Sandbox, aws_key, fingerprint, init, skill_md, tree_hash};
 
 fn write(sandbox: &Sandbox, rel: &str, contents: impl AsRef<[u8]>) -> PathBuf {
-    let path = sandbox.skill_repo().join(rel);
+    let path = sandbox.canon().join(rel);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, contents).unwrap();
     path
 }
 
 fn append(sandbox: &Sandbox, rel: &str, text: &str) {
-    let path = sandbox.skill_repo().join(rel);
+    let path = sandbox.canon().join(rel);
     let mut old = std::fs::read_to_string(&path).unwrap_or_default();
     old.push_str(text);
     std::fs::write(path, old).unwrap();
@@ -26,7 +26,7 @@ fn append(sandbox: &Sandbox, rel: &str, text: &str) {
 /// The one warning `skiman check` prints for [`repo`]: `pdf` is in no group folder.
 const NO_GROUP: &str = "warning: skills/pdf: skill-info: it is in no group folder; move it into one with `skiman mv pdf --group <group>`\n";
 
-/// A skill repo with one own skill `pdf`.
+/// A canon with one own skill `pdf`.
 fn repo() -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -53,7 +53,7 @@ fn third_party(sandbox: &Sandbox, name: &str, upstream_files: &[(&str, &str)]) {
             "\n[skills.{name}.source]\nurl = \"https://github.com/acme/skills.git\"\npath = \"{name}\"\n"
         ),
     );
-    let hash = tree_hash(&sandbox.skill_repo().join("upstream").join(name));
+    let hash = tree_hash(&sandbox.canon().join("upstream").join(name));
     append(
         sandbox,
         "skiman.lock",
@@ -629,7 +629,7 @@ fn an_unused_entry_is_listed_and_check_still_exits_0() {
         "skiman.toml",
         "\n[[secrets.allow]]\npath = \"skills/pdf/gone.env\"\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n",
     );
-    let line = std::fs::read_to_string(sandbox.skill_repo().join("skiman.toml"))
+    let line = std::fs::read_to_string(sandbox.canon().join("skiman.toml"))
         .unwrap()
         .lines()
         .position(|l| l == "[[secrets.allow]]")
@@ -690,7 +690,7 @@ fn new_refuses_a_description_that_contains_a_secret() {
                  fingerprint = \"{fp}\"\n"
             )
         );
-        assert!(!sandbox.skill_repo().join("skills/pdf").exists());
+        assert!(!sandbox.canon().join("skills/pdf").exists());
     }
 }
 
@@ -698,7 +698,7 @@ fn new_refuses_a_description_that_contains_a_secret() {
 fn pre_commit_rejects_a_staged_secret_until_the_printed_entry_is_added() {
     let sandbox = repo();
     let key = aws_key();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(
         &sandbox,
         "skills/pdf/tests/fixture.env",
@@ -745,7 +745,7 @@ fn pre_commit_rejects_a_staged_secret_until_the_printed_entry_is_added() {
 fn check_and_check_staged_apply_the_secret_and_shared_body_rules_to_their_own_tree() {
     let sandbox = repo();
     let key = aws_key();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     // About 83 % of Antigravity's 24000-byte limit, with a secret on line 3
     // and an `@` import on line 4.
     let mut body = format!("# Shared\n\nkey {key}\n@imports/rules.md\n");

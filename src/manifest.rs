@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use toml_edit::{DocumentMut, Item, Table, Value, value};
 
+use crate::canon::Canon;
 use crate::failure::Failure;
-use crate::repo::SkillRepo;
 
 #[derive(Debug, Clone)]
 pub struct Manifest {
@@ -25,7 +25,7 @@ pub struct SkillEntry {
 pub struct SkillInfo {
     /// What the skill is for, in one line.
     pub summary: Option<String>,
-    /// Where it came from before the skill repo held it: for an own skill,
+    /// Where it came from before the canon held it: for an own skill,
     /// the only record of its source.
     pub origin: Option<String>,
     /// The day it was installed, `YYYY-MM-DD`.
@@ -33,7 +33,7 @@ pub struct SkillInfo {
 }
 
 impl Manifest {
-    pub fn load(repo: &SkillRepo) -> Result<Manifest, Failure> {
+    pub fn load(repo: &Canon) -> Result<Manifest, Failure> {
         let file = repo.manifest_file();
         let text = std::fs::read_to_string(&file)
             .map_err(|e| Failure::operational(format!("cannot read {}: {e}", file.display())))?;

@@ -27,10 +27,10 @@ fn installed(sandbox: &Sandbox) -> Upstream {
     up
 }
 
-fn commit_skill_repo(sandbox: &Sandbox, message: &str) {
-    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+fn commit_canon(sandbox: &Sandbox, message: &str) {
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
     sandbox.git(
-        sandbox.skill_repo(),
+        sandbox.canon(),
         [
             "-c",
             "user.name=User",
@@ -48,9 +48,9 @@ fn commit_skill_repo(sandbox: &Sandbox, message: &str) {
 fn a_clean_merge_keeps_committed_and_uncommitted_local_edits_and_applies_the_upstream_change() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     write(skill.join("reference.md"), lines(&[(2, "committed edit")]));
-    commit_skill_repo(&sandbox, "local edit");
+    commit_canon(&sandbox, "local edit");
     write(
         skill.join("reference.md"),
         lines(&[(2, "committed edit"), (10, "uncommitted edit")]),
@@ -95,7 +95,7 @@ fn structural_changes_on_both_sides_merge_cleanly() {
         .args(["add", "acme/pdf", "--yes"])
         .assert()
         .code(0);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     write(skill.join("mine.md"), "added by me\n");
     std::fs::remove_file(skill.join("my-delete.md")).unwrap();
     std::fs::create_dir(skill.join("docs")).unwrap();
@@ -162,7 +162,7 @@ fn structural_changes_on_both_sides_merge_cleanly() {
 fn after_an_update_the_snapshot_and_lock_match_upstream_and_the_old_state_sits_in_one_backup() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let skill = repo.join("skills/pdf");
     write(skill.join("forms.md"), lines(&[(1, "uncommitted edit")]));
     let old_skill = tree(&skill);
@@ -208,20 +208,17 @@ fn tree_at_head(up: &Upstream) -> BTreeMap<PathBuf, String> {
     all
 }
 
-/// The whole skill repo (including `.git` and `.skiman`).
-fn skill_repo_tree(sandbox: &Sandbox) -> BTreeMap<PathBuf, String> {
-    tree(sandbox.skill_repo())
+/// The whole canon (including `.git` and `.skiman`).
+fn canon_tree(sandbox: &Sandbox) -> BTreeMap<PathBuf, String> {
+    tree(sandbox.canon())
 }
 
 #[test]
 fn an_up_to_date_skill_changes_nothing_and_creates_no_backup() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    write(
-        sandbox.skill_repo().join("skills/pdf/forms.md"),
-        "local edit\n",
-    );
-    let before = skill_repo_tree(&sandbox);
+    write(sandbox.canon().join("skills/pdf/forms.md"), "local edit\n");
+    let before = canon_tree(&sandbox);
 
     sandbox
         .skiman()
@@ -231,7 +228,7 @@ fn an_up_to_date_skill_changes_nothing_and_creates_no_backup() {
         .stdout_eq(format!("skill pdf: up to date at {}\n", up.head()))
         .stderr_eq("");
 
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
     assert!(backup_dirs(&sandbox).is_empty());
 }
 
@@ -243,7 +240,7 @@ fn inode(path: impl AsRef<Path>) -> u64 {
 fn an_upstream_commit_that_does_not_touch_the_skill_advances_only_the_lock_commit() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let lock_before = read(repo.join("skiman.lock"));
     let old_commit = up.head();
     let inodes = |repo: &Path| {
@@ -319,12 +316,12 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
         );
 
     assert_eq!(
-        read(sandbox.skill_repo().join("skills/pdf/reference.md")),
+        read(sandbox.canon().join("skills/pdf/reference.md")),
         lines(&[(5, "upstream fix")])
     );
     // Each skill's records are written from the files as they are then,
     // so the second does not put back the first one's old lock entry.
-    let lock = read(sandbox.skill_repo().join("skiman.lock"));
+    let lock = read(sandbox.canon().join("skiman.lock"));
     for (name, commit) in [("pdf", &commit), ("xlsx", &xlsx_commit)] {
         assert!(
             lock.contains(&format!("[skills.{name}]\ncommit = \"{commit}\"\n")),
@@ -338,7 +335,7 @@ fn a_multi_skill_update_reports_each_skill_and_exits_with_the_highest_result() {
 fn the_merge_ignores_the_users_git_config_drivers_and_hooks() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     write(skill.join("reference.md"), lines(&[(2, "local edit")]));
     up.write("reference.md", lines(&[(18, "upstream fix")]));
     up.commit("v2");
@@ -394,7 +391,7 @@ fn the_merge_ignores_the_users_git_config_drivers_and_hooks() {
 fn a_rule_violation_in_a_file_the_merge_did_not_change_is_only_a_warning() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     write(skill.join("SKILL.md"), "---\nname: pdf\n---\n\n# pdf\n");
     up.write("reference.md", lines(&[(5, "upstream fix")]));
     up.commit("v2");
@@ -422,7 +419,7 @@ fn a_rule_violation_in_a_file_the_merge_changed_refuses_the_update() {
     let up = installed(&sandbox);
     up.write("SKILL.md", "---\nname: pdf\n---\n\n# pdf\n");
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
 
     sandbox
         .skiman()
@@ -434,7 +431,7 @@ fn a_rule_violation_in_a_file_the_merge_changed_refuses_the_update() {
             "error: skill pdf: refusing to write content that breaks the rules:\n  skills/pdf/SKILL.md:[..]: required-field: [..]\n",
         );
 
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
     assert!(backup_dirs(&sandbox).is_empty());
 }
 
@@ -444,12 +441,12 @@ fn a_secret_in_a_local_file_the_merge_did_not_change_refuses_the_update() {
     let up = installed(&sandbox);
     let key = format!("AKIA{}", "ABCDEFGHIJKLMNOP");
     write(
-        sandbox.skill_repo().join("skills/pdf/notes.md"),
+        sandbox.canon().join("skills/pdf/notes.md"),
         format!("key {key}\n"),
     );
     up.write("reference.md", lines(&[(5, "upstream fix")]));
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
 
     let assert = sandbox
         .skiman()
@@ -465,7 +462,7 @@ fn a_secret_in_a_local_file_the_merge_did_not_change_refuses_the_update() {
         stderr.contains("path = \"skills/pdf/notes.md\""),
         "{stderr}"
     );
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 }
 
 #[test]
@@ -505,7 +502,7 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
     let up = installed(&sandbox);
     up.write("forms.md", lines(&[(5, "theirs")]));
     up.commit("v2");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let manifest = read(repo.join("skiman.toml"));
     let lock = read(repo.join("skiman.lock"));
 
@@ -518,7 +515,7 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
         kept.join("\n") + "\n"
     };
     write(repo.join("skiman.toml"), without(&manifest, "url"));
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
     sandbox
         .skiman()
         .args(["update", "pdf"])
@@ -528,11 +525,11 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
         .stderr_eq(
             "error: skill pdf: [skills.pdf.source] in skiman.toml has no `url`; run `skiman check`\n",
         );
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 
     write(repo.join("skiman.toml"), &manifest);
     write(repo.join("skiman.lock"), without(&lock, "snapshot"));
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
     sandbox
         .skiman()
         .args(["update", "pdf"])
@@ -540,16 +537,16 @@ fn a_source_without_url_or_a_lock_entry_without_snapshot_is_refused() {
         .code(1)
         .stdout_eq("")
         .stderr_eq("error: skill pdf: pdf has no entry in skiman.lock; run `skiman check`\n");
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 }
 
-/// Spec Source fetching: a `url` in skiman.toml (a cloned skill repo or a
+/// Spec Source fetching: a `url` in skiman.toml (a cloned canon or a
 /// hand edit) gets the same check as `add`'s source, before git runs on it.
 #[test]
 fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
     let sandbox = Sandbox::new();
     installed(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let bin = sandbox.root().join("bin");
     let pwned = sandbox.home().join("PWNED");
     write(
@@ -578,7 +575,7 @@ fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
             repo.join("skiman.toml"),
             manifest.replace(&line, &format!("url = \"{url}\"")),
         );
-        let before = skill_repo_tree(&sandbox);
+        let before = canon_tree(&sandbox);
         sandbox
             .skiman()
             .env("PATH", &path)
@@ -589,7 +586,7 @@ fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
             .stderr_eq(format!(
                 "error: skill pdf: [skills.pdf.source] in skiman.toml: the `url` `{url}` [..]; nothing was fetched\n"
             ));
-        assert_eq!(skill_repo_tree(&sandbox), before);
+        assert_eq!(canon_tree(&sandbox), before);
         assert!(!pwned.exists(), "the remote helper ran for {url}");
     }
 }
@@ -601,7 +598,7 @@ fn a_remote_helper_url_in_skiman_toml_is_refused_before_git_runs() {
 fn an_upstream_rename_of_the_frontmatter_name_keeps_the_install_name() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     up.write(
         "SKILL.md",
         PDF_SKILL_MD.replace("name: pdf\n", "name: pdf-tools\n"),
@@ -630,7 +627,7 @@ fn an_upstream_rename_of_the_frontmatter_name_keeps_the_install_name() {
 fn tmp_leftovers_move_before_a_records_only_advance() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let tmp = sandbox.skill_repo().join(".skiman/tmp");
+    let tmp = sandbox.canon().join(".skiman/tmp");
     write(tmp.join("20260101T000000Z/stray.md"), "left behind\n");
     let commit = up.commit("an empty commit");
 
@@ -662,7 +659,7 @@ fn installed_with_a_gitignore(sandbox: &Sandbox) -> Upstream {
         .args(["add", "acme/pdf", "--yes"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for dir in ["skills/pdf", "upstream/pdf"] {
         write(repo.join(dir).join(".gitignore"), "*.log\n");
     }
@@ -698,7 +695,7 @@ fn an_unchanged_upstream_gitignore_from_an_earlier_install_is_removed_by_the_nex
         ))
         .stderr_eq("");
 
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(!repo.join("skills/pdf/.gitignore").exists());
     assert!(!repo.join("upstream/pdf/.gitignore").exists());
     let snapshot = tree_hash(&repo.join("upstream/pdf"));
@@ -747,7 +744,7 @@ fn update_lists_the_submodules_it_does_not_fetch() {
              saved the old folders of pdf to [..]\n"
         ))
         .stderr_eq("");
-    assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
+    assert!(!sandbox.canon().join("skills/pdf/vendor").exists());
 }
 
 #[test]
@@ -764,7 +761,7 @@ fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
         .assert()
         .code(0);
     // A hand-written `path` may end in `/`, as `check` allows.
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = read(&manifest);
     assert!(text.contains("path = \"skills/pdf\"\n"));
     write(&manifest, text.replace("\"skills/pdf\"", "\"skills/pdf/\""));
@@ -773,7 +770,7 @@ fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
     sandbox.skiman().args(["update", "pdf"]).assert().code(0);
     up.remove("skills/pdf");
     let commit = up.commit("v3");
-    let before = tree(sandbox.skill_repo());
+    let before = tree(sandbox.canon());
 
     sandbox
         .skiman()
@@ -784,7 +781,7 @@ fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
         .stderr_eq(format!(
             "error: skill pdf: https://github.com/acme/skills.git has no folder `skills/pdf/` at {commit}\n"
         ));
-    assert_eq!(tree(sandbox.skill_repo()), before);
+    assert_eq!(tree(sandbox.canon()), before);
 }
 
 #[test]
@@ -796,9 +793,9 @@ fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
         .write_executable("scripts/fill.sh", "#!/bin/sh\n");
     let commit = up.commit("v2");
     let files = "  modified forms.md\n  modified reference.md  [executable]\n  added scripts/fill.sh  [script, executable]\n";
-    let before = tree(sandbox.skill_repo());
+    let before = tree(sandbox.canon());
     // A dry run writes nothing, so it does not need the repo lock.
-    let lock = std::fs::File::open(sandbox.skill_repo().join(".skiman/lock")).unwrap();
+    let lock = std::fs::File::open(sandbox.canon().join(".skiman/lock")).unwrap();
     lock.lock().unwrap();
 
     sandbox
@@ -810,7 +807,7 @@ fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
             "skill pdf: would update to {commit}; changed files:\n{files}dry run: nothing was written\n"
         ))
         .stderr_eq("");
-    assert_eq!(tree(sandbox.skill_repo()), before);
+    assert_eq!(tree(sandbox.canon()), before);
     drop(lock);
 
     sandbox
@@ -824,7 +821,7 @@ fn a_dry_run_shows_the_new_version_and_the_changed_files_and_writes_nothing() {
 }
 
 /// The warnings of an update are printed once, however many skills it
-/// writes, and they come from the skill repo as it leaves it.
+/// writes, and they come from the canon as it leaves it.
 #[test]
 fn an_update_of_several_skills_warns_once() {
     let sandbox = Sandbox::new();
@@ -841,7 +838,7 @@ fn an_update_of_several_skills_warns_once() {
         .assert()
         .code(0);
     write(
-        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        sandbox.canon().join("skills/notes/SKILL.md"),
         "no frontmatter\n",
     );
     pdf.write("reference.md", lines(&[(5, "upstream fix")]));

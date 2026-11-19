@@ -10,9 +10,9 @@ use crate::support::{
     tree, write,
 };
 
-/// The skill repo (without `.git` and `.skiman`) and every tool directory.
+/// The canon (without `.git` and `.skiman`) and every tool directory.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let mut world = vec![
         tree(repo.join("skills")),
         tree(repo.join("upstream")),
@@ -50,7 +50,7 @@ fn remove_of_an_own_skill_moves_its_folder_to_a_backup_and_removes_its_links() {
         .args(["new", "notes", "-d", "Take notes"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     // Uncommitted edits are kept in the backup.
     std::fs::write(repo.join("skills/notes/draft.md"), "not committed\n").unwrap();
 
@@ -60,7 +60,7 @@ fn remove_of_an_own_skill_moves_its_folder_to_a_backup_and_removes_its_links() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-moved [..]/skill-repo/skills/notes to [..]/state/skiman/backups/[..]/repo/skills/notes
+moved [..]/canon/skills/notes to [..]/state/skiman/backups/[..]/repo/skills/notes
 removed skill notes; its folders are in [..]/state/skiman/backups/[..]
 removed [..]/home/.claude/skills/notes
 removed [..]/home/.agents/skills/notes
@@ -87,7 +87,7 @@ fn remove_of_a_third_party_skill_moves_both_folders_and_removes_its_records() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::write(repo.join("skills/pdf/reference.md"), "# Edited\n").unwrap();
     let manifest_before = read(repo.join("skiman.toml"));
 
@@ -97,10 +97,10 @@ fn remove_of_a_third_party_skill_moves_both_folders_and_removes_its_records() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-moved [..]/skill-repo/skills/pdf to [..]/state/skiman/backups/[..]/repo/skills/pdf
-moved [..]/skill-repo/upstream/pdf to [..]/state/skiman/backups/[..]/repo/upstream/pdf
-changed [..]/skill-repo/skiman.toml
-changed [..]/skill-repo/skiman.lock
+moved [..]/canon/skills/pdf to [..]/state/skiman/backups/[..]/repo/skills/pdf
+moved [..]/canon/upstream/pdf to [..]/state/skiman/backups/[..]/repo/upstream/pdf
+changed [..]/canon/skiman.toml
+changed [..]/canon/skiman.lock
 removed skill pdf; its folders are in [..]/state/skiman/backups/[..]
 removed [..]/home/.claude/skills/pdf
 removed [..]/home/.agents/skills/pdf
@@ -202,7 +202,7 @@ fn with_a_terminal_remove_asks_and_a_no_changes_nothing() {
     pty.send_line("y");
     let (code, rest) = pty.wait();
     assert_eq!(code, 0, "{rest}");
-    assert!(!exists(sandbox.skill_repo().join("skills/pdf")));
+    assert!(!exists(sandbox.canon().join("skills/pdf")));
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn remove_after_a_hand_delete_cleans_up_the_leftover_records() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::remove_dir_all(repo.join("skills/pdf")).unwrap();
     let check = sandbox.skiman().arg("check").assert().code(3);
     let report = String::from_utf8_lossy(&check.get_output().stdout).into_owned();
@@ -249,9 +249,9 @@ fn remove_after_a_hand_delete_cleans_up_the_leftover_records() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-moved [..]/skill-repo/upstream/pdf to [..]/state/skiman/backups/[..]/repo/upstream/pdf
-changed [..]/skill-repo/skiman.toml
-changed [..]/skill-repo/skiman.lock
+moved [..]/canon/upstream/pdf to [..]/state/skiman/backups/[..]/repo/upstream/pdf
+changed [..]/canon/skiman.toml
+changed [..]/canon/skiman.lock
 removed skill pdf; its folders are in [..]/state/skiman/backups/[..]
 removed [..]/home/.claude/skills/pdf
 removed [..]/home/.agents/skills/pdf
@@ -269,7 +269,7 @@ fn remove_of_records_without_any_folder_writes_no_backup() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::remove_dir_all(repo.join("skills/pdf")).unwrap();
     std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
 
@@ -279,8 +279,8 @@ fn remove_of_records_without_any_folder_writes_no_backup() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-changed [..]/skill-repo/skiman.toml
-changed [..]/skill-repo/skiman.lock
+changed [..]/canon/skiman.toml
+changed [..]/canon/skiman.lock
 removed the records of skill pdf
 removed [..]/home/.claude/skills/pdf
 removed [..]/home/.agents/skills/pdf
@@ -298,7 +298,7 @@ fn remove_of_records_with_a_tmp_leftover_says_it_removed_only_the_records() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::remove_dir_all(repo.join("skills/pdf")).unwrap();
     std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
     write(
@@ -313,8 +313,8 @@ fn remove_of_records_with_a_tmp_leftover_says_it_removed_only_the_records() {
         .code(0)
         .stdout_eq(str![[r#"
 moved tmp leftovers to [..]/state/skiman/backups/[..]/repo/.skiman/tmp
-changed [..]/skill-repo/skiman.toml
-changed [..]/skill-repo/skiman.lock
+changed [..]/canon/skiman.toml
+changed [..]/canon/skiman.lock
 removed the records of skill pdf
 removed [..]/home/.claude/skills/pdf
 removed [..]/home/.agents/skills/pdf
@@ -329,7 +329,7 @@ fn remove_drops_the_secret_exemptions_of_the_skill_and_keeps_the_others() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let allow = |path: &str| {
         format!(
             "\n[[secrets.allow]]\npath = \"{path}\"\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n"

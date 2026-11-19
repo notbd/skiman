@@ -18,9 +18,9 @@ fn append(path: impl AsRef<Path>, text: &str) {
     std::fs::write(path, old).unwrap();
 }
 
-/// The skill repo (without `.git`) and every tool directory.
+/// The canon (without `.git`) and every tool directory.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let mut world = vec![
         tree(repo.join("skills")),
         tree(repo.join("upstream")),
@@ -35,7 +35,7 @@ fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> 
 }
 
 fn assert_linked_only_as(sandbox: &Sandbox, new: &str, old: &str) {
-    let target = sandbox.skill_repo().join("skills").join(new);
+    let target = sandbox.canon().join("skills").join(new);
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join(new), &target, &target);
         assert!(!exists(sandbox.tool_dir(tool).join(old)), "{old} link left");
@@ -67,7 +67,7 @@ fn mv_of_an_own_skill_renames_the_folder_name_table_and_secret_exemption() {
         .args(["new", "notes", "-d", "Take notes"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::write(
         repo.join("skills/notes/keys.md"),
         format!("key {}\n", aws_key()),
@@ -88,9 +88,9 @@ fn mv_of_an_own_skill_renames_the_folder_name_table_and_secret_exemption() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-changed [..]/skill-repo/skills/notes/SKILL.md
-changed [..]/skill-repo/skiman.toml
-renamed [..]/skill-repo/skills/notes to [..]/skill-repo/skills/memo
+changed [..]/canon/skills/notes/SKILL.md
+changed [..]/canon/skiman.toml
+renamed [..]/canon/skills/notes to [..]/canon/skills/memo
 removed [..]/home/.claude/skills/notes
 linked [..]/home/.claude/skills/memo
 removed [..]/home/.agents/skills/notes
@@ -126,7 +126,7 @@ fn mv_of_a_third_party_skill_renames_its_records_and_snapshot() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     add_pdf(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::write(repo.join("skills/pdf/reference.md"), "# Edited\n").unwrap();
     let lock_before = read(repo.join("skiman.lock"));
 
@@ -136,11 +136,11 @@ fn mv_of_a_third_party_skill_renames_its_records_and_snapshot() {
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-changed [..]/skill-repo/skills/pdf/SKILL.md
-changed [..]/skill-repo/skiman.toml
-changed [..]/skill-repo/skiman.lock
-renamed [..]/skill-repo/upstream/pdf to [..]/skill-repo/upstream/forms
-renamed [..]/skill-repo/skills/pdf to [..]/skill-repo/skills/forms
+changed [..]/canon/skills/pdf/SKILL.md
+changed [..]/canon/skiman.toml
+changed [..]/canon/skiman.lock
+renamed [..]/canon/upstream/pdf to [..]/canon/upstream/forms
+renamed [..]/canon/skills/pdf to [..]/canon/skills/forms
 removed [..]/home/.claude/skills/pdf
 linked [..]/home/.claude/skills/forms
 removed [..]/home/.agents/skills/pdf
@@ -191,7 +191,7 @@ fn mv_to_an_invalid_reserved_or_taken_name_exits_1_and_changes_nothing() {
         .args(["new", "notes", "-d", "Take notes"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     // `orphan` is taken by a lock entry alone.
     append(
         repo.join("skiman.lock"),
@@ -297,8 +297,7 @@ fn a_dangling_link_at_the_new_name_is_no_mv_stopped_part_way() {
     add_pdf(&sandbox);
     let args = ["mv", "pdf", "forms"].map(String::from).to_vec();
     killed_at(&sandbox, &args, "mv:write:skiman.lock");
-    std::os::unix::fs::symlink("/nonexistent/x", sandbox.skill_repo().join("skills/forms"))
-        .unwrap();
+    std::os::unix::fs::symlink("/nonexistent/x", sandbox.canon().join("skills/forms")).unwrap();
     let before = world(&sandbox);
 
     sandbox.skiman().args(&args).assert().code(1);
@@ -322,7 +321,7 @@ fn mv_of_what_only_records_are_left_of_is_refused_and_changes_nothing() {
     let cases: [Setup; 3] = [
         |sandbox| {
             add_pdf(sandbox);
-            std::fs::remove_dir_all(sandbox.skill_repo().join("skills/pdf")).unwrap();
+            std::fs::remove_dir_all(sandbox.canon().join("skills/pdf")).unwrap();
             let new = ["new", "notes", "-d", "Take notes"];
             sandbox.skiman().args(new).assert().code(0);
             ["pdf", "notes"]
@@ -342,7 +341,7 @@ fn mv_of_what_only_records_are_left_of_is_refused_and_changes_nothing() {
             add_pdf(sandbox);
             let new = ["new", "notes", "-d", "Take notes"];
             sandbox.skiman().args(new).assert().code(0);
-            let repo = sandbox.skill_repo();
+            let repo = sandbox.canon();
             append(
                 repo.join("skiman.toml"),
                 "\n[skills.notes]\nenabled = true\n",
@@ -355,7 +354,7 @@ fn mv_of_what_only_records_are_left_of_is_refused_and_changes_nothing() {
         let sandbox = Sandbox::new();
         init(&sandbox);
         let [old, new] = setup(&sandbox);
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         let records = || {
             let lock = std::fs::read_to_string(repo.join("skiman.lock")).unwrap_or_default();
             (
@@ -397,7 +396,7 @@ fn a_skill_md_naming_another_skill_is_no_mv_stopped_part_way() {
         .args(["add", "acme/forms", "--yes"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::remove_dir_all(repo.join("skills/forms")).unwrap();
     let skill_md = repo.join("skills/pdf/SKILL.md");
     let text = read(&skill_md).replace("name: pdf", "name: forms");
@@ -424,7 +423,7 @@ fn the_summary_group_origin_and_installed_date_move_with_the_skill() {
         .args(["new", "notes", "-d", "Take notes"])
         .assert()
         .code(0);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let info = "summary = \"Keep notes\"\norigin = \"written here\"\ninstalled = 2026-01-31\n";
     append(&manifest, &format!("\n[skills.notes]\n{info}"));
 

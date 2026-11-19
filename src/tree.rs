@@ -140,7 +140,7 @@ impl Tree for WorkingTree {
 }
 
 /// Names that are not valid UTF-8 are converted lossily; path safety at fetch
-/// time keeps them out of the skill repo.
+/// time keeps them out of the canon.
 fn walk_dir(root: &Path, dir: &str, out: &mut Vec<Entry>) -> io::Result<()> {
     for entry in std::fs::read_dir(root.join(dir))? {
         let entry = entry?;

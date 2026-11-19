@@ -94,7 +94,7 @@ fn add_with_stdout_closed_still_installs_the_skill_and_exits_0() {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
     let commit = sandbox
@@ -114,7 +114,7 @@ fn add_with_stdout_closed_still_installs_the_skill_and_exits_0() {
         .status()
         .unwrap();
     assert_eq!(status.code(), Some(0));
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(repo.join("skills/pdf/SKILL.md").is_file());
     assert!(repo.join("upstream/pdf/SKILL.md").is_file());
     assert!(read(repo.join("skiman.toml")).contains("[skills.pdf.source]"));
@@ -128,7 +128,7 @@ fn a_refused_command_with_stderr_closed_still_exits_1() {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
 

@@ -10,9 +10,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use crate::canon::Canon;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::tools::{SkillsElsewhere, TOOLS};
 
 /// One skill folder another manager keeps, or nobody known does.
@@ -45,7 +45,7 @@ const FOREIGN_FOLDER: &str = "unknown: a folder skiman did not make";
 /// when no [`SkillsElsewhere`] place names it.
 const ANOTHER_MANAGER: &str = "another manager";
 
-pub fn find(paths: &Paths, repo: &SkillRepo) -> Found {
+pub fn find(paths: &Paths, repo: &Canon) -> Found {
     let home = paths.home();
     let mut found = Collected::default();
     let present = || TOOLS.iter().filter(|tool| tool.is_present(home));

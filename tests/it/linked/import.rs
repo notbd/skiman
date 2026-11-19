@@ -15,7 +15,7 @@ const COMPANY: &str = "\n[linked.company]\npath = \"~/work/company\"\n";
 /// the linked folder `company`: a refused import changes none of them.
 fn world(sandbox: &Sandbox) -> Vec<BTreeMap<PathBuf, String>> {
     let mut world = vec![
-        tree(sandbox.skill_repo()),
+        tree(sandbox.canon()),
         tree(sandbox.state_home()),
         tree(sandbox.home().join(".agents")),
         tree(sandbox.home().join("work/company")),
@@ -66,13 +66,13 @@ fn import_keeps_the_canons_linked_folders_and_links_their_skills() {
     let company = folder(&sandbox, "work/company", &["alpha"]);
     append_manifest(&sandbox, COMPANY);
     sandbox.skiman().arg("sync").assert().code(3);
-    let linked = sandbox.skill_repo().join("linked/company/alpha");
+    let linked = sandbox.canon().join("linked/company/alpha");
     assert_eq!(target(&sandbox, Tool::Codex, "alpha"), linked);
     let before = contents(&[&company]);
 
     let stdout = imported(&sandbox, &setup.folder, 0);
 
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
     assert!(manifest.contains(COMPANY), "{manifest}");
     assert!(!stdout.contains("/alpha"), "{stdout}");
     for tool in Tool::ALL {
@@ -89,7 +89,7 @@ fn import_keeps_the_canons_linked_folders_and_links_their_skills() {
     // A skill added to the import folder makes the next run a full import again.
     write(setup.folder.join("skills/todo/SKILL.md"), skill_md("todo"));
     imported(&sandbox, &setup.folder, 0);
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
     assert!(manifest.contains(COMPANY), "{manifest}");
     assert_eq!(target(&sandbox, Tool::ClaudeCode, "alpha"), linked);
     assert_eq!(contents(&[&company]), before);
@@ -188,7 +188,7 @@ fn import_takes_over_an_old_link_to_a_linked_skills_folder() {
     );
     assert_eq!(
         target(&sandbox, Tool::ClaudeCode, "alpha"),
-        sandbox.skill_repo().join("linked/company/alpha")
+        sandbox.canon().join("linked/company/alpha")
     );
     let backup = backed_up(&sandbox);
     assert_eq!(

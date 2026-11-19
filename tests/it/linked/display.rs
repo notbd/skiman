@@ -11,7 +11,7 @@ use crate::support::{Sandbox, init, skill_md, write};
 /// loses to `company`'s, and `beta`).
 fn setup(sandbox: &Sandbox) {
     init(sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     write(skills.join("notes/SKILL.md"), skill_md("notes"));
     write(skills.join("office/pdf/SKILL.md"), skill_md("pdf"));
     folder(sandbox, "work/company", &["alpha", "pdf"]);

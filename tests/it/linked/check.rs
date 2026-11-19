@@ -32,7 +32,7 @@ skiman.toml:20: toml-value: [linked.loose] must be a table
         .assert()
         .code(1)
         .stdout_eq(expected.clone());
-    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
     sandbox
         .skiman()
         .args(["check", "--staged"])
@@ -56,7 +56,7 @@ fn a_well_formed_linked_table_passes() {
 fn linked_written_as_a_value_breaks_the_rules() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(&manifest, format!("linked = 3\n{text}")).unwrap();
     sandbox
@@ -77,7 +77,7 @@ skiman.toml:1: toml-value: `linked` must be a table
 fn a_force_staged_path_under_linked_is_a_violation_without_a_stage_hint() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir(repo.join("linked")).unwrap();
     std::os::unix::fs::symlink("/w/company", repo.join("linked/x")).unwrap();
     sandbox.git(&repo, ["add", "--all"]);
@@ -123,7 +123,7 @@ fn with_summary(name: &str) -> String {
 fn check_warns_about_linked_skills_without_changing_the_exit_status() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let canon = sandbox.skill_repo();
+    let canon = sandbox.canon();
     write(canon.join("skills/pdf/SKILL.md"), skill_md("pdf"));
     let company = sandbox.home().join("work/company");
     for name in ["alpha", "pdf"] {

@@ -168,9 +168,9 @@ impl Sandbox {
         self.root.join("upstreams")
     }
 
-    /// A location for the skill repo. Not created, so `skiman init` can create it.
-    pub fn skill_repo(&self) -> PathBuf {
-        self.root.join("skill-repo")
+    /// A location for the canon. Not created, so `skiman init` can create it.
+    pub fn canon(&self) -> PathBuf {
+        self.root.join("canon")
     }
 
     pub fn presence_dir(&self, tool: Tool) -> PathBuf {

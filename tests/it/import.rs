@@ -10,7 +10,7 @@ use crate::support::{
     setup, skill_md, tree, write,
 };
 
-/// An import folder outside the skill repo holding own skill `notes`, a
+/// An import folder outside the canon holding own skill `notes`, a
 /// shared body and a `skiman.toml` with `manifest` as its text.
 fn import_folder(sandbox: &Sandbox, manifest: &str) -> PathBuf {
     let folder = sandbox.root().join("import");
@@ -25,13 +25,13 @@ fn import_folder(sandbox: &Sandbox, manifest: &str) -> PathBuf {
 
 const TOOLS: &str = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
 
-/// The whole skill repo, every tool directory and instruction file, and the
+/// The whole canon, every tool directory and instruction file, and the
 /// machine state except the git cache (fetching may fill it), to prove a
 /// command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<BTreeMap<PathBuf, String>> {
     let mut state = tree(sandbox.state_home());
     state.retain(|path, _| path != Path::new("skiman") && !path.starts_with("skiman/cache"));
-    let mut world = vec![tree(sandbox.skill_repo()), state];
+    let mut world = vec![tree(sandbox.canon()), state];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.presence_dir(*t))));
     world.push(tree(sandbox.home().join(".agents")));
     world
@@ -118,10 +118,10 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(3);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("instructions/shared.md"), "old shared body\n");
     let old_manifest = read(repo.join("skiman.toml"));
     let folder_before = tree(&folder);
@@ -186,7 +186,7 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
         "{stderr}"
     );
 
-    // The skill repo holds the import.
+    // The canon holds the import.
     assert_eq!(
         read(repo.join("skills/pdf/SKILL.md")),
         read(folder.join("skills/pdf/SKILL.md"))
@@ -259,8 +259,8 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
     assert!(!sandbox.state_home().join("skiman/import").exists());
 }
 
-/// Every case leaves everything unchanged: the import folder, the skill
-/// repo, the tool directories, the instruction files and machine state.
+/// Every case leaves everything unchanged: the import folder, the canon,
+/// the tool directories, the instruction files and machine state.
 #[track_caller]
 fn assert_refused(sandbox: &Sandbox, folder: &Path, code: i32, stderr_has: &[&str]) -> String {
     let before = world(sandbox);
@@ -293,10 +293,10 @@ fn assert_refused(sandbox: &Sandbox, folder: &Path, code: i32, stderr_has: &[&st
 }
 
 #[test]
-fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
+fn a_canon_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let folder = import_folder(&sandbox, TOOLS);
     write(repo.join("skills/.hidden/x"), "dot names do not count\n");
     write(repo.join("upstream/.keep"), "");
@@ -337,7 +337,7 @@ fn a_skill_repo_with_a_skill_a_snapshot_or_a_lock_entry_refuses_import() {
     );
     std::fs::remove_file(repo.join("skiman.lock")).unwrap();
 
-    // The import's own skill, already in the skill repo as the import folder
+    // The import's own skill, already in the canon as the import folder
     // holds it, is kept, and the rest is written.
     write(repo.join("skills/notes/SKILL.md"), skill_md("notes"));
     let output = sandbox
@@ -451,7 +451,7 @@ fn a_secret_in_a_declared_upstream_refuses_the_import_until_it_is_exempted() {
         .assert()
         .code(0);
     assert_eq!(
-        read(sandbox.skill_repo().join("upstream/pdf/tests/fixture.env")),
+        read(sandbox.canon().join("upstream/pdf/tests/fixture.env")),
         format!("KEY={key}\n")
     );
 }
@@ -472,7 +472,7 @@ fn a_special_file_in_an_entry_to_move_refuses_the_import_naming_it() {
         .then_some(())
         .unwrap();
     let folder = import_folder(&sandbox, TOOLS);
-    let repo_before = tree(sandbox.skill_repo());
+    let repo_before = tree(sandbox.canon());
     let folder_before = tree(&folder);
 
     let output = sandbox
@@ -494,19 +494,19 @@ fn a_special_file_in_an_entry_to_move_refuses_the_import_naming_it() {
             .is_fifo()
     );
     assert!(entry.join("SKILL.md").is_file());
-    assert_eq!(tree(sandbox.skill_repo()), repo_before);
+    assert_eq!(tree(sandbox.canon()), repo_before);
     assert_eq!(tree(&folder), folder_before);
     assert!(!sandbox.state_home().join("skiman/import").exists());
     assert!(!sandbox.state_home().join("skiman/backups").exists());
 }
 
 #[test]
-fn a_skill_repo_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
+fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {
     for rel in ["instructions/shared.md", "skiman.toml"] {
         let sandbox = Sandbox::new();
         init(&sandbox);
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         let elsewhere = sandbox.home().join("elsewhere");
         std::fs::rename(repo.join(rel), &elsewhere).unwrap();
         std::os::unix::fs::symlink(&elsewhere, repo.join(rel)).unwrap();
@@ -549,7 +549,7 @@ fn with_a_terminal_declining_changes_nothing() {
 fn a_folder_without_tools_keeps_the_repo_tools_and_one_with_tools_uses_its_own() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(
         repo.join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\"]\n",
@@ -577,7 +577,7 @@ fn a_folder_without_tools_keeps_the_repo_tools_and_one_with_tools_uses_its_own()
 
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let folder = import_folder(&sandbox, "[tools]\nenabled = [\"codex\"]\n");
     sandbox
         .skiman()
@@ -615,7 +615,7 @@ fn an_upstream_gitignore_in_a_local_source_is_left_out_of_the_snapshot() {
         .assert()
         .code(0);
 
-    let snapshot = sandbox.skill_repo().join("upstream/pdf");
+    let snapshot = sandbox.canon().join("upstream/pdf");
     assert_eq!(read(snapshot.join("SKILL.md")), skill_md("pdf"));
     assert!(!snapshot.join(".gitignore").exists());
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
@@ -641,7 +641,7 @@ fn project_with_an_exempted_key(sandbox: &Sandbox) -> String {
         "[[secrets.allow]]\npath = \"projects/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"{}\"\n",
         fingerprint(&key)
     );
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     std::fs::write(&manifest, format!("{}\n{entry}", read(&manifest))).unwrap();
     sandbox
         .skiman()
@@ -667,7 +667,7 @@ fn import_keeps_the_repos_project_roots_and_their_secret_exemptions() {
         .code(0);
 
     assert_eq!(
-        read(sandbox.skill_repo().join("skiman.toml")),
+        read(sandbox.canon().join("skiman.toml")),
         format!("{TOOLS}\n[projects.proj]\npath = \"~/proj\"\n\n{entry}")
     );
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
@@ -693,7 +693,7 @@ fn import_adds_the_folders_project_roots_to_the_repos_and_keeps_one_copy_of_each
         .code(0);
 
     assert_eq!(
-        read(sandbox.skill_repo().join("skiman.toml")),
+        read(sandbox.canon().join("skiman.toml")),
         format!(
             "{TOOLS}\n[projects.other]\npath = \"~/other\"\n\n[projects.proj]\npath = \"~/proj\"\n\n{entry}"
         )
@@ -701,7 +701,7 @@ fn import_adds_the_folders_project_roots_to_the_repos_and_keeps_one_copy_of_each
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
-/// Imports a folder whose `skiman.toml` is `folder` into a skill repo set up
+/// Imports a folder whose `skiman.toml` is `folder` into a canon set up
 /// by [`project_with_an_exempted_key`] whose `skiman.toml` is then `repo`
 /// (given that entry). `check` passes before and after, so the root and its
 /// exemption are kept, and the mirror stays. Returns the `skiman.toml` the
@@ -710,7 +710,7 @@ fn import_project_config(repo: impl FnOnce(&str) -> String, folder: &str) -> (St
     let sandbox = Sandbox::new();
     init(&sandbox);
     let entry = project_with_an_exempted_key(&sandbox);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     std::fs::write(&manifest, repo(&entry)).unwrap();
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
     let folder = import_folder(&sandbox, folder);
@@ -724,12 +724,7 @@ fn import_project_config(repo: impl FnOnce(&str) -> String, folder: &str) -> (St
         .code(0);
 
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
-    assert!(
-        sandbox
-            .skill_repo()
-            .join("projects/proj/AGENTS.md")
-            .is_file()
-    );
+    assert!(sandbox.canon().join("projects/proj/AGENTS.md").is_file());
     (read(manifest), entry)
 }
 
@@ -833,7 +828,7 @@ fn a_failure_during_takeover_stops_the_import_and_the_same_command_finishes_it()
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(
         stdout.contains(&format!(
             "created {}\n",
@@ -1012,8 +1007,7 @@ fn a_local_source_the_takeover_would_move_or_reach_through_refuses_the_import_na
 }
 
 #[test]
-fn a_local_source_added_before_the_import_is_refused_when_the_skill_repo_already_holds_the_import()
-{
+fn a_local_source_added_before_the_import_is_refused_when_the_canon_already_holds_the_import() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let source = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
@@ -1023,9 +1017,9 @@ fn a_local_source_added_before_the_import_is_refused_when_the_skill_repo_already
         .args(["add", "~/.claude/skills/pdf", "--yes"])
         .output()
         .unwrap();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(repo.join("skills/pdf/SKILL.md").is_file());
-    // The import folder holds what the skill repo does.
+    // The import folder holds what the canon does.
     let folder = sandbox.root().join("import");
     write(
         folder.join("skills/pdf/SKILL.md"),
@@ -1142,7 +1136,7 @@ fn a_local_source_that_is_a_link_is_read_through_it_unless_the_import_moves_the_
         .assert()
         .code(0);
     assert_eq!(
-        read(sandbox.skill_repo().join("upstream/pdf/SKILL.md")),
+        read(sandbox.canon().join("upstream/pdf/SKILL.md")),
         skill_md("pdf")
     );
     sandbox.skiman().args(["update", "pdf"]).assert().code(0);
@@ -1170,7 +1164,7 @@ fn a_local_source_is_read_by_the_letter_past_a_link_and_dot_dots_as_update_reads
         .assert()
         .code(0);
     assert_eq!(
-        read(sandbox.skill_repo().join("upstream/pdf/reference.md")),
+        read(sandbox.canon().join("upstream/pdf/reference.md")),
         "# By the letter\n"
     );
     sandbox.skiman().args(["update", "pdf"]).assert().code(0);
@@ -1200,7 +1194,7 @@ fn stopped_before_the_last_skill(sandbox: &Sandbox, local: bool) -> PathBuf {
     folder
 }
 
-/// [`setup`] imported, so the skill repo holds it, and [`more_to_move`].
+/// [`setup`] imported, so the canon holds it, and [`more_to_move`].
 fn imported(sandbox: &Sandbox, local: bool) -> PathBuf {
     let folder = setup_with_source(sandbox, local);
     sandbox
@@ -1234,7 +1228,7 @@ fn setup_with_source(sandbox: &Sandbox, local: bool) -> PathBuf {
 /// Runs the import with `run` at the step between the confirmation and the
 /// repo lock: it must refuse (exit 1) before anything is written or moved,
 /// making no backup folder after `run`, and no backup folder may hold a link
-/// into the skill repo.
+/// into the canon.
 #[track_caller]
 fn assert_refused_after_the_confirmation(sandbox: &Sandbox, folder: &Path, run: &str) {
     let listed = sandbox.root().join("backups-after-the-hook");
@@ -1267,7 +1261,7 @@ fn assert_refused_after_the_confirmation(sandbox: &Sandbox, folder: &Path, run: 
         read(&listed).lines().collect::<Vec<_>>(),
         "{run}: the refused run made a backup folder"
     );
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for dir in backup_dirs(sandbox) {
         for (path, value) in tree(&dir) {
             assert!(
@@ -1284,15 +1278,15 @@ fn assert_refused_after_the_confirmation(sandbox: &Sandbox, folder: &Path, run: 
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before_anything_moves() {
+fn a_change_between_the_confirmation_and_the_canon_lock_refuses_the_import_before_anything_moves() {
     for start in [stopped_before_the_last_skill, imported] {
         let changes: [fn(&Sandbox, &Path) -> String; 7] = [
             |sandbox, _| {
-                let notes = sandbox.skill_repo().join("skills/notes/SKILL.md");
+                let notes = sandbox.canon().join("skills/notes/SKILL.md");
                 format!("echo edited >> '{}'", notes.display())
             },
             |sandbox, _| {
-                let manifest = sandbox.skill_repo().join("skiman.toml");
+                let manifest = sandbox.canon().join("skiman.toml");
                 format!("echo '# edited' >> '{}'", manifest.display())
             },
             |_, folder| {
@@ -1333,12 +1327,12 @@ fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before
         }
     }
 
-    // Where the skill repo holds the import, a skiman.toml that changes no
+    // Where the canon holds the import, a skiman.toml that changes no
     // condition is still checked byte for byte: Codex is no longer enabled,
     // and its entry stays where it is.
     let sandbox = Sandbox::new();
     let folder = imported(&sandbox, false);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let without_codex = read(&manifest).replace(", \"codex\"", "");
     std::fs::write(sandbox.root().join("without-codex.toml"), without_codex).unwrap();
     assert_refused_after_the_confirmation(
@@ -1358,9 +1352,9 @@ fn a_change_between_the_confirmation_and_the_repo_lock_refuses_the_import_before
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn a_skill_repo_file_changed_while_the_import_fetches_refuses_the_import_and_keeps_the_change() {
+fn a_canon_file_changed_while_the_import_fetches_refuses_the_import_and_keeps_the_change() {
     // Which way the import goes, and the skiman.toml it writes, follow the
-    // skill repo's three files as first read. The preview is worked out after
+    // canon's three files as first read. The preview is worked out after
     // the fetch, so it already holds the change: only the bytes as first read
     // tell it apart.
     let changes = [
@@ -1379,7 +1373,7 @@ fn a_skill_repo_file_changed_while_the_import_fetches_refuses_the_import_and_kee
         let folder = setup_with_source(&sandbox, false);
         let project = sandbox.home().join("proj");
         write(project.join("AGENTS.md"), "# Proj\n");
-        let file = sandbox.skill_repo().join(rel);
+        let file = sandbox.canon().join(rel);
         let changed = sandbox.root().join("changed");
         let run = format!(
             "FILE='{}' SKIMAN='{}' PROJECT='{}'; {change} && cp \"$FILE\" '{}'",
@@ -1463,10 +1457,10 @@ fn a_session_start_sync_or_an_edit_inside_an_entry_after_the_confirmation_does_n
 }
 
 #[test]
-fn the_default_import_folder_inside_the_skill_repo_works_and_is_left_in_place() {
+fn the_default_import_folder_inside_the_canon_works_and_is_left_in_place() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let folder = repo.join(".skiman/import");
     write(folder.join("skills/notes/SKILL.md"), skill_md("notes"));
     write(folder.join("instructions/shared.md"), "Shared.\n");
@@ -1484,12 +1478,12 @@ fn the_default_import_folder_inside_the_skill_repo_works_and_is_left_in_place() 
     sandbox.skiman().arg("check").assert().code(0);
 }
 
-/// Spec Import: the import folder defaults to `<skill repo>/.skiman/import/`.
+/// Spec Import: the import folder defaults to `<canon>/.skiman/import/`.
 #[test]
 fn import_without_a_folder_uses_the_default_import_folder() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let folder = repo.join(".skiman/import");
     write(folder.join("skills/notes/SKILL.md"), skill_md("notes"));
     write(folder.join("instructions/shared.md"), "Shared.\n");

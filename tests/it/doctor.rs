@@ -12,7 +12,7 @@ fn init(sandbox: &Sandbox, session_hooks: &str) {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", session_hooks])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
 }
@@ -62,7 +62,7 @@ fn assert_line(stdout: &str, line: &str) {
 fn doctor_reports_a_healthy_setup() {
     let sandbox = Sandbox::new();
     init(&sandbox, "claude-code,antigravity");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let home = sandbox.home();
     let home = home.display();
 
@@ -118,7 +118,7 @@ fn doctor_reports_each_problem_in_one_place() {
         .tool(Tool::Antigravity, ToolSetup::Absent)
         .build();
     init(&sandbox, "none");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let home = sandbox.home();
     add(&sandbox, "pdf");
     add(&sandbox, "gone");
@@ -311,10 +311,10 @@ fn doctor_reports_a_missing_or_too_old_git() {
 }
 
 #[test]
-fn doctor_shows_tmp_content_as_in_use_while_the_repo_lock_is_held() {
+fn doctor_shows_tmp_content_as_in_use_while_the_canon_lock_is_held() {
     let sandbox = Sandbox::new();
     init(&sandbox, "none");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let staged = repo.join(".skiman/tmp/20261104T120000Z");
     write(staged.join("candidate/SKILL.md"), "x");
 
@@ -351,7 +351,7 @@ fn doctor_lists_old_folders_an_update_left_in_tmp() {
     let sandbox = Sandbox::new();
     init(&sandbox, "none");
     add(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let staged = repo.join(".skiman/tmp/20261104T120000Z");
     for (from, to) in [
         ("skills/pdf", "old/skills/pdf"),
@@ -371,7 +371,7 @@ fn doctor_lists_old_folders_an_update_left_in_tmp() {
     );
 }
 
-/// Every file under the sandbox root: skill repo (with `.git` and
+/// Every file under the sandbox root: canon (with `.git` and
 /// `.skiman/tmp/`), tool directories, instruction files, config and state.
 fn world(sandbox: &Sandbox) -> std::collections::BTreeMap<PathBuf, String> {
     tree(sandbox.root())
@@ -382,7 +382,7 @@ fn list_diff_and_doctor_change_nothing() {
     let sandbox = Sandbox::new();
     init(&sandbox, "claude-code");
     add(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("skills/pdf/notes.md"), "local\n");
     skill_folder(sandbox.tool_dir(Tool::Codex).join("csv"), "csv");
     write(
@@ -426,7 +426,7 @@ fn doctor_names_each_instruction_file_antigravity_loads_on_top_of_the_shared_bod
 fn doctor_reports_antigravitys_session_start_hook_missing_and_different() {
     let sandbox = Sandbox::new();
     init(&sandbox, "none");
-    let r = sandbox.skill_repo();
+    let r = sandbox.canon();
     let hooks = sandbox.home().join(".gemini/config/hooks.json");
 
     assert_line(

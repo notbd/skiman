@@ -20,8 +20,8 @@ pub struct Setup {
 }
 
 /// Instruction files that are regular files, a skill copied into one tool
-/// directory and linked from another, a copy the import leaves out, a skill
-/// repo whose shared body is `old shared body`, and an import folder holding
+/// directory and linked from another, a copy the import leaves out, a canon
+/// whose shared body is `old shared body`, and an import folder holding
 /// own skill `notes` and third-party skill `pdf` (pinned, with a local edit).
 /// The commit has a fixed date, so every sandbox gets the same one and the
 /// final states of two sandboxes compare.
@@ -60,11 +60,11 @@ pub fn setup(sandbox: &Sandbox) -> Setup {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(3);
     write(
-        sandbox.skill_repo().join("instructions/shared.md"),
+        sandbox.canon().join("instructions/shared.md"),
         "old shared body\n",
     );
 

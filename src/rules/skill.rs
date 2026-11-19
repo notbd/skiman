@@ -125,7 +125,7 @@ pub fn check_folder(
 }
 
 /// [`check_folder`], with the frontmatter rules on its `SKILL.md` when
-/// `frontmatter` is set (a skill in the skill repo).
+/// `frontmatter` is set (a skill in the canon).
 fn check_content(
     tree: &dyn Tree,
     dir: &str,
@@ -223,8 +223,8 @@ pub fn check_written_file(
 }
 
 /// Rules on one entry inside a skill folder.
-/// `top_skill_md`: the entry is the `SKILL.md` of a skill in the skill
-/// repo, which the frontmatter rules check.
+/// `top_skill_md`: the entry is the `SKILL.md` of a skill in the canon,
+/// which the frontmatter rules check.
 fn check_entry(
     tree: &dyn Tree,
     path: &str,

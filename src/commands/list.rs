@@ -6,12 +6,12 @@
 //! is not on this machine. Read-only; takes no lock and spawns no `git`.
 
 use crate::Exit;
+use crate::canon::Canon;
 use crate::failure::{Failure, finish};
 use crate::linked::{Linked, Shown};
 use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::rules;
 use crate::tree::{Kind, Tree, WorkingTree, tree_hash};
 
@@ -31,7 +31,7 @@ pub fn run() -> Exit {
 
 fn list() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let manifest = Manifest::load(&repo)?;
     let lockfile = Lockfile::load(&repo)?;
     let tree = WorkingTree::new(repo.root());

@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
@@ -23,8 +25,6 @@ use crate::project::state::{Evaluated, State, check_rules, classify};
 use crate::project::swap::{Expect, Outcome, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::staging::{PROJECT_PREFIX, Staging};
 use crate::sync::{self, Output};
@@ -38,7 +38,7 @@ pub fn add(path: &Path, id: Option<String>) -> Exit {
 
 fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let home = paths.home();
     let dir = cwd_absolute(path)?
         .canonicalize()
@@ -53,7 +53,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             dir.display()
         )));
     }
-    let _lock = RepoLock::wait(&paths, &repo)?;
+    let _lock = CanonLock::wait(&paths, &repo)?;
     let manifest = Manifest::load(&repo)?;
     if manifest.projects().iter().any(|entry| entry.id == id) {
         return Err(Failure::refused(format!(
@@ -109,8 +109,8 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
 /// What a command works on: the lock, the configuration and the usable roots.
 struct Context {
     paths: Paths,
-    repo: SkillRepo,
-    lock: RepoLock,
+    repo: Canon,
+    lock: CanonLock,
     manifest: Manifest,
     roots: Vec<Root>,
     /// [`never_entered`]: discovery never enters these, and [`Self::locate`]
@@ -121,12 +121,12 @@ struct Context {
 }
 
 impl Context {
-    /// Takes the lock and refuses (exit 4) while the skill repo is in the
+    /// Takes the lock and refuses (exit 4) while the canon is in the
     /// middle of a git operation.
     fn open() -> Result<Context, Failure> {
         let paths = Paths::from_env()?;
-        let repo = SkillRepo::from_config(&paths)?;
-        let lock = RepoLock::wait(&paths, &repo)?;
+        let repo = Canon::from_config(&paths)?;
+        let lock = CanonLock::wait(&paths, &repo)?;
         if let Some(operation) = operation_in_progress(repo.root()) {
             return Err(Failure::operational(format!(
                 "the canon {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
@@ -179,8 +179,8 @@ impl Context {
     /// The root a path given on the command line is in, and the path
     /// relative to it (`""` for the root itself). The parents are resolved
     /// as far as they exist; the last component is not, so a path that is an
-    /// alias link names the link, not what it points to. A path in the skill
-    /// repo or the state folder is refused: adopting a mirror would mirror
+    /// alias link names the link, not what it points to. A path in the canon
+    /// or the state folder is refused: adopting a mirror would mirror
     /// it again.
     fn locate(&self, path: &Path) -> Result<(&Root, String), Failure> {
         let absolute = cwd_absolute(path)?;
@@ -420,7 +420,7 @@ impl<'a> Plan<'a> {
 
     /// Drops every write whose new content (the `source`: "the project's
     /// version", "its mirror") cannot be read or breaks the safety rules.
-    fn drop_breaking(&mut self, repo: &SkillRepo, source: &str) {
+    fn drop_breaking(&mut self, repo: &Canon, source: &str) {
         let mut skipped = Vec::new();
         self.writes.retain(|p| {
             let disk = p.item.disk(p.root);

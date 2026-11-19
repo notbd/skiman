@@ -16,14 +16,14 @@ fn initialised() -> Sandbox {
 }
 
 fn manifest(sandbox: &Sandbox) -> String {
-    std::fs::read_to_string(sandbox.skill_repo().join("skiman.toml")).unwrap()
+    std::fs::read_to_string(sandbox.canon().join("skiman.toml")).unwrap()
 }
 
 /// Appends `text` to `skiman.toml`, as a user editing it by hand.
 fn append_manifest(sandbox: &Sandbox, text: &str) {
     let mut toml = manifest(sandbox);
     toml.push_str(text);
-    std::fs::write(sandbox.skill_repo().join("skiman.toml"), toml).unwrap();
+    std::fs::write(sandbox.canon().join("skiman.toml"), toml).unwrap();
 }
 
 /// Creates the folder `path` and returns it.
@@ -105,12 +105,12 @@ fn add_writes_a_tilde_path_and_an_id_from_the_folder_name() {
     assert!(
         stdout.contains(&format!(
             "{}/projects/acme-corp/",
-            sandbox.skill_repo().display()
+            sandbox.canon().display()
         )) && stdout.contains("pushed wherever the canon is pushed"),
         "add says where the project files will be stored: {stdout}"
     );
     // Registering copies nothing yet, and the written table passes `check`.
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
@@ -196,7 +196,7 @@ fn add_rewrites_a_projects_table_written_inline_as_a_standard_table_keeping_its_
     let b = folder(sandbox.home().join("b"));
     let tools = manifest(&sandbox);
     std::fs::write(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         format!("projects = {{ a = {{ path = \"~/a\" }} }}\n{tools}"),
     )
     .unwrap();
@@ -235,9 +235,9 @@ fn add_refuses_an_ancestor_of_home() {
 }
 
 #[test]
-fn add_refuses_the_skill_repo_and_folders_inside_it() {
+fn add_refuses_the_canon_and_folders_inside_it() {
     let sandbox = initialised();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for dir in [repo.clone(), repo.join("skills")] {
         assert_refused(&sandbox, add_cmd(&sandbox, dir), "is inside the canon");
     }
@@ -380,7 +380,7 @@ fn sync_skips_home_and_its_ancestors_with_one_warning_each() {
         stderr.contains("is your home folder or one of its parents; register project folders instead; fix [projects.home] in skiman.toml"),
         "{stderr}"
     );
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
 }
 
 #[test]
@@ -421,13 +421,10 @@ fn adopt_skips_invalid_roots_and_adopts_under_the_valid_one() {
             stderr.contains(&format!("warning: project root `{id}` is skipped: ")),
             "{id}: {stderr}"
         );
-        assert!(
-            !exists(sandbox.skill_repo().join("projects").join(id)),
-            "{id}"
-        );
+        assert!(!exists(sandbox.canon().join("projects").join(id)), "{id}");
     }
     assert_eq!(
-        std::fs::read(sandbox.skill_repo().join("projects/ok/AGENTS.md")).unwrap(),
+        std::fs::read(sandbox.canon().join("projects/ok/AGENTS.md")).unwrap(),
         std::fs::read(ok.join("AGENTS.md")).unwrap()
     );
 }
@@ -449,7 +446,7 @@ fn adopt_refuses_a_path_inside_a_skipped_root() {
         .code(1);
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
     assert!(stderr.contains("is not inside a project root"), "{stderr}");
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
 }
 
 // ------------------------------------------------- check on [projects]
@@ -512,7 +509,7 @@ fn check_and_check_staged_report_a_skill_dirs_key_as_retired_once() {
         let expected = format!("skiman.toml:{line}: {RETIRED}\n");
         assert_eq!(check_violations(&sandbox), expected, "{value}");
 
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         sandbox.git(&repo, ["add", "--all"]);
         let staged = sandbox
             .skiman()

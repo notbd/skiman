@@ -44,11 +44,11 @@ pub fn normalised(sandbox: &Sandbox, prefix: &str, dir: &Path) -> BTreeMap<Strin
         .collect()
 }
 
-/// The skill repo and the home folder (tool directories, instruction files,
+/// The canon and the home folder (tool directories, instruction files,
 /// machine state). Backups and the git cache are left out: a killed run
 /// leaves a backup folder of its own, and fetching fills the cache.
 pub fn final_state(sandbox: &Sandbox) -> BTreeMap<String, String> {
-    let mut state = normalised(sandbox, "repo", &sandbox.skill_repo());
+    let mut state = normalised(sandbox, "repo", &sandbox.canon());
     state.extend(normalised(sandbox, "home", &sandbox.home()));
     state.retain(|key, _| {
         !key.starts_with("home/.local/state/skiman/backups")

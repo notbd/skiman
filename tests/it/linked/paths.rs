@@ -32,7 +32,7 @@ fn sync(sandbox: &Sandbox) -> (i32, String) {
 /// The canon's `skiman.toml` and `.gitignore`: a refused `linked add`
 /// leaves both as they were.
 fn records(sandbox: &Sandbox) -> (String, String) {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     (
         read(repo.join("skiman.toml")),
         read(repo.join(".gitignore")),
@@ -43,7 +43,7 @@ fn records(sandbox: &Sandbox) -> (String, String) {
 fn linked_add_refuses_a_path_that_overlaps_a_place_skiman_writes_or_home() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let home = sandbox.home();
     std::fs::create_dir_all(repo.join("skills/inner")).unwrap();
     let before = records(&sandbox);
@@ -126,7 +126,7 @@ fn overlapping_and_malformed_registrations_break_the_rules() {
         stderr.contains("linked folder `bad` is skipped: `path` in [linked.bad] must be"),
         "{stderr}"
     );
-    let linked = sandbox.skill_repo().join("linked");
+    let linked = sandbox.canon().join("linked");
     assert!(!exists(linked.join("zinner")) && !exists(linked.join("bad")));
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);
@@ -146,7 +146,7 @@ fn child_links_into_home_or_a_tool_directory_are_not_distributed() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     write(
-        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        sandbox.canon().join("skills/notes/SKILL.md"),
         skill_md("notes"),
     );
     assert_eq!(sync(&sandbox).0, 0);
@@ -197,7 +197,7 @@ fn a_tool_directory_that_resolves_into_a_linked_folder_is_skipped() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     write(
-        sandbox.skill_repo().join("skills/notes/SKILL.md"),
+        sandbox.canon().join("skills/notes/SKILL.md"),
         skill_md("notes"),
     );
     let company = folder(&sandbox, "work/company", &["alpha"]);
@@ -237,7 +237,7 @@ fn a_presence_directory_that_resolves_into_a_linked_folder_is_left_alone() {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "claude-code"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
     let company = folder(&sandbox, "work/company", &["alpha"]);
@@ -246,7 +246,7 @@ fn a_presence_directory_that_resolves_into_a_linked_folder_is_left_alone() {
     let claude = sandbox.presence_dir(Tool::ClaudeCode);
     std::fs::rename(&claude, company.join("claude")).unwrap();
     symlink(company.join("claude"), &claude).unwrap();
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     std::fs::write(&manifest, read(&manifest).replace("\"claude-code\", ", "")).unwrap();
     assert!(
         std::fs::symlink_metadata(company.join("claude/CLAUDE.md"))
@@ -273,7 +273,7 @@ fn a_presence_directory_that_resolves_into_a_linked_folder_is_left_alone() {
     let output = sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .output()
         .unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
@@ -293,7 +293,7 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     init(&sandbox);
     let company = folder(&sandbox, "work/company", &["alpha"]);
     append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
-    let gitignore = sandbox.skill_repo().join(".gitignore");
+    let gitignore = sandbox.canon().join(".gitignore");
     std::fs::remove_file(&gitignore).unwrap();
     std::fs::write(company.join("gitignore"), "target\n").unwrap();
     symlink(company.join("gitignore"), &gitignore).unwrap();
@@ -302,7 +302,7 @@ fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
     let output = sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .output()
         .unwrap();
 
@@ -378,7 +378,7 @@ fn adopt_refuses_an_old_link_that_resolves_into_a_linked_folder() {
     symlink(company.join("alpha"), claude.join("old-alpha")).unwrap();
     symlink(&ext, claude.join("old-tool")).unwrap();
     assert_eq!(sync(&sandbox).0, 0);
-    let canon = crate::support::tree(sandbox.skill_repo());
+    let canon = crate::support::tree(sandbox.canon());
     let before = contents(&[&company, &ext, &claude]);
 
     for name in ["old-alpha", "old-tool"] {
@@ -389,7 +389,7 @@ fn adopt_refuses_an_old_link_that_resolves_into_a_linked_folder() {
             claude.join(name).display()
         );
         assert!(stderr.contains(&line), "{line}\n{stderr}");
-        assert_eq!(crate::support::tree(sandbox.skill_repo()), canon);
+        assert_eq!(crate::support::tree(sandbox.canon()), canon);
         assert_eq!(contents(&[&company, &ext, &claude]), before);
     }
 }
@@ -407,7 +407,7 @@ fn adopt_refuses_while_a_linked_folder_cannot_be_read() {
         sandbox.tool_dir(Tool::ClaudeCode).join("beta/SKILL.md"),
         skill_md("beta"),
     );
-    let canon = crate::support::tree(sandbox.skill_repo());
+    let canon = crate::support::tree(sandbox.canon());
     let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
 
     chmod(0o000).unwrap();
@@ -422,7 +422,7 @@ fn adopt_refuses_while_a_linked_folder_cannot_be_read() {
         stderr.contains("linked folder `company` cannot be read"),
         "{stderr}"
     );
-    assert_eq!(crate::support::tree(sandbox.skill_repo()), canon);
+    assert_eq!(crate::support::tree(sandbox.canon()), canon);
     let (code, stderr) = run(
         &sandbox,
         &["adopt", "beta", "--from", "claude-code", "--yes"],

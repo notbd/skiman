@@ -84,11 +84,7 @@ fn a_project_adopt_that_replaces_mirrors_killed_before_each_write_finishes_when_
             let root = work(sandbox, true);
             for item in ITEMS {
                 edit(root.clone(), item, "project v2\n");
-                edit(
-                    sandbox.skill_repo().join("projects/work"),
-                    item,
-                    "mirror v2\n",
-                );
+                edit(sandbox.canon().join("projects/work"), item, "mirror v2\n");
             }
             naming_each(&["project", "adopt", "--yes"], &root)
         },
@@ -108,11 +104,7 @@ fn a_project_restore_killed_before_each_write_finishes_when_run_again() {
         |sandbox| {
             let root = work(sandbox, true);
             for item in ITEMS {
-                edit(
-                    sandbox.skill_repo().join("projects/work"),
-                    item,
-                    "mirror v2\n",
-                );
+                edit(sandbox.canon().join("projects/work"), item, "mirror v2\n");
             }
             naming_each(&["project", "restore", "--yes"], &root)
         },

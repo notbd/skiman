@@ -7,14 +7,14 @@ use std::path::Path;
 use saphyr::{AnnotatedMapping, LoadableYamlNode, MarkedYaml, Scalar, YamlData};
 
 use crate::Exit;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, write_atomic};
 use crate::linked::{self, Folder, LINKED_DIR, Linked, State, gitignore};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::root;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::frontmatter::split;
 use crate::rules::{self, Scope};
 use crate::sync::{self, Output};
@@ -30,7 +30,7 @@ pub fn remove(id: &str) -> Exit {
 
 fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let home = paths.home();
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current directory: {e}")))?;
@@ -43,7 +43,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         let hint = if given { "" } else { "; give one with --id" };
         return Err(Failure::refused(format!("{why}{hint}")));
     }
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     let file = repo.manifest_file();
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
     let manifest =
@@ -259,8 +259,8 @@ fn quoted(text: &str) -> String {
 
 fn run_remove(id: &str) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let repo = Canon::from_config(&paths)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     let file = repo.manifest_file();
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
     let manifest =

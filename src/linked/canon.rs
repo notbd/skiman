@@ -91,8 +91,14 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
             report.items.push(note(dir, path, "occupied", message));
             continue;
         }
-        let Ok(written) = std::fs::read_link(&path) else {
-            continue;
+        let written = match std::fs::read_link(&path) {
+            Ok(written) => written,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("cannot read {}: {e}", path.display()));
+                continue;
+            }
         };
         let current = absolute_lexical(dir, &written);
         match (want, folder.map(|f| &f.state)) {

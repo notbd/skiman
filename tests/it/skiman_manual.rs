@@ -112,10 +112,35 @@ fn skiman_manual_covers_every_everyday_operation() {
         ("no edits of copies", "never edit what is there".to_owned()),
         ("no prompts", "never prompts".to_owned()),
         ("exit 2", "Exit code 2".to_owned()),
+        // Linked skills (spec #37, user story 15).
+        (
+            "linked skills are outside",
+            "A linked skill's folder is outside the canon".to_owned(),
+        ),
+        (
+            "edit in the linked folder",
+            "edit it in its linked folder".to_owned(),
+        ),
+        ("where that folder is", "`skiman list` shows".to_owned()),
+        ("approval through linked/", format!("{repo}/linked/<id>/")),
+        ("approval through linked/", "approval".to_owned()),
+        (
+            "search does not reach",
+            "does not reach linked skills".to_owned(),
+        ),
+        ("register", "skiman linked add <path>".to_owned()),
+        ("unregister", "skiman linked remove <id>".to_owned()),
+        ("summary", "metadata.summary".to_owned()),
+        (
+            "refusals",
+            "refuse a name that is only a linked skill".to_owned(),
+        ),
     ];
+    // Line breaks fall anywhere in the prose, so compare with single spaces.
+    let flat = content.split_whitespace().collect::<Vec<_>>().join(" ");
     let missing: Vec<_> = required
         .iter()
-        .filter(|(_, text)| !content.contains(text.as_str()))
+        .filter(|(_, text)| !flat.contains(text.as_str()))
         .collect();
     assert!(missing.is_empty(), "missing: {missing:#?}");
 }

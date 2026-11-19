@@ -48,8 +48,6 @@ pub struct Linked {
 #[derive(Debug, Clone)]
 pub struct Folder {
     pub id: String,
-    /// `path` as written in `skiman.toml`, when the table has a usable one.
-    pub written: Option<String>,
     /// `path` with `~` expanded, normalised lexically: what `linked/<id>`
     /// points to. `None` when the table has no usable path.
     pub path: Option<PathBuf>,
@@ -79,7 +77,6 @@ impl Linked {
         for entry in manifest.linked() {
             let mut folder = Folder {
                 id: entry.id,
-                written: None,
                 path: None,
                 resolved: None,
                 state: State::Missing,
@@ -87,7 +84,6 @@ impl Linked {
             match entry.path {
                 Ok(written) => {
                     let path = expand(home, &written).expect("checked by is_path_form");
-                    folder.written = Some(written);
                     folder.path = Some(path);
                     folder.state = check(&mut folder, &places, &folders);
                 }

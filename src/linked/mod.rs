@@ -13,6 +13,7 @@ pub mod canon;
 pub mod folder;
 pub mod gitignore;
 pub mod path;
+pub mod summary;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use crate::project::root::expand;
 use crate::repo::SkillRepo;
 pub use folder::Contents;
 use path::{Places, Stop, overlap, resolve};
+pub use summary::stand_in;
 
 /// The canon's folder of links to linked folders.
 pub const LINKED_DIR: &str = "linked";
@@ -536,37 +538,6 @@ fn child_breaks(path: &Path, own: &Folder, all: &[Folder], places: &Places) -> O
         })
         .map(|f| format!("{} overlaps linked folder `{}`", path.display(), f.id))
 }
-
-/// The stand-in for a missing summary (ADR 0011): the first sentence of
-/// `description`, up to the first `.`, `!` or `?` followed by whitespace or
-/// the end, the first `。`, `！` or `？`, or the first line break, whichever
-/// comes first; cut to 120 characters with `…`.
-pub fn stand_in(description: &str) -> String {
-    let chars: Vec<char> = description.trim().chars().collect();
-    let mut end = chars.len();
-    for (i, c) in chars.iter().enumerate() {
-        let next_blank = chars.get(i + 1).is_none_or(|n| n.is_whitespace());
-        if matches!(c, '。' | '！' | '？') || (matches!(c, '.' | '!' | '?') && next_blank) {
-            end = i + 1;
-            break;
-        }
-        if matches!(c, '\n' | '\r') {
-            end = i;
-            break;
-        }
-    }
-    let sentence: String = chars[..end].iter().collect();
-    let sentence = sentence.trim();
-    if sentence.chars().count() > STAND_IN_MAX {
-        let cut: String = sentence.chars().take(STAND_IN_MAX - 1).collect();
-        format!("{}…", cut.trim_end())
-    } else {
-        sentence.to_owned()
-    }
-}
-
-/// The longest stand-in, in characters.
-const STAND_IN_MAX: usize = 120;
 
 /// Where a write through `path` lands (a tool directory, a settings file,
 /// a linked `.gitignore`): its realpath as far as it exists.

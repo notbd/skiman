@@ -2,9 +2,11 @@
 //! who wants to see what each one is and where it came from. The skill
 //! repo's skills come by group with their summary, kind, source, install
 //! day, whether they are enabled and whether they have local modifications;
-//! then the skill skiman brings, and the skills other managers keep, which
-//! are only listed. Read-only; takes no lock. Spawns `git log` (read-only)
-//! for install days that `skiman.toml` does not record.
+//! then each linked folder as one section, with each linked skill's summary
+//! (ADR 0011) and whether it is distributed; then the skill skiman brings,
+//! and the skills other managers keep, which are only listed. Read-only;
+//! takes no lock. Spawns `git log` (read-only) for install days that
+//! `skiman.toml` does not record.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,6 +17,8 @@ use crate::Exit;
 use crate::elsewhere::{self, OutsideSkill};
 use crate::failure::{Failure, finish};
 use crate::git;
+use crate::linked::summary::About;
+use crate::linked::{self, Linked, Shown};
 use crate::managing_skills;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
@@ -31,7 +35,11 @@ const REPO_HEADER: [&str; 7] = [
     "Enabled",
     "Modified",
 ];
+const LINKED_HEADER: [&str; 3] = ["Skill", "Summary", "Distributed"];
 const ELSEWHERE_HEADER: [&str; 4] = ["Skill", "Managed by", "Location", "Read by"];
+/// Under a linked folder's table that shows a stand-in.
+const STAND_IN_NOTE: &str = "A summary in italics stands in for a missing `metadata.summary`: \
+     it is the first sentence of the skill's description.";
 /// The summary of the skill skiman brings, which has no `[skills.<name>]` table.
 const MANAGING_SKILLS_SUMMARY: &str = "How to change skills and global instructions with skiman";
 /// What a day marked `(git)` means.
@@ -114,6 +122,47 @@ fn overview() -> Result<Exit, Failure> {
         out!("### No group ({})\n", ungrouped.len());
         table(&REPO_HEADER, &ungrouped);
     }
+    let linked = Linked::read(paths.home(), &repo, &manifest);
+    for (folder, shown) in linked.shown(&repo.layout()?) {
+        let path = folder.path.as_ref().expect("a shown folder has a path");
+        let (id, path) = (&folder.id, home_relative(path, paths.home()));
+        let Shown::Skills(skills) = shown else {
+            out!("## Linked folder {id}: `{path}`\n");
+            out!("Not on this machine.\n");
+            continue;
+        };
+        out!("## Linked folder {id} ({}): `{path}`\n", skills.len());
+        if skills.is_empty() {
+            continue;
+        }
+        let mut stand_in = false;
+        let rows: Vec<[String; 3]> = skills
+            .into_iter()
+            .map(|(name, lost)| {
+                let about = std::fs::read_to_string(folder.skill_dir(&name).join("SKILL.md"))
+                    .ok()
+                    .and_then(|text| About::read(&text))
+                    .unwrap_or_default();
+                let summary = match (about.summary, about.description) {
+                    (Some(summary), _) => summary,
+                    (None, Some(description)) => {
+                        stand_in = true;
+                        format!("*{}*", linked::stand_in(&description).replace('*', "\\*"))
+                    }
+                    (None, None) => "-".to_owned(),
+                };
+                let distributed = match lost {
+                    Some(holder) => format!("no: {}", holder.holds_the_name()),
+                    None => yes_no(true),
+                };
+                [name, summary, distributed]
+            })
+            .collect();
+        table(&LINKED_HEADER, &rows);
+        if stand_in {
+            out!("{STAND_IN_NOTE}\n");
+        }
+    }
     out!("## Built into skiman (1)\n");
     table(
         &REPO_HEADER,
@@ -145,16 +194,20 @@ fn overview() -> Result<Exit, Failure> {
 }
 
 fn elsewhere_row(skill: &OutsideSkill, home: &Path) -> [String; 4] {
-    let location = match skill.location.strip_prefix(home) {
-        Ok(rel) => format!("~/{}", rel.display()),
-        Err(_) => skill.location.display().to_string(),
-    };
     [
         skill.name.clone(),
         skill.owner.clone(),
-        location,
+        home_relative(&skill.location, home),
         skill.read_by.join(", "),
     ]
+}
+
+/// `path`, written with `~/` when it is under `home`.
+fn home_relative(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rel) => format!("~/{}", rel.display()),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 /// The day (`YYYY-MM-DD`) of the latest commit that added the `SKILL.md`

@@ -19,6 +19,7 @@ use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::layout::skill_path;
+use crate::linked::Linked;
 use crate::names::{self, Taken};
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -131,6 +132,9 @@ fn check_name(
 /// Refuses (exit 1) anything but a foreign skill, or, once `skills/<name>`
 /// is in place (an adopt stopped part-way), what a move of the entry to the
 /// backup left when it was cut short, which is read from its complete copy.
+/// Nothing is copied out of a linked folder (spec "Nothing is moved out of
+/// a linked folder"): refuses an entry that resolves into one, and any
+/// entry while a linked folder cannot be read.
 fn read(
     paths: &Paths,
     repo: &SkillRepo,
@@ -151,12 +155,31 @@ fn read(
         false => String::new(),
     };
     let missing = || Failure::refused(format!("{} has no entry {name}{done}", tool_dir.display()));
+    let linked = Linked::load(paths.home(), repo)?;
+    if let Some(folder) = linked.unreadable() {
+        return Err(Failure::refused(format!(
+            "linked folder `{}` cannot be read now, so skiman cannot tell whether {} leads into it; nothing was changed, run `skiman sync` to see why",
+            folder.id,
+            tool_dir.join(name).display()
+        )));
+    }
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
     let ownership = Ownership::new(paths, repo, None);
     let refused = match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => {
+            if let Some(folder) = entry
+                .canonicalize()
+                .ok()
+                .and_then(|r| linked.reaches_into(&r))
+            {
+                return Err(Failure::refused(format!(
+                    "{} resolves into linked folder `{}`, whose content skiman never copies into the canon; skiman distributes the folder's skills already, so delete the link once nothing needs it",
+                    entry.display(),
+                    folder.id
+                )));
+            }
             let files = read_copy(&entry, name)?;
             return Ok((entry, files));
         }

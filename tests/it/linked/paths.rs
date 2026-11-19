@@ -351,3 +351,81 @@ fn linked_add_refuses_a_folder_that_would_break_an_existing_registration() {
             .is_file()
     );
 }
+
+/// Runs skiman with `args` and returns its exit code and stderr.
+fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String) {
+    let output = sandbox.skiman().args(args).output().unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// An older script's link under another name that resolves into a
+/// registered folder, or into the target of one of its child links: adopt
+/// would copy linked content into the canon, so it refuses and copies
+/// nothing.
+#[test]
+fn adopt_refuses_an_old_link_that_resolves_into_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let ext = sandbox.root().join("ext/tool");
+    write(ext.join("SKILL.md"), skill_md("tool"));
+    symlink(&ext, company.join("tool")).unwrap();
+    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    symlink(company.join("alpha"), claude.join("old-alpha")).unwrap();
+    symlink(&ext, claude.join("old-tool")).unwrap();
+    assert_eq!(sync(&sandbox).0, 0);
+    let canon = crate::support::tree(sandbox.skill_repo());
+    let before = contents(&[&company, &ext, &claude]);
+
+    for name in ["old-alpha", "old-tool"] {
+        let (code, stderr) = run(&sandbox, &["adopt", name, "--from", "claude-code", "--yes"]);
+        assert_eq!(code, 1, "{stderr}");
+        let line = format!(
+            "{} resolves into linked folder `company`",
+            claude.join(name).display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert_eq!(crate::support::tree(sandbox.skill_repo()), canon);
+        assert_eq!(contents(&[&company, &ext, &claude]), before);
+    }
+}
+
+/// While a registered folder cannot be listed its child links are
+/// unknown, so adopt refuses any entry.
+#[test]
+fn adopt_refuses_while_a_linked_folder_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/company\"\n");
+    write(
+        sandbox.tool_dir(Tool::ClaudeCode).join("beta/SKILL.md"),
+        skill_md("beta"),
+    );
+    let canon = crate::support::tree(sandbox.skill_repo());
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "beta", "--from", "claude-code", "--yes"],
+    );
+    chmod(0o755).unwrap();
+
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("linked folder `company` cannot be read"),
+        "{stderr}"
+    );
+    assert_eq!(crate::support::tree(sandbox.skill_repo()), canon);
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "beta", "--from", "claude-code", "--yes"],
+    );
+    assert_eq!(code, 0, "{stderr}");
+}

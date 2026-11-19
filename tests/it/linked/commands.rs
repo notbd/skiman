@@ -76,6 +76,33 @@ error: skiman.toml already has [linked.company] for another path; to move that f
     assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
 }
 
+/// A `path` written by hand as the absolute path below `HOME` is the same
+/// folder as `~/...`: run again with that path, `linked add` changes no
+/// record and syncs. Only another folder is refused.
+#[test]
+fn the_same_folder_written_another_way_is_the_same_registration() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(
+        &sandbox,
+        &format!("\n[linked.company]\npath = \"{}\"\n", company.display()),
+    );
+    sandbox.skiman().arg("sync").assert().code(0);
+    let manifest = read(sandbox.canon().join("skiman.toml"));
+    let link = sandbox.tool_dir(Tool::Codex).join("alpha");
+    std::fs::remove_file(&link).unwrap();
+
+    for given in [company.display().to_string(), "~/work/company/.".to_owned()] {
+        linked_add(&sandbox, &[given]).code(0);
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            sandbox.canon().join("linked/company/alpha")
+        );
+        assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
+    }
+}
+
 /// The same id in a table that is not well formed, with the same path or
 /// none: the refusal says what is wrong with it, and nothing changes.
 #[test]

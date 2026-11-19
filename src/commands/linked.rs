@@ -48,11 +48,16 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
     let manifest = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     let registered = manifest.linked().into_iter().find(|e| e.id == id);
-    let new = match registered.map(|e| e.path) {
-        None => true,
-        Some(Ok(path)) if path == written => false,
+    // A recorded `path` names the same folder when it is written the same
+    // way once expanded (`/Users/me/company` is `~/company`).
+    let same = |recorded: &str| {
+        root::expand(home, recorded).is_some_and(|p| root::written_form(home, &p) == written)
+    };
+    let recorded = match registered.map(|e| e.path) {
+        None => None,
+        Some(Ok(path)) if same(&path) => Some(path),
         // Not another path: the table is what needs fixing.
-        Some(Err(malformed)) if malformed.path.as_ref().is_none_or(|path| *path == written) => {
+        Some(Err(malformed)) if malformed.path.as_deref().is_none_or(same) => {
             return Err(Failure::refused(format!(
                 "skiman.toml already has [linked.{id}], which is not well formed: {}; fix it in skiman.toml, then run the command again",
                 malformed.why
@@ -64,6 +69,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             )));
         }
     };
+    let new = recorded.is_none();
     let text = if new {
         manifest::with_linked(&text, &id, &written).map_err(Failure::refused_in(&file))?
     } else {
@@ -122,7 +128,9 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         gitignore::Outcome::Added => out!("added /linked/ to {}", gitignore.display()),
         gitignore::Outcome::Present => {}
     }
-    if new {
+    if let Some(recorded) = &recorded {
+        out!("linked folder {id} is already registered: {recorded}");
+    } else {
         let tree = WorkingTree::new(repo.root());
         let overlay = Overlay::new(
             &tree,
@@ -139,8 +147,6 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         write_atomic(&file, text.as_bytes())
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
         out!("registered linked folder {id}: {written}");
-    } else {
-        out!("linked folder {id} is already registered: {written}");
     }
     describe(folder);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))

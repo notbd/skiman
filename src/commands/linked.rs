@@ -2,6 +2,7 @@
 //! outside the canon, or end a registration, then sync. Both run under the
 //! canon lock and exit with sync's status.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use saphyr::{AnnotatedMapping, LoadableYamlNode, MarkedYaml, Scalar, YamlData};
@@ -11,7 +12,7 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::{Failure, finish};
 use crate::fsutil::write_atomic;
-use crate::linked::{self, Folder, Linked, State, gitignore};
+use crate::linked::{self, Folder, Holder, Linked, State, gitignore};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::root;
@@ -148,7 +149,10 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
         out!("registered linked folder {id}: {written}");
     }
-    describe(folder);
+    describe(
+        folder,
+        &sync::kept_names(&paths, &repo, &candidate, &linked),
+    );
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 
@@ -161,24 +165,33 @@ fn default_id(path: &Path) -> String {
     }
 }
 
-/// Prints the linked skills `folder` holds, and for each without a usable
+/// Prints the linked skills `folder` holds, read as sync reads them (`kept`
+/// from [`sync::kept_names`]), and for each without a usable
 /// `metadata.summary` what to add to its `SKILL.md`.
-fn describe(folder: &Folder) {
-    let State::Read(contents) = &folder.state else {
+fn describe(folder: &Folder, kept: &BTreeMap<String, Holder>) {
+    let (State::Read(_), Some(path)) = (&folder.state, &folder.path) else {
         return;
     };
-    let names = if contents.single {
+    let skills = if Linked::is_single(folder, kept) {
         out!("it is one skill: {}", folder.id);
-        vec![folder.id.clone()]
-    } else if contents.skills.is_empty() {
-        out!("it holds no skill yet; the next sync links each skill added to it");
-        return;
+        vec![(folder.id.clone(), path.clone())]
     } else {
-        out!("its skills: {}", contents.skills.join(", "));
-        contents.skills.clone()
+        let names = Linked::skill_names(folder, kept);
+        if names.is_empty() {
+            out!("it holds no skill yet; the next sync links each skill added to it");
+            return;
+        }
+        out!("its skills: {}", names.join(", "));
+        names
+            .into_iter()
+            .map(|name| {
+                let dir = folder.skill_dir(&name);
+                (name, dir)
+            })
+            .collect()
     };
-    for name in names {
-        let file = folder.skill_dir(&name).join("SKILL.md");
+    for (name, dir) in skills {
+        let file = dir.join("SKILL.md");
         match std::fs::read_to_string(&file) {
             Ok(text) => {
                 if let Some(advice) = summary_advice(&name, &file, &text) {

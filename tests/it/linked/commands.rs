@@ -463,3 +463,27 @@ fn a_second_run_syncs_a_folder_that_is_gone_or_cannot_be_read() {
     }
     assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
 }
+
+/// Run again while a single skill's top-level `SKILL.md` cannot be probed,
+/// `linked add` describes it as one skill, as sync reads it, not its
+/// sub-folders.
+#[test]
+fn a_second_run_describes_a_single_skill_that_cannot_be_probed_as_one_skill() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let locked = super::unprobed_single(&sandbox);
+    let chmod = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let output = sandbox
+        .skiman()
+        .args(["linked", "add", "~/work/solo"])
+        .output()
+        .unwrap();
+    chmod(0o755).unwrap();
+
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("it is one skill: solo\n"), "{stdout}");
+    assert!(!stdout.contains("kid"), "{stdout}");
+}

@@ -265,3 +265,24 @@ fn check_warns_about_what_cannot_be_read_without_changing_the_exit() {
         assert!(stderr.contains(line), "{line}\n{stderr}");
     }
 }
+
+/// While a single skill's top-level `SKILL.md` cannot be probed, its
+/// sub-folders are no linked skills for `check` either, as for sync.
+#[test]
+fn check_reads_no_skill_below_a_single_skill_that_cannot_be_probed() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let locked = super::unprobed_single(&sandbox);
+    let chmod = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let output = sandbox.skiman().arg("check").output().unwrap();
+    chmod(0o755).unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("warning: linked skill solo of `solo` is not checked ("),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("kid"), "{stderr}");
+}

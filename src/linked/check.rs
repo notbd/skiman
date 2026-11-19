@@ -47,7 +47,7 @@ pub fn warnings(
         for (entry, problem) in &contents.problems {
             out.push(format!("{} {problem}", entry.display()));
         }
-        for name in folder.skill_names() {
+        for name in Linked::skill_names(folder, kept) {
             let path = folder.skill_dir(&name).join("SKILL.md");
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,

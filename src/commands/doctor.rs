@@ -204,13 +204,14 @@ fn report_linked(
     kept: &BTreeMap<String, Holder>,
 ) -> std::io::Result<()> {
     for folder in &linked.folders {
-        if let (State::Read(contents), Some(path)) = (&folder.state, &folder.path) {
-            let skills = if contents.single {
+        if let (State::Read(_), Some(path)) = (&folder.state, &folder.path) {
+            let names = Linked::skill_names(folder, kept);
+            let skills = if Linked::is_single(folder, kept) {
                 "one skill".to_owned()
-            } else if contents.skills.is_empty() {
+            } else if names.is_empty() {
                 "no skills yet".to_owned()
             } else {
-                format!("skills: {}", contents.skills.join(", "))
+                format!("skills: {}", names.join(", "))
             };
             out!("linked folder {}: {} ({skills})", folder.id, path.display());
         }

@@ -62,3 +62,23 @@ pub fn contents(folders: &[&Path]) -> BTreeMap<PathBuf, BTreeMap<PathBuf, String
         .map(|dir| (dir.to_path_buf(), tree(dir)))
         .collect()
 }
+
+/// A canon with the single skill `~/work/solo` registered and synced, then
+/// its top-level `SKILL.md` made a link into `~/work/locked` and a skill
+/// `solo/kid` added: once `locked` has mode 000, the top-level `SKILL.md`
+/// cannot be probed and the tool directories keep the `solo` link. Returns
+/// `locked`.
+pub fn unprobed_single(sandbox: &Sandbox) -> PathBuf {
+    crate::support::init(sandbox);
+    let work = sandbox.home().join("work");
+    folder(sandbox, "work", &["solo"]);
+    append_manifest(sandbox, "\n[linked.solo]\npath = \"~/work/solo\"\n");
+    sandbox.skiman().arg("sync").assert().code(0);
+    let locked = work.join("locked");
+    write(locked.join("SKILL.md"), skill_md("solo"));
+    let top = work.join("solo/SKILL.md");
+    std::fs::remove_file(&top).unwrap();
+    std::os::unix::fs::symlink(locked.join("SKILL.md"), top).unwrap();
+    write(work.join("solo/kid/SKILL.md"), skill_md("kid"));
+    locked
+}

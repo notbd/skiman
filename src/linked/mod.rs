@@ -385,27 +385,40 @@ impl Linked {
         (wanted, collisions)
     }
 
-    /// The names of `folder`'s linked skills that take part in naming
-    /// ([`Folder::skill_names`]), none while its top-level `SKILL.md`
-    /// cannot be probed and the tool directories keep its `<id>` link
-    /// (`kept`): it was one skill, and stays one until it can be probed.
-    /// Its sub-folders' targets stay protected all the same.
-    fn skill_names(folder: &Folder, kept: &BTreeMap<String, Holder>) -> Vec<String> {
-        let was_single = |contents: &Contents| {
-            contents.top_unprobed.is_some()
-                // An unprobed sub-folder named like the id is kept under
-                // the same name: then the shape is unknown, and read as usual.
-                && !contents.unprobed.iter().any(|(name, _)| *name == folder.id)
-                && kept.get(&folder.id)
-                    == Some(&Holder::Unprobed {
-                        id: folder.id.clone(),
-                        name: folder.id.clone(),
-                    })
-        };
+    /// The names of `folder`'s linked skills, in name order, as every
+    /// command reads them: the id for a folder that is one skill, none for
+    /// a folder that was not read, and none while [`Linked::is_single`]
+    /// holds only through `kept` (it stays one skill until its top-level
+    /// `SKILL.md` can be probed). Its sub-folders' targets stay protected
+    /// all the same.
+    pub fn skill_names(folder: &Folder, kept: &BTreeMap<String, Holder>) -> Vec<String> {
         match &folder.state {
-            State::Read(contents) if was_single(contents) => Vec::new(),
-            _ => folder.skill_names(),
+            State::Read(contents) if contents.single => vec![folder.id.clone()],
+            State::Read(_) if Linked::is_single(folder, kept) => Vec::new(),
+            State::Read(contents) => contents.skills.clone(),
+            _ => Vec::new(),
         }
+    }
+
+    /// Whether `folder` is one skill: read as one, or its top-level
+    /// `SKILL.md` cannot be probed while the tool directories keep its
+    /// `<id>` link (`kept`), so it was one.
+    pub fn is_single(folder: &Folder, kept: &BTreeMap<String, Holder>) -> bool {
+        let State::Read(contents) = &folder.state else {
+            return false;
+        };
+        if contents.single {
+            return true;
+        }
+        contents.top_unprobed.is_some()
+            // An unprobed sub-folder named like the id is kept under the
+            // same name: then the shape is unknown, and read as usual.
+            && !contents.unprobed.iter().any(|(name, _)| *name == folder.id)
+            && kept.get(&folder.id)
+                == Some(&Holder::Unprobed {
+                    id: folder.id.clone(),
+                    name: folder.id.clone(),
+                })
     }
 
     /// What `list` and `overview` show of each folder, in id order (spec
@@ -591,16 +604,6 @@ impl Folder {
     /// Whether `target` is, or lies inside, the registered path.
     fn holds(&self, target: &Path) -> bool {
         self.registered().any(|p| target.starts_with(p))
-    }
-
-    /// The names of its linked skills, in name order: the id for a folder
-    /// that is one skill; none for a folder that was not read.
-    pub fn skill_names(&self) -> Vec<String> {
-        match &self.state {
-            State::Read(contents) if contents.single => vec![self.id.clone()],
-            State::Read(contents) => contents.skills.clone(),
-            _ => Vec::new(),
-        }
     }
 
     /// The folder of the linked skill `name`: the registered path itself

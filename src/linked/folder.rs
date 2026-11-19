@@ -30,8 +30,9 @@ pub struct Contents {
     /// is reported and leaves the exit status unchanged.
     pub problems: Vec<(PathBuf, String)>,
     /// What every child link that does not break the path rules resolves
-    /// to, as far as it resolves (a dangling one's target included): these
-    /// are protected like the registered path.
+    /// to, as far as it resolves (a dangling one's target and one that
+    /// cannot be entered included, a regular file not): these are
+    /// protected like the registered path.
     pub targets: Vec<PathBuf>,
 }
 
@@ -119,6 +120,10 @@ fn child_link(
             entry.to_owned(),
             "is a link that loops; it is not distributed".to_owned(),
         ));
+        return false;
+    }
+    // A regular file is not a skill and not a folder: it protects nothing.
+    if resolved.stop.is_none() && resolved.path.is_file() {
         return false;
     }
     // As for a registration: the target as written, normalised lexically,

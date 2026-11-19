@@ -279,3 +279,25 @@ fn a_missing_registered_path_keeps_every_other_item_working() {
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(read(work(&sandbox, "AGENTS.md")), OLD);
 }
+
+/// A child link to a regular file is not a skill and protects nothing: the
+/// project item it points at is adopted as usual.
+#[test]
+fn a_child_link_to_a_file_does_not_block_its_project_item() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let agents = work(&sandbox, "client/AGENTS.md");
+    write(&agents, OLD);
+    let company = work(&sandbox, "company");
+    write(company.join("alpha/SKILL.md"), skill_md("alpha"));
+    symlink("../client/AGENTS.md", company.join("README.md")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let root = work(&sandbox, "");
+    assert_eq!(run(&sandbox, &["project", "add"], &[root]).0, 0);
+
+    let (code, stderr) = run(&sandbox, &["project", "adopt", "--yes"], &[agents]);
+
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stderr.contains("overlaps linked folder"), "{stderr}");
+    assert_eq!(read(mirror(&sandbox, "client/AGENTS.md")), OLD);
+}

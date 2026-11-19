@@ -53,14 +53,14 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
     assert_line(
         &stdout,
         &format!(
-            "linked folder gone: {} is not on this machine, so its skills are not distributed",
+            "linked folder `gone` ({}) is not on this machine, so its skills are not distributed",
             home.join("work/gone").display()
         ),
     );
     assert_line(
         &stdout,
         &format!(
-            "linked folder inside: skipped: {} lies in {}, the canon, where skiman writes; fix [linked.inside] in skiman.toml",
+            "linked folder `inside` is skipped: {} lies in {}, the canon, where skiman writes; fix [linked.inside] in skiman.toml",
             inside.display(),
             sandbox.canon().display()
         ),

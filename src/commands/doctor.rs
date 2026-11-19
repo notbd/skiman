@@ -199,36 +199,18 @@ fn alias_note<'a>(
 /// or `linked/<id>` in the way. Nothing when no folder is registered.
 fn report_linked(repo: &Canon, linked: &Linked) -> std::io::Result<()> {
     for folder in &linked.folders {
-        let id = &folder.id;
-        let path = folder
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        match &folder.state {
-            State::Read(contents) => {
-                let skills = if contents.single {
-                    "one skill".to_owned()
-                } else if contents.skills.is_empty() {
-                    "no skills yet".to_owned()
-                } else {
-                    format!("skills: {}", contents.skills.join(", "))
-                };
-                out!("linked folder {id}: {path} ({skills})");
-                for (entry, problem) in &contents.problems {
-                    out!("{} {problem}", entry.display());
-                }
-                for (name, why) in &contents.unprobed {
-                    out!("linked skill {name} of `{id}` cannot be checked: {why}");
-                }
-            }
-            State::Missing => out!(
-                "linked folder {id}: {path} is not on this machine, so its skills are not distributed"
-            ),
-            State::Broken(why) => {
-                out!("linked folder {id}: skipped: {why}; fix [linked.{id}] in skiman.toml")
-            }
-            State::Unreadable(why) => out!("linked folder {id}: cannot be read: {why}"),
+        if let (State::Read(contents), Some(path)) = (&folder.state, &folder.path) {
+            let skills = if contents.single {
+                "one skill".to_owned()
+            } else if contents.skills.is_empty() {
+                "no skills yet".to_owned()
+            } else {
+                format!("skills: {}", contents.skills.join(", "))
+            };
+            out!("linked folder {}: {} ({skills})", folder.id, path.display());
+        }
+        for item in linked::canon::folder_items(linked, folder) {
+            out!("{}", item.message());
         }
     }
     let layout = Layout::read(&WorkingTree::new(repo.root()))?;

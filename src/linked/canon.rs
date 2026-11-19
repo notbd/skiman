@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use super::{Linked, State};
+use super::{Folder, Linked, State};
 use crate::fsutil::{self, absolute_lexical, temporary_of};
 use crate::sync::{Change, Item, ItemKind, Report};
 use crate::test_hook;
@@ -187,12 +187,19 @@ fn occupied(path: &Path, id: &str) -> String {
     )
 }
 
-/// Reports every linked folder that is not read in full: one that breaks a
-/// rule (exit 3), is not on this machine (exit 0, keyed by its path, so a
-/// changed path is reported again), or cannot be read (exit 3); and in a
-/// read folder each skill whose `SKILL.md` cannot be probed (exit 3) and
-/// each problem among its entries (exit unchanged).
+/// Reports every linked folder that is not read in full ([`folder_items`]).
 pub fn report_folders(linked: &Linked, report: &mut Report) {
+    for folder in &linked.folders {
+        report.items.extend(folder_items(linked, folder));
+    }
+}
+
+/// What sync and `doctor` report about `folder` when it is not read in
+/// full: that it breaks a rule (exit 3), is not on this machine (exit 0,
+/// keyed by its path, so a changed path is reported again), or cannot be
+/// read (exit 3); or, when it was read, each skill whose `SKILL.md` cannot
+/// be probed (exit 3) and each problem among its entries (exit unchanged).
+pub fn folder_items(linked: &Linked, folder: &Folder) -> Vec<Item> {
     let dir = linked.dir();
     let item = |path: PathBuf, what, message, attention| Item {
         scope: dir.display().to_string(),
@@ -203,53 +210,52 @@ pub fn report_folders(linked: &Linked, report: &mut Report) {
             attention,
         },
     };
-    for folder in &linked.folders {
-        let id = &folder.id;
-        let path = folder.path.clone().unwrap_or_else(|| dir.join(id));
-        match &folder.state {
-            State::Broken(why) => report.items.push(item(
-                path,
-                "broken",
-                format!("linked folder `{id}` is skipped: {why}; fix [linked.{id}] in skiman.toml"),
-                true,
-            )),
-            State::Missing => report.items.push(item(
-                path.clone(),
-                "missing",
-                format!(
-                    "linked folder `{id}` ({}) is not on this machine, so its skills are not distributed",
-                    path.display()
-                ),
-                false,
-            )),
-            State::Unreadable(why) => report.items.push(item(
-                path,
-                "unreadable",
-                format!(
-                    "linked folder `{id}` is not read ({why}); its links stay as they are until a sync can read it"
-                ),
-                true,
-            )),
-            State::Read(contents) => {
-                for (name, why) in &contents.unprobed {
-                    report.items.push(item(
-                        folder.skill_dir(name),
-                        "unprobed",
-                        format!(
-                            "linked skill {name} of `{id}` is not checked ({why}); its links stay as they are"
-                        ),
-                        true,
-                    ));
-                }
-                for (entry, problem) in &contents.problems {
-                    report.items.push(item(
-                        entry.clone(),
-                        "entry",
-                        format!("{} {problem}", entry.display()),
-                        false,
-                    ));
-                }
-            }
+    let id = &folder.id;
+    let path = folder.path.clone().unwrap_or_else(|| dir.join(id));
+    match &folder.state {
+        State::Broken(why) => vec![item(
+            path,
+            "broken",
+            format!("linked folder `{id}` is skipped: {why}; fix [linked.{id}] in skiman.toml"),
+            true,
+        )],
+        State::Missing => vec![item(
+            path.clone(),
+            "missing",
+            format!(
+                "linked folder `{id}` ({}) is not on this machine, so its skills are not distributed",
+                path.display()
+            ),
+            false,
+        )],
+        State::Unreadable(why) => vec![item(
+            path,
+            "unreadable",
+            format!(
+                "linked folder `{id}` is not read ({why}); its links stay as they are until a sync can read it"
+            ),
+            true,
+        )],
+        State::Read(contents) => {
+            let unprobed = contents.unprobed.iter().map(|(name, why)| {
+                item(
+                    folder.skill_dir(name),
+                    "unprobed",
+                    format!(
+                        "linked skill {name} of `{id}` is not checked ({why}); its links stay as they are"
+                    ),
+                    true,
+                )
+            });
+            let problems = contents.problems.iter().map(|(entry, problem)| {
+                item(
+                    entry.clone(),
+                    "entry",
+                    format!("{} {problem}", entry.display()),
+                    false,
+                )
+            });
+            unprobed.chain(problems).collect()
         }
     }
 }

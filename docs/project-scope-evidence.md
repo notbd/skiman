@@ -194,6 +194,7 @@ skiman	enabled	SessionStart	-	command	$R/bin/skiman sync --hook
 `agy -p`, one prompt per run:
 
 ```
+# (run before the built-in manual was renamed to skiman-manual)
 # added $R/canon/skills/zz-a1-demo by hand (token T-A1-7712), not synced
 $ ls $R/home/.gemini/config/skills
 managing-skills

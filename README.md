@@ -97,17 +97,13 @@ canon's and never writes into it.
   `mv` refuse a name that is only a linked skill and name its folder.
   `new`, `add`, `adopt`, `import` and `mv` refuse to create a skill or a
   group folder with a linked skill's name.
-- skiman checks again, right before each write and after every wait for
-  your answer, that the write does not land in a linked folder. It does
-  not defend against another program that replaces a folder on the path
-  with a symlink in the milliseconds between that check and the write:
-  that would need every write made through folder handles (`openat`)
-  across the whole write protocol of
-  [ADR 0005](docs/adr/0005-no-crash-recovery-journal.md).
+- Each write is checked right before it happens, and again after any wait
+  for your answer. What it does not guard against is in
+  [ADR 0010](docs/adr/0010-linked-folders-beside-skills.md).
 - A name used by a skill in `skills/` and by a linked skill goes to the one
   in `skills/`; a group folder's name is taken the same way. Between two
-  linked folders, the id that sorts first wins.
-  sync, `skiman check` and `skiman doctor` report each such collision.
+  linked folders, the id that sorts first wins. sync, `skiman check` and
+  `skiman doctor` report each such collision.
 - While a linked folder, or a linked skill's `SKILL.md`, cannot be read,
   its links stay as they are and keep their names, even against a new
   skill in `skills/`. sync, `skiman check` and `skiman doctor` report the
@@ -121,8 +117,8 @@ canon's and never writes into it.
   stays.
 - On a machine where the folder does not exist, sync reports it and goes
   on (the session-start hook reports it once). The skills come back when
-  the folder does. Each machine has its
-  own checkout of the canon, and `~/` in a `path` expands on each.
+  the folder does. Each machine has its own checkout of the canon, and
+  `~/` in a `path` expands on each.
 
 Why: [docs/adr/0010-linked-folders-beside-skills.md](docs/adr/0010-linked-folders-beside-skills.md),
 [docs/adr/0011-linked-skill-summary-in-its-skill-md.md](docs/adr/0011-linked-skill-summary-in-its-skill-md.md).

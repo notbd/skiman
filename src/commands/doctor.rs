@@ -66,7 +66,7 @@ fn doctor() -> Result<Exit, Failure> {
     report_instruction_locations(&paths, &repo, &installed);
     report_canon(&repo).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
-    report_projects(&paths, &repo, &manifest);
+    report_projects(&paths, &repo, &manifest, &linked);
     Ok(Exit::Success)
 }
 
@@ -434,9 +434,9 @@ fn report_tmp(repo: &Canon) -> std::io::Result<()> {
 
 /// The project scope: every root, every item that is not in step with
 /// its fix, managed items a project repo now tracks, candidates not adopted
-/// yet, items only the mirror holds, staging folders left by an earlier
+/// yet and those skipped as overlapping a linked folder, items only the mirror holds, staging folders left by an earlier
 /// write, mirror paths git ignores, and uncommitted mirror changes.
-fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest) {
+fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Linked) {
     use crate::project::state::{State, classify};
     use crate::project::{command, discover, git as pgit, item, root, synced::Synced};
     if manifest.projects().is_empty() {
@@ -507,7 +507,14 @@ fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest) {
                 );
             }
         }
-        let found = discover::discover(&root, &skip);
+        let found = discover::discover(&root, &skip, linked);
+        for (item, why) in &found.skipped {
+            out!(
+                "project root {}: {} is skipped: {why}",
+                root.id,
+                item.disk(&root).display()
+            );
+        }
         let candidates: Vec<std::path::PathBuf> = found
             .items
             .iter()

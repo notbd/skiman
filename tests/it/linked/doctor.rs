@@ -104,3 +104,37 @@ fn doctor_reports_linked_that_is_a_file() {
         ),
     );
 }
+
+/// A project item inside a linked folder is not counted as one to adopt:
+/// `doctor` names it as skipped, as `project adopt --dry-run` does.
+#[test]
+fn doctor_counts_no_project_item_inside_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let work = sandbox.home().join("work");
+    write(work.join("AGENTS.md"), "# work\n");
+    let company = folder(&sandbox, "work/company", &[]);
+    write(company.join("AGENTS.md"), "# company\n");
+    append_manifest(&sandbox, COMPANY);
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&work)
+        .assert()
+        .code(0);
+
+    let stdout = doctor(&sandbox);
+
+    assert!(
+        stdout.contains("project root work: 1 project item(s) are not adopted yet"),
+        "{stdout}"
+    );
+    assert_line(
+        &stdout,
+        &format!(
+            "project root work: {} is skipped: it overlaps linked folder `company` ({}), whose content skiman never copies or writes",
+            company.join("AGENTS.md").display(),
+            company.display()
+        ),
+    );
+}

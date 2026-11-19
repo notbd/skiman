@@ -9,6 +9,7 @@ use super::item::Item;
 use super::pattern::Kind;
 use super::root::Root;
 use crate::canon::Canon;
+use crate::linked::Linked;
 use crate::paths::Paths;
 use crate::staging::PROJECT_PREFIX;
 
@@ -19,6 +20,9 @@ const SKIPPED_NAMES: &[&str] = &[".git", "node_modules"];
 pub struct Discovery {
     /// Items found on disk: regular files and real skill folders, in path order.
     pub items: Vec<Item>,
+    /// Items found that overlap a linked folder (spec "Project items"), with
+    /// why: they are never adopted.
+    pub skipped: Vec<(Item, String)>,
     /// Project-side staging folders left by an earlier write.
     pub swap_leftovers: Vec<PathBuf>,
     /// Folders that could not be read, with the error.
@@ -52,11 +56,18 @@ pub fn never_entered(paths: &Paths, repo: &Canon) -> [PathBuf; 2] {
     ]
 }
 
-/// Walks `root`. `skip` holds realpaths never entered ([`never_entered`]).
-pub fn discover(root: &Root, skip: &[PathBuf]) -> Discovery {
+/// Walks `root`. `skip` holds realpaths never entered ([`never_entered`]);
+/// an item that overlaps one of `linked` goes to [`Discovery::skipped`].
+pub fn discover(root: &Root, skip: &[PathBuf], linked: &Linked) -> Discovery {
     let mut found = Discovery::default();
     walk(root, &root.dir, "", skip, &mut found);
     found.items.sort();
+    for item in std::mem::take(&mut found.items) {
+        match linked.item_overlap(&item.disk(root)) {
+            Some(why) => found.skipped.push((item, why)),
+            None => found.items.push(item),
+        }
+    }
     found
 }
 

@@ -545,7 +545,16 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                 vec![item.clone()]
             }
             None => {
-                let found = discover(target.root, &ctx.skip);
+                let found = discover(target.root, &ctx.skip, &ctx.linked);
+                for (item, why) in found
+                    .skipped
+                    .iter()
+                    .filter(|(i, _)| under(&i.rel, &target.rel))
+                {
+                    let disk = item.disk(target.root);
+                    plan.skip(&disk, format!("skip {}: {why}", disk.display()));
+                    seen.insert((item.root.clone(), item.rel.clone()));
+                }
                 for e in found.errors {
                     err!("warning: {e}");
                 }

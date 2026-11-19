@@ -204,10 +204,10 @@ fn report_entries(
 ) -> std::io::Result<()> {
     let mut ignored = sync::Report::default();
     let none = BTreeMap::new();
-    let wanted: BTreeSet<String> =
+    let wanted: BTreeMap<String, PathBuf> =
         sync::wanted_entries(repo, manifest, linked, &none, &|_| true, &mut ignored)?
             .into_iter()
-            .map(|w| w.name)
+            .map(|w| (w.name, w.target))
             .collect();
     let home = paths.home();
     let ownership = Ownership::new(paths, repo, None);
@@ -230,7 +230,7 @@ fn report_entries(
         let mut handled = BTreeSet::new();
         for (name, meta) in entries(&dir)? {
             let path = dir.join(&name);
-            let want = name.to_str().filter(|n| wanted.contains(*n));
+            let want = name.to_str().filter(|n| wanted.contains_key(*n));
             if let Some(n) = want {
                 handled.insert(n.to_owned());
             }
@@ -238,14 +238,11 @@ fn report_entries(
                 (Entry::Owned(_), _) => {}
                 (Entry::Moved(copy), _) => out!("{}", backup::cut_short(&path, &copy)),
                 (_, Some(n)) => {
-                    let kind = ItemKind::Occupied { name: n.to_owned() };
+                    let kind = sync::occupied(n, &path, &wanted[n]);
                     out!("{}", item(path, kind).message());
                 }
                 (Entry::Foreign, None) => {
-                    let kind = ItemKind::Foreign {
-                        name: name.to_string_lossy().into_owned(),
-                        tool: tool.id,
-                    };
+                    let kind = sync::foreign(&name, tool.id, &path, &meta, repo, linked);
                     out!("{}", item(path, kind).message());
                 }
                 (Entry::ManagedElsewhere, None) => {
@@ -260,10 +257,10 @@ fn report_entries(
             }
         }
         // Another spelling of a wanted name (APFS is case-insensitive) holds it.
-        for name in wanted.difference(&handled) {
+        for (name, target) in wanted.iter().filter(|(n, _)| !handled.contains(*n)) {
             let path = dir.join(name);
             if std::fs::symlink_metadata(&path).is_ok() {
-                let kind = ItemKind::Occupied { name: name.clone() };
+                let kind = sync::occupied(name, &path, target);
                 out!("{}", item(path, kind).message());
             }
         }

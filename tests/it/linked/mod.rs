@@ -10,6 +10,7 @@ use crate::support::{Sandbox, skill_md, tree, write};
 mod check;
 mod commands;
 mod distribution;
+mod names;
 
 /// A folder of skills at `rel` below `HOME`, holding a skill for each of `names`.
 pub fn folder(sandbox: &Sandbox, rel: &str, names: &[&str]) -> PathBuf {

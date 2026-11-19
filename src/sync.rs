@@ -52,9 +52,14 @@ pub struct Item {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemKind {
     /// A foreign skill; `tool` is the id of the tool whose directory holds it.
-    Foreign { name: String, tool: &'static str },
-    /// Sync wants to link skill `name` here, but something it does not own is there (exit 3).
-    Occupied { name: String },
+    Foreign {
+        name: String,
+        tool: &'static str,
+        into: Into,
+    },
+    /// Sync wants to link skill `name` here, but something it does not own
+    /// is there (exit 3); `same` when that is a link to the same folder.
+    Occupied { name: String, same: bool },
     /// A folder under `skills/` that is never distributed, and why.
     InvalidSkillFolder { reason: &'static str },
     /// An instruction location skiman does not own, so the shared body is not linked there (exit 3).
@@ -73,6 +78,65 @@ pub enum ItemKind {
         message: String,
         attention: bool,
     },
+}
+
+/// Where a foreign entry leads, for the way in sync names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Into {
+    /// Anywhere else: `skiman adopt` brings it in.
+    Elsewhere,
+    /// A link into a folder outside the canon that could be registered:
+    /// `skiman linked add <folder>` is a way in too.
+    Registrable(PathBuf),
+    /// Into a registered linked folder (`id`): adopting it would copy
+    /// linked content into the canon, so no adopt hint.
+    Linked(String),
+}
+
+/// The [`ItemKind::Foreign`] of the entry `name` (metadata `meta`) at
+/// `path` in `tool`'s directory: a link into a linked folder gets no adopt
+/// hint, and a link into a folder that could be registered gets that hint.
+pub fn foreign(
+    name: &std::ffi::OsStr,
+    tool: &'static str,
+    path: &Path,
+    meta: &std::fs::Metadata,
+    repo: &SkillRepo,
+    linked: &Linked,
+) -> ItemKind {
+    let real = path.canonicalize().ok();
+    let into = match &real {
+        Some(real) if let Some(folder) = linked.reaches_into(real) => {
+            Into::Linked(folder.id.clone())
+        }
+        Some(real)
+            if meta.is_symlink()
+                && !real.starts_with(repo.root())
+                && let Some(parent) = real.parent()
+                && linked.admits(parent) =>
+        {
+            Into::Registrable(parent.to_owned())
+        }
+        _ => Into::Elsewhere,
+    };
+    ItemKind::Foreign {
+        name: name.to_string_lossy().into_owned(),
+        tool,
+        into,
+    }
+}
+
+/// The [`ItemKind::Occupied`] of `path`, which holds the name of the skill
+/// `name` whose link would point at `target`.
+pub fn occupied(name: &str, path: &Path, target: &Path) -> ItemKind {
+    let same = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_symlink())
+        && path
+            .canonicalize()
+            .is_ok_and(|real| target.canonicalize().is_ok_and(|t| t == real));
+    ItemKind::Occupied {
+        name: name.to_owned(),
+        same,
+    }
 }
 
 impl Item {
@@ -96,10 +160,32 @@ impl Item {
     pub fn message(&self) -> String {
         let path = self.path.display();
         match &self.kind {
-            ItemKind::Foreign { name, tool } => format!(
+            ItemKind::Foreign {
+                name,
+                tool,
+                into: Into::Elsewhere,
+            } => format!(
                 "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`"
             ),
-            ItemKind::Occupied { name } => format!(
+            ItemKind::Foreign {
+                name,
+                tool,
+                into: Into::Registrable(folder),
+            } => format!(
+                "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`, or register the folder it is in with `skiman linked add {}`",
+                crate::project::shell_quote(&folder.display().to_string())
+            ),
+            ItemKind::Foreign {
+                into: Into::Linked(id),
+                ..
+            } => format!(
+                "{path} is a link into linked folder `{id}`, which skiman already distributes; delete it once nothing needs it"
+            ),
+            ItemKind::Occupied { name, same: true } => format!(
+                "{path} is a link to the same folder as skill {name}, but skiman did not make it; deleting it is safe: rm {}",
+                crate::project::shell_quote(&path.to_string())
+            ),
+            ItemKind::Occupied { name, same: false } => format!(
                 "{path} is occupied by an entry skiman does not own, so skill {name} is not linked there; move it away, then run `skiman sync`"
             ),
             ItemKind::InvalidSkillFolder { reason } => {
@@ -299,7 +385,15 @@ pub fn reconcile(
                 dir: &dir,
                 real: &real,
             };
-            reconcile_tool_dir(&tool_dir, &wanted, &frozen, &ownership, &mut report);
+            reconcile_tool_dir(
+                &tool_dir,
+                repo,
+                linked,
+                &wanted,
+                &frozen,
+                &ownership,
+                &mut report,
+            );
             reconciled.push(real);
         }
     }
@@ -603,6 +697,8 @@ struct ToolDir<'a> {
 /// stay exactly as they are and keep their name.
 fn reconcile_tool_dir(
     tool_dir: &ToolDir,
+    repo: &SkillRepo,
+    linked: &Linked,
     wanted: &[Wanted],
     frozen: &[PathBuf],
     ownership: &Ownership,
@@ -616,10 +712,8 @@ fn reconcile_tool_dir(
     let scope = real.display().to_string();
     let occupied = |name: &str, path: PathBuf| Item {
         scope: scope.clone(),
+        kind: occupied(name, &path, by_name[name]),
         path,
-        kind: ItemKind::Occupied {
-            name: name.to_owned(),
-        },
     };
     let mut handled = BTreeSet::new();
     for (name, meta) in read_entries(dir, report) {
@@ -650,11 +744,8 @@ fn reconcile_tool_dir(
             (Entry::Owned(current), None) => remove(&path, real, &current, path.clone(), report),
             (Entry::Foreign, None) => report.items.push(Item {
                 scope: scope.clone(),
+                kind: foreign(&name, tool.id, &path, &meta, repo, linked),
                 path,
-                kind: ItemKind::Foreign {
-                    name: name.to_string_lossy().into_owned(),
-                    tool: tool.id,
-                },
             }),
             (_, Some((name, _))) => {
                 handled.insert(*name);

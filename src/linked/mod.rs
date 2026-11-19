@@ -34,6 +34,7 @@ pub struct Linked {
     pub folders: Vec<Folder>,
     /// `<canon>/linked`.
     dir: PathBuf,
+    places: Places,
 }
 
 /// One `[linked.<id>]` registration on this machine.
@@ -102,6 +103,7 @@ impl Linked {
         Linked {
             folders,
             dir: repo.root().join(LINKED_DIR),
+            places,
         }
     }
 
@@ -118,6 +120,29 @@ impl Linked {
     /// `<canon>/linked`.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The registered folder whose path, or one of whose valid child
+    /// targets, `resolved` (a realpath, or resolved as far as it goes) is,
+    /// contains or lies inside (spec "Nothing is moved out of a linked
+    /// folder"). Every registration with a path counts, a broken one too.
+    pub fn reaches_into(&self, resolved: &Path) -> Option<&Folder> {
+        self.folders.iter().find(|folder| {
+            let targets = match &folder.state {
+                State::Read(contents) => contents.targets.as_slice(),
+                _ => &[],
+            };
+            folder
+                .registered()
+                .chain(targets)
+                .any(|p| overlap(p, resolved))
+        })
+    }
+
+    /// Whether `path` (a realpath) could be registered as a linked folder
+    /// now: it breaks no path rule and overlaps no registered folder.
+    pub fn admits(&self, path: &Path) -> bool {
+        self.places.breaks(path).is_none() && self.reaches_into(path).is_none()
     }
 
     /// Link targets sync leaves exactly as they are, and everything below
@@ -311,6 +336,13 @@ fn check(folder: &mut Folder, places: &Places, earlier: &[Folder]) -> State {
 }
 
 impl Folder {
+    /// The registered path as written (`~` expanded) and as resolved.
+    fn registered(&self) -> impl Iterator<Item = &PathBuf> {
+        [self.path.as_ref(), self.resolved.as_ref()]
+            .into_iter()
+            .flatten()
+    }
+
     /// The folder of the linked skill `name`: the registered path itself
     /// for a folder that is one skill.
     pub fn skill_dir(&self, name: &str) -> PathBuf {

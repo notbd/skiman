@@ -30,7 +30,7 @@ pub fn command(verb: &str, paths: &[PathBuf]) -> String {
     format!("skiman project {verb} {}", quoted.join(" "))
 }
 
-fn shell_quote(text: &str) -> String {
+pub fn shell_quote(text: &str) -> String {
     let plain = |b: u8| !b.is_ascii() || b.is_ascii_alphanumeric() || b"/._-~+,@%=".contains(&b);
     if !text.is_empty() && text.bytes().all(plain) {
         text.to_owned()

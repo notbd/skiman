@@ -2,7 +2,7 @@
 
 use snapbox::str;
 
-use super::{COMPANY, contents, folder};
+use super::{COMPANY, append_manifest, contents, folder};
 use crate::support::{Sandbox, Tool, init, read, write};
 
 /// `rel` below `HOME`, as the shell expands `~/<rel>`.
@@ -74,6 +74,36 @@ error: skiman.toml already has [linked.company] for another path; to move that f
 
 "#]]);
     assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
+}
+
+/// The same id in a table that is not well formed, with the same path or
+/// none: the refusal says what is wrong with it, and nothing changes.
+#[test]
+fn the_same_id_in_a_malformed_table_is_refused_with_what_is_wrong() {
+    for (table, why) in [
+        (
+            "[linked.company]\npath = \"~/work/company\"\nnote = \"x\"\n",
+            "unknown key `note` in [linked.company] (allowed: path)",
+        ),
+        (
+            "[linked.company]\n",
+            "[linked.company] has no `path` (a string: an absolute path or one starting with `~/`)",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        folder(&sandbox, "work/company", &["alpha"]);
+        append_manifest(&sandbox, &format!("\n{table}"));
+        let manifest = read(sandbox.canon().join("skiman.toml"));
+
+        linked_add(&sandbox, &[home(&sandbox, "work/company")])
+            .code(1)
+            .stdout_eq("")
+            .stderr_eq(format!(
+                "error: skiman.toml already has [linked.company], which is not well formed: {why}; fix it in skiman.toml, then run the command again\n"
+            ));
+        assert_eq!(read(sandbox.canon().join("skiman.toml")), manifest);
+    }
 }
 
 /// A folder called `skills` gets its parent's name, so `~/work/acme/skills`

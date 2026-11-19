@@ -48,9 +48,16 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
     let manifest = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     let registered = manifest.linked().into_iter().find(|e| e.id == id);
-    let new = match registered {
+    let new = match registered.map(|e| e.path) {
         None => true,
-        Some(entry) if entry.path.as_deref() == Ok(written.as_str()) => false,
+        Some(Ok(path)) if path == written => false,
+        // Not another path: the table is what needs fixing.
+        Some(Err(malformed)) if malformed.path.as_ref().is_none_or(|path| *path == written) => {
+            return Err(Failure::refused(format!(
+                "skiman.toml already has [linked.{id}], which is not well formed: {}; fix it in skiman.toml, then run the command again",
+                malformed.why
+            )));
+        }
         Some(_) => {
             return Err(Failure::refused(format!(
                 "skiman.toml already has [linked.{id}] for another path; to move that folder, change its `path` line, or run `skiman linked remove {id}` first"

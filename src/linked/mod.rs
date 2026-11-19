@@ -42,6 +42,9 @@ pub struct Linked {
     /// `<canon>/linked`.
     dir: PathBuf,
     places: Places,
+    /// The registrations of the canon `init` switches away from: they
+    /// guard writes ([`Linked::refusal`]) and take part in nothing else.
+    previous: Vec<Folder>,
 }
 
 /// One `[linked.<id>]` registration on this machine.
@@ -120,6 +123,16 @@ impl Linked {
             folders,
             dir: repo.linked_dir(),
             places,
+            previous: Vec::new(),
+        }
+    }
+
+    /// These registrations, with those of `previous` (the canon `init`
+    /// switches away from) guarding every write too.
+    pub fn guarding_also(self, previous: Option<&Linked>) -> Linked {
+        Linked {
+            previous: previous.map(|p| p.folders.clone()).unwrap_or_default(),
+            ..self
         }
     }
 
@@ -211,15 +224,22 @@ impl Linked {
     /// ([`written_through`] or [`location`]): `target` is, or lies inside,
     /// a registered path (spec "Write targets never reach into a linked
     /// folder"). Every registration with a path counts, one that breaks a
-    /// rule too. `None` when the write may go ahead.
+    /// rule too, and those of the previous canon
+    /// ([`Linked::guarding_also`]). `None` when the write may go ahead.
     pub fn refusal(&self, path: &Path, target: &Path) -> Option<String> {
-        let folder = self.holding(target)?;
+        let (folder, of) = match self.holding(target) {
+            Some(folder) => (folder, ""),
+            None => (
+                self.previous.iter().find(|f| f.holds(target))?,
+                " of the previous canon",
+            ),
+        };
         let shown = folder
             .path
             .as_ref()
             .expect("a registered folder has a path");
         Some(format!(
-            "{} resolves to {}, inside linked folder `{}` ({}), so skiman writes nothing there; point it elsewhere, then run the command again",
+            "{} resolves to {}, inside linked folder `{}` ({}){of}, so skiman writes nothing there; point it elsewhere, then run the command again",
             path.display(),
             target.display(),
             folder.id,
@@ -230,9 +250,7 @@ impl Linked {
     /// The registered folder `target` (a realpath, or resolved as far as it
     /// goes) is, or lies inside; every registration with a path counts.
     pub fn holding(&self, target: &Path) -> Option<&Folder> {
-        self.folders
-            .iter()
-            .find(|f| f.registered().any(|p| target.starts_with(p)))
+        self.folders.iter().find(|f| f.holds(target))
     }
 
     /// The registered folder one of whose valid child targets `target` (a
@@ -544,6 +562,11 @@ impl Folder {
         [self.path.as_ref(), self.resolved.as_ref()]
             .into_iter()
             .flatten()
+    }
+
+    /// Whether `target` is, or lies inside, the registered path.
+    fn holds(&self, target: &Path) -> bool {
+        self.registered().any(|p| target.starts_with(p))
     }
 
     /// The names of its linked skills, in name order: the id for a folder

@@ -21,6 +21,7 @@ mod names;
 mod paths;
 mod projects;
 mod read_only;
+mod switch;
 
 /// A folder of skills at `rel` below `HOME`, holding a skill for each of `names`.
 pub fn folder(sandbox: &Sandbox, rel: &str, names: &[&str]) -> PathBuf {

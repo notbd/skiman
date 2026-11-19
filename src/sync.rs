@@ -270,21 +270,33 @@ pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exi
     run_with(paths, repo, lock, output, None, &[]).0
 }
 
-/// [`run`], also returning the report. `previous_canon` is the realpath of the
-/// canon `init` just switched away from: its links count as owned.
-/// Nothing is said about `failed`, paths whose write the command just
-/// reported failing: the way out sync names for them is that same write.
+/// The canon `init` just switched away from.
+#[derive(Debug)]
+pub struct Previous {
+    /// Its realpath: skiman's links into it count as owned for one sync.
+    pub root: PathBuf,
+    /// Its registrations, when its `skiman.toml` can be read: they guard
+    /// every write that sync makes.
+    pub linked: Option<Linked>,
+}
+
+/// [`run`], also returning the report, after `init` switched away from
+/// `previous`. Nothing is said about `failed`, paths whose write the
+/// command just reported failing: the way out sync names for them is that
+/// same write.
 pub fn run_with(
     paths: &Paths,
     repo: &Canon,
     _lock: &CanonLock,
     output: Output,
-    previous_canon: Option<PathBuf>,
+    previous: Option<&Previous>,
     failed: &[PathBuf],
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let linked = Linked::read(paths.home(), repo, &manifest);
+            let linked = Linked::read(paths.home(), repo, &manifest)
+                .guarding_also(previous.and_then(|p| p.linked.as_ref()));
+            let previous_canon = previous.map(|p| p.root.clone());
             let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
             crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);
             report

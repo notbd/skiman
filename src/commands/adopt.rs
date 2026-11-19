@@ -21,7 +21,7 @@ use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::layout::skill_path;
-use crate::linked::Linked;
+use crate::linked::{Linked, State};
 use crate::names::{self, Taken};
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
@@ -182,8 +182,15 @@ fn read(
                 .ok()
                 .and_then(|r| linked.reaches_into(&r))
             {
+                // As sync says it: only a folder that was read is distributed.
+                let hint = match folder.state {
+                    State::Read(_) => {
+                        "; skiman distributes the folder's skills already, so delete the link once nothing needs it"
+                    }
+                    _ => "",
+                };
                 return Err(Failure::refused(format!(
-                    "{} resolves into linked folder `{}`, whose content skiman never copies into the canon; skiman distributes the folder's skills already, so delete the link once nothing needs it",
+                    "{} resolves into linked folder `{}`, whose content skiman never copies into the canon{hint}",
                     entry.display(),
                     folder.id
                 )));

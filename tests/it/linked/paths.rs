@@ -248,6 +248,8 @@ fn a_malformed_registration_still_protects_its_folder() {
             claude.join("old").display()
         );
         assert!(stderr.contains(&line), "{line}\n{stderr}");
+        // Nor here: a skipped folder's skills are not distributed.
+        assert!(!stderr.contains("distributes"), "{stderr}");
         assert_eq!(crate::support::tree(sandbox.canon()), canon);
         assert_eq!(contents(&[&company]), before);
     }

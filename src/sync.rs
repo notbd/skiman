@@ -363,6 +363,11 @@ pub fn reconcile(
     let mut reconciled = Vec::new();
     for tool in installed_tools(home, manifest) {
         let dir = tool.tool_dir(home);
+        let through = linked::written_through(&dir);
+        if reconciled.contains(&through) || guarded(linked, &dir, &through, &mut report) {
+            reconciled.push(through);
+            continue;
+        }
         // The tool directory itself may be missing; its parent chain is never replaced.
         if let Err(e) = std::fs::create_dir_all(&dir) {
             report
@@ -406,13 +411,14 @@ pub fn reconcile(
         let Ok(real) = dir.canonicalize() else {
             continue;
         };
-        if !reconciled.contains(&real) {
+        if !reconciled.contains(&real) && !guarded(linked, &dir, &real, &mut report) {
             remove_owned_entries(&dir, &real, &ownership, &mut report);
-            reconciled.push(real);
         }
+        reconciled.push(real);
     }
     let sweep = output == Output::Normal;
-    reconcile_instruction_locations(home, repo, manifest, &ownership, sweep, &mut report);
+    let context = (repo, manifest, linked, &ownership);
+    reconcile_instruction_locations(home, context, sweep, &mut report);
     report
 }
 
@@ -423,16 +429,21 @@ pub fn reconcile(
 /// are reconciled once and a link from one location to another is not owned.
 fn reconcile_instruction_locations(
     home: &Path,
-    repo: &SkillRepo,
-    manifest: &Manifest,
-    ownership: &Ownership,
+    (repo, manifest, linked, ownership): (&SkillRepo, &Manifest, &Linked, &Ownership),
     sweep: bool,
     report: &mut Report,
 ) {
     let target = repo.shared_body();
     let mut reconciled = Vec::new();
+    // Locations inside a linked folder: never written, never swept.
+    let mut refused = Vec::new();
     for tool in installed_tools(home, manifest) {
         let path = home.join(tool.instruction_file);
+        let lands = linked::location(&path);
+        if refused.contains(&lands) || guarded(linked, &path, &lands, report) {
+            refused.push(lands);
+            continue;
+        }
         let location = match instruction_location(&path) {
             Ok(location) => location,
             Err(e) => {
@@ -494,7 +505,11 @@ fn reconcile_instruction_locations(
         let Ok(location) = instruction_location(&path) else {
             continue;
         };
-        if reconciled.contains(&location) {
+        if reconciled.contains(&location) || refused.contains(&location) {
+            continue;
+        }
+        if guarded(linked, &path, &location, report) {
+            refused.push(location);
             continue;
         }
         if let Ok(meta) = std::fs::symlink_metadata(&location)
@@ -521,6 +536,24 @@ fn reconcile_instruction_locations(
             }
         }
     }
+}
+
+/// Reports `path` and returns `true` when it resolves to `target` inside a
+/// linked folder: skiman writes nothing there (exit 3).
+fn guarded(linked: &Linked, path: &Path, target: &Path, report: &mut Report) -> bool {
+    let Some(message) = linked.refusal(path, target) else {
+        return false;
+    };
+    report.items.push(Item {
+        scope: target.display().to_string(),
+        path: path.to_owned(),
+        kind: ItemKind::Linked {
+            what: "guarded",
+            message,
+            attention: true,
+        },
+    });
+    true
 }
 
 /// The realpath of `path`'s parent joined with its file name. Fails when the

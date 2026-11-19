@@ -24,6 +24,8 @@ use serde_json::{Map, Value, json};
 
 use crate::Exit;
 use crate::commands;
+use crate::failure::Failure;
+use crate::repo_lock::RepoLock;
 use crate::tools::{AgentTool, HookShape, SessionHook, TOOLS};
 
 /// Marks a hook command as skiman's.
@@ -43,20 +45,26 @@ pub enum Request<'a> {
     Ask,
 }
 
+/// Asked right before a settings file (the path in the tool table) is
+/// written: holds the canon lock while the write happens, or says why the
+/// file is left as it is (a settings file that resolves into a linked
+/// folder, exit 3).
+pub type Guard<'a> = &'a dyn Fn(&Path) -> Result<RepoLock, Failure>;
+
 /// Applies `request`; `binary` is the recorded binary path. Every settings
 /// file is handled on its own, and the exit is the highest of them.
-pub fn apply(home: &Path, binary: &Path, request: Request) -> Exit {
+pub fn apply(home: &Path, binary: &Path, request: Request, guard: Guard) -> Exit {
     let own = entry_command(binary);
     let hookable = TOOLS.iter().filter(|tool| tool.session_hook.is_some());
     match request {
         Request::Add(ids) => hookable
             .filter(|tool| ids.split(',').any(|id| id == tool.id))
-            .map(|tool| add(home, tool, &own))
+            .map(|tool| add(home, tool, &own, guard))
             .fold(Exit::Success, Exit::combine),
         Request::Remove => hookable
-            .map(|tool| remove(home, tool, &own))
+            .map(|tool| remove(home, tool, &own, guard))
             .fold(Exit::Success, Exit::combine),
-        Request::Ask => ask(home, hookable.collect(), &own),
+        Request::Ask => ask(home, hookable.collect(), &own, guard),
     }
 }
 
@@ -303,7 +311,7 @@ fn insert(root: &mut Value, shape: HookShape, own: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn add(home: &Path, tool: &AgentTool, own: &str) -> Exit {
+fn add(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
     if let Some(reason) = tool.session_hook_unavailable {
         warn_unavailable(home, tool, reason);
         return Exit::Success;
@@ -311,7 +319,7 @@ fn add(home: &Path, tool: &AgentTool, own: &str) -> Exit {
     let shape = session_hook(tool).shape;
     match plan_addition(home, tool, own) {
         Ok(None) => Exit::Success,
-        Ok(Some(settings)) => write_addition(&settings, shape, own),
+        Ok(Some(settings)) => write_addition(&settings, shape, own, guard),
         Err(Unusable::NotInstalled(dir)) => {
             err!(
                 "warning: {} does not exist, so skiman adds no session-start hook entry for {}",
@@ -327,7 +335,11 @@ fn add(home: &Path, tool: &AgentTool, own: &str) -> Exit {
     }
 }
 
-fn write_addition(settings: &Settings, shape: HookShape, own: &str) -> Exit {
+fn write_addition(settings: &Settings, shape: HookShape, own: &str, guard: Guard) -> Exit {
+    let _lock = match guard(&settings.path) {
+        Ok(lock) => lock,
+        Err(failure) => return failure.report(),
+    };
     match settings.save() {
         Ok(()) => {
             out!(
@@ -368,7 +380,7 @@ fn pretty(value: &Value) -> String {
     serde_json::to_string_pretty(value).expect("JSON value serialises")
 }
 
-fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
+fn remove(home: &Path, tool: &AgentTool, own: &str, guard: Guard) -> Exit {
     let path = settings_path(home, tool);
     let by_hand = |reason: String| {
         err!(
@@ -385,6 +397,10 @@ fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
     if !strip(&mut settings.root, session_hook(tool).shape, own, true) {
         return Exit::Success;
     }
+    let _lock = match guard(&settings.path) {
+        Ok(lock) => lock,
+        Err(failure) => return failure.report(),
+    };
     match settings.save() {
         Ok(()) => {
             out!(
@@ -400,7 +416,7 @@ fn remove(home: &Path, tool: &AgentTool, own: &str) -> Exit {
 /// Previews the entries `init` would add, asks, and adds them on "y". The
 /// question can stay open for a long time, so on "y" each file is read again
 /// and the entry is added to what it holds then.
-fn ask(home: &Path, tools: Vec<&AgentTool>, own: &str) -> Exit {
+fn ask(home: &Path, tools: Vec<&AgentTool>, own: &str, guard: Guard) -> Exit {
     let mut exit = Exit::Success;
     let mut planned = Vec::new();
     for tool in tools {
@@ -443,7 +459,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, own: &str) -> Exit {
     };
     if agreed {
         for (tool, _) in &planned {
-            exit = exit.combine(add(home, tool, own));
+            exit = exit.combine(add(home, tool, own, guard));
         }
     } else {
         let ids: Vec<&str> = planned.iter().map(|(tool, _)| tool.id).collect();

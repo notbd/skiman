@@ -59,12 +59,18 @@ fn a_missing_folder_is_reported_once_its_links_go_and_come_back_with_it() {
     assert_eq!(sync(&sandbox, &["sync", "--hook"]).1, "");
 
     set_path(&sandbox, "~/work/company", "~/elsewhere/company");
-    assert_eq!(sync(&sandbox, &["sync", "--hook"]).1, missing("elsewhere/company"));
+    assert_eq!(
+        sync(&sandbox, &["sync", "--hook"]).1,
+        missing("elsewhere/company")
+    );
     assert_eq!(sync(&sandbox, &["sync"]).0, 0);
 
     set_path(&sandbox, "~/elsewhere/company", "~/work/company");
     std::fs::rename(home.join("away"), home.join("work/company")).unwrap();
-    assert_eq!(sync(&sandbox, &["sync", "--hook"]), (0, String::new(), String::new()));
+    assert_eq!(
+        sync(&sandbox, &["sync", "--hook"]),
+        (0, String::new(), String::new())
+    );
     for tool in Tool::ALL {
         assert!(sandbox.tool_dir(tool).join("alpha/SKILL.md").is_file());
     }
@@ -82,15 +88,25 @@ fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
         let linked = sandbox.skill_repo().join("linked");
         folder(&sandbox, "work/acme", &["alpha"]);
         append_manifest(&sandbox, "\n[linked.acme]\npath = \"~/work/acme\"\n");
-        write(sandbox.skill_repo().join("skills/notes/SKILL.md"), skill_md("notes"));
-        set_path(&sandbox, "enabled = [\"claude-code\", \"codex\", \"antigravity\"]", "enabled = [\"claude-code\", \"codex\"]");
+        write(
+            sandbox.skill_repo().join("skills/notes/SKILL.md"),
+            skill_md("notes"),
+        );
+        set_path(
+            &sandbox,
+            "enabled = [\"claude-code\", \"codex\", \"antigravity\"]",
+            "enabled = [\"claude-code\", \"codex\"]",
+        );
         chmod(&company, mode);
 
         let (code, _, stderr) = sync(&sandbox, &["sync"]);
         chmod(&company, 0o755);
 
         assert_eq!(code, 3, "{mode:o}: {stderr}");
-        assert!(stderr.contains("linked folder `company` is not read ("), "{stderr}");
+        assert!(
+            stderr.contains("linked folder `company` is not read ("),
+            "{stderr}"
+        );
         assert!(stderr.contains("linked skill alpha in "), "{stderr}");
         assert_eq!(std::fs::read_link(linked.join("company")).unwrap(), company);
         for tool in [Tool::ClaudeCode, Tool::Codex] {
@@ -110,8 +126,14 @@ fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
         let (code, _, stderr) = sync(&sandbox, &["sync"]);
         assert_eq!(code, 3, "{stderr}");
         let dir = sandbox.tool_dir(Tool::ClaudeCode);
-        assert_eq!(std::fs::read_link(dir.join("alpha")).unwrap(), linked.join("acme/alpha"));
-        assert_eq!(std::fs::read_link(dir.join("beta")).unwrap(), linked.join("company/beta"));
+        assert_eq!(
+            std::fs::read_link(dir.join("alpha")).unwrap(),
+            linked.join("acme/alpha")
+        );
+        assert_eq!(
+            std::fs::read_link(dir.join("beta")).unwrap(),
+            linked.join("company/beta")
+        );
     }
 }
 
@@ -122,7 +144,10 @@ fn a_path_check_failing_with_a_permission_error_is_a_read_error() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     folder(&sandbox, "work/locked/company", &["alpha"]);
-    append_manifest(&sandbox, "\n[linked.company]\npath = \"~/work/locked/company\"\n");
+    append_manifest(
+        &sandbox,
+        "\n[linked.company]\npath = \"~/work/locked/company\"\n",
+    );
     assert_eq!(sync(&sandbox, &["sync"]).0, 0);
     let locked = sandbox.home().join("work/locked");
     chmod(&locked, 0o000);
@@ -131,7 +156,10 @@ fn a_path_check_failing_with_a_permission_error_is_a_read_error() {
     chmod(&locked, 0o755);
 
     assert_eq!(code, 3, "{stderr}");
-    assert!(stderr.contains("linked folder `company` is not read ("), "{stderr}");
+    assert!(
+        stderr.contains("linked folder `company` is not read ("),
+        "{stderr}"
+    );
     assert!(!stderr.contains("not on this machine"), "{stderr}");
     for tool in Tool::ALL {
         assert!(exists(sandbox.tool_dir(tool).join("alpha")));

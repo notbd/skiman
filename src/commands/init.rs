@@ -15,7 +15,8 @@ use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::fsutil::{absolute_lexical, rewrite_atomic, write_atomic};
 use crate::git_hooks;
-use crate::linked::gitignore;
+use crate::linked::{self, Linked, gitignore};
+use crate::manifest::Manifest;
 use crate::manifest::new_manifest_text;
 use crate::paths::Paths;
 use crate::repo::SkillRepo;
@@ -58,8 +59,9 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     }
     let repo = SkillRepo::at(&path)?;
     let lock = RepoLock::of_init(machine, &repo)?;
+    let mut guarded = Exit::Success;
     if target == Target::Reuse {
-        ignore_machine_state(&repo)?;
+        guarded = ignore_machine_state(&repo, paths.home())?;
     } else {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the skill repo: {e}")))?;
@@ -87,20 +89,39 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let (exit, report) = sync::run_with(&paths, &repo, &lock, Output::Normal, previous_repo, &[]);
     hint_not_owned(&report, &repo);
     // Settings files are outside the skill repo: do not hold the repo lock
-    // while the preview waits for an answer.
+    // while the preview waits for an answer; each write takes it again.
     drop(lock);
-    Ok(exit.combine(install_session_hooks(&paths, &binary, session_hooks)))
+    let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks);
+    Ok(guarded.combine(exit).combine(hooks))
 }
 
 /// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag
-/// (only possible with a terminal) previews the entries and asks.
-fn install_session_hooks(paths: &Paths, binary: &Path, session_hooks: Option<&str>) -> Exit {
+/// (only possible with a terminal) previews the entries and asks. Each
+/// settings file is written under the canon lock, and left alone when it
+/// resolves into a linked folder registered at that moment.
+fn install_session_hooks(
+    paths: &Paths,
+    repo: &SkillRepo,
+    binary: &Path,
+    session_hooks: Option<&str>,
+) -> Exit {
     let request = match session_hooks {
         Some("none") => session_hooks::Request::Remove,
         Some(ids) => session_hooks::Request::Add(ids),
         None => session_hooks::Request::Ask,
     };
-    session_hooks::apply(paths.home(), binary, request)
+    let guard = |file: &Path| -> Result<RepoLock, Failure> {
+        let lock = RepoLock::wait(paths, repo)?;
+        let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?);
+        match linked.refusal(file, &linked::written_through(file)) {
+            Some(message) => Err(Failure {
+                exit: Exit::NeedsAttention,
+                message: format!("{message}; its session-start hook entry is left as it is"),
+            }),
+            None => Ok(lock),
+        }
+    };
+    session_hooks::apply(paths.home(), binary, request, &guard)
 }
 
 /// Story 5: content skiman does not own in the tool directories or the
@@ -250,7 +271,7 @@ fn write_layout(repo: &SkillRepo, home: &Path) -> std::io::Result<()> {
 /// mode. When `.gitignore` is a link (a repo managed with dotfiles), the
 /// file it points to is replaced and the link stays; a link to a missing
 /// file is refused.
-fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
+fn ignore_machine_state(repo: &SkillRepo, home: &Path) -> Result<Exit, Failure> {
     let path = repo.root().join(".gitignore");
     let cannot_read =
         |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", path.display()));
@@ -279,7 +300,16 @@ fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
             ".skiman" | ".skiman/" | "/.skiman" | "/.skiman/"
         )
     }) {
-        return Ok(());
+        return Ok(Exit::Success);
+    }
+    // Written through a link: never into a linked folder.
+    if real != path
+        && let Ok(manifest) = Manifest::load(repo)
+        && let Some(message) =
+            Linked::read(home, repo, &manifest).refusal(&path, &linked::written_through(&path))
+    {
+        err!("warning: {message}; `.skiman/` is not added to it");
+        return Ok(Exit::NeedsAttention);
     }
     let separator = if text.is_empty() || text.ends_with('\n') {
         ""
@@ -293,7 +323,7 @@ fn ignore_machine_state(repo: &SkillRepo) -> Result<(), Failure> {
     }
     .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
     out!("added .skiman/ to {}", path.display());
-    Ok(())
+    Ok(Exit::Success)
 }
 
 /// The path skiman was invoked through: `argv[0]` made absolute, or resolved

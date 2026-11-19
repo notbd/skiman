@@ -17,6 +17,7 @@ pub mod path;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::fsutil::realpath_as_far_as_exists;
 use crate::layout::Layout;
 use crate::manifest::Manifest;
 use crate::names;
@@ -137,6 +138,29 @@ impl Linked {
                 .chain(targets)
                 .any(|p| overlap(p, resolved))
         })
+    }
+
+    /// Why skiman must not write at `path`, which resolves to `target`
+    /// ([`written_through`] or [`location`]): `target` is, or lies inside,
+    /// a registered path (spec "Write targets never reach into a linked
+    /// folder"). Every registration with a path counts, one that breaks a
+    /// rule too. `None` when the write may go ahead.
+    pub fn refusal(&self, path: &Path, target: &Path) -> Option<String> {
+        let folder = self
+            .folders
+            .iter()
+            .find(|f| f.registered().any(|p| target.starts_with(p)))?;
+        let shown = folder
+            .path
+            .as_ref()
+            .expect("a registered folder has a path");
+        Some(format!(
+            "{} resolves to {}, inside linked folder `{}` ({}), so skiman writes nothing there; point it elsewhere, then run the command again",
+            path.display(),
+            target.display(),
+            folder.id,
+            shown.display()
+        ))
     }
 
     /// Whether `path` (a realpath) could be registered as a linked folder
@@ -278,26 +302,27 @@ impl Collision {
 /// registrations whose id sorts first: an overlap breaks the later one.
 fn check(folder: &mut Folder, places: &Places, earlier: &[Folder]) -> State {
     let path = folder.path.clone().expect("set by the caller");
-    if let Some(why) = places.breaks(&path) {
-        return State::Broken(why);
-    }
     let resolved = resolve(&path);
     folder.resolved = Some(resolved.path.clone());
     if let Some(why) = places.breaks(&resolved.path) {
         return State::Broken(why);
+    }
+    // The realpath passes: the path as written or a link on the way does not.
+    let hint = match resolved.stop {
+        None => format!(
+            "; register its realpath {} instead",
+            resolved.path.display()
+        ),
+        Some(_) => String::new(),
+    };
+    if let Some(why) = places.breaks(&path) {
+        return State::Broken(format!("{why}{hint}"));
     }
     if let Some((link, why)) = resolved
         .links
         .iter()
         .find_map(|link| places.breaks(link).map(|why| (link, why)))
     {
-        let hint = match resolved.stop {
-            None => format!(
-                "; register its realpath {} instead",
-                resolved.path.display()
-            ),
-            Some(_) => String::new(),
-        };
         return State::Broken(format!(
             "{} goes through the link {}: {why}{hint}",
             path.display(),
@@ -415,6 +440,20 @@ pub fn stand_in(description: &str) -> String {
 
 /// The longest stand-in, in characters.
 const STAND_IN_MAX: usize = 120;
+
+/// Where a write through `path` lands (a tool directory, a settings file,
+/// a linked `.gitignore`): its realpath as far as it exists.
+pub fn written_through(path: &Path) -> PathBuf {
+    realpath_as_far_as_exists(path)
+}
+
+/// Where a link or file placed at `path` lands (an instruction location, a
+/// link skiman places or removes): the realpath of its parent as far as it
+/// exists, joined with its name.
+pub fn location(path: &Path) -> PathBuf {
+    let parent = path.parent().unwrap_or(Path::new("/"));
+    realpath_as_far_as_exists(parent).join(path.file_name().unwrap_or_default())
+}
 
 /// Why `id` cannot name a linked folder; `None` when it can. An id follows
 /// the skill-name rule and is not reserved: a single-skill folder's skill

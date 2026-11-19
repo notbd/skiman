@@ -62,10 +62,9 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     }
     let file = repo.manifest_file();
     let text = manifest::with_project(&read_text(&file)?, &id, &root::written_form(home, &dir))
-        .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+        .map_err(Failure::refused_in(&file))?;
     // The same validation every command applies to a root, on the new text.
-    let candidate =
-        Manifest::parse(&text).map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    let candidate = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     if let Some(Err(problem)) = root::resolve(home, &repo, &candidate)
         .into_iter()
         .find(|r| match r {
@@ -979,8 +978,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         let file = ctx.repo.manifest_file();
         let mut text = read_text(&file)?;
         for id in &unregister {
-            text = manifest::without_project(&text, id)
-                .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+            text = manifest::without_project(&text, id).map_err(Failure::refused_in(&file))?;
             synced.remove_root(id);
             remove_if_empty(&projects_dir.join(id));
         }

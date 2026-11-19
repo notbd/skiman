@@ -1,6 +1,7 @@
 //! A command that stops early: the exit status and the message for stderr.
 
 use std::fmt;
+use std::path::Path;
 
 use crate::Exit;
 
@@ -17,6 +18,13 @@ impl Failure {
             exit: Exit::Refused,
             message: message.into(),
         }
+    }
+
+    /// Exit 1 for what is wrong with the text of `file`, such as a
+    /// `skiman.toml` that does not parse or cannot take an edit:
+    /// `.map_err(Failure::refused_in(&file))`.
+    pub fn refused_in(file: &Path) -> impl Fn(String) -> Self + '_ {
+        move |e| Failure::refused(format!("{}: {e}", file.display()))
     }
 
     /// Exit 2: usage error, including a required flag missing without a TTY.

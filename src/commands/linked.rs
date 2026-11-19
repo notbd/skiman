@@ -46,8 +46,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let lock = CanonLock::wait(&paths, &repo)?;
     let file = repo.manifest_file();
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
-    let manifest =
-        Manifest::parse(&text).map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    let manifest = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     let registered = manifest.linked().into_iter().find(|e| e.id == id);
     let new = match registered {
         None => true,
@@ -59,14 +58,12 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         }
     };
     let text = if new {
-        manifest::with_linked(&text, &id, &written)
-            .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?
+        manifest::with_linked(&text, &id, &written).map_err(Failure::refused_in(&file))?
     } else {
         text
     };
     // The rules every command applies, on the registrations as they will be.
-    let candidate =
-        Manifest::parse(&text).map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    let candidate = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     let linked = Linked::read(home, &repo, &candidate);
     let folder = linked
         .folders
@@ -263,8 +260,7 @@ fn run_remove(id: &str) -> Result<Exit, Failure> {
     let lock = CanonLock::wait(&paths, &repo)?;
     let file = repo.manifest_file();
     let text = crate::fsutil::read_text(&file)?.unwrap_or_default();
-    let manifest =
-        Manifest::parse(&text).map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    let manifest = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     let Some(entry) = manifest.linked().into_iter().find(|e| e.id == id) else {
         let link = repo.root().join(LINKED_DIR).join(id);
         let hint = if std::fs::symlink_metadata(&link).is_ok() {
@@ -279,8 +275,7 @@ fn run_remove(id: &str) -> Result<Exit, Failure> {
             "skiman.toml has no [linked.{id}]{hint}"
         )));
     };
-    let new = manifest::without_linked(&text, id)
-        .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    let new = manifest::without_linked(&text, id).map_err(Failure::refused_in(&file))?;
     write_atomic(&file, new.as_bytes())
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
     match entry.path {

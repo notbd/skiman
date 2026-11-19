@@ -93,11 +93,15 @@ pub enum PointsInto {
     /// the folder was read, so skiman distributes its skills; not when it
     /// is skipped or cannot be read.
     Linked { id: String, distributed: bool },
+    /// Unknown while the linked folder `id` cannot be read: adopt and import
+    /// refuse every entry until it can.
+    Unknown(String),
 }
 
 /// The [`ItemKind::Foreign`] of the entry `name` (metadata `meta`) at
 /// `path` in `tool`'s directory: a link into a linked folder gets no adopt
-/// hint, and a link into a folder that could be registered gets that hint.
+/// hint, nor does any entry while a linked folder cannot be read, and a
+/// link into a folder that could be registered gets that hint.
 pub fn foreign(
     name: &std::ffi::OsStr,
     tool: &'static str,
@@ -112,6 +116,7 @@ pub fn foreign(
             id: folder.id.clone(),
             distributed: matches!(folder.state, State::Read(_)),
         },
+        _ if let Some(folder) = linked.unreadable() => PointsInto::Unknown(folder.id.clone()),
         Some(real)
             if meta.is_symlink()
                 && !real.starts_with(repo.root())
@@ -177,6 +182,12 @@ impl Item {
             } => format!(
                 "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`, or register the folder it is in with `skiman linked add {}`",
                 crate::project::shell_quote(&folder.display().to_string())
+            ),
+            ItemKind::Foreign {
+                into: PointsInto::Unknown(id),
+                ..
+            } => format!(
+                "foreign skill {path} is not managed by skiman; it can be brought in once linked folder `{id}` can be read"
             ),
             ItemKind::Foreign {
                 into: PointsInto::Linked { id, distributed },

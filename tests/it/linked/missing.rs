@@ -188,3 +188,36 @@ fn a_link_into_a_folder_that_cannot_be_read_is_not_called_distributed() {
     );
     assert!(stderr.contains(&line), "{line}\n{stderr}");
 }
+
+/// While a linked folder cannot be read, adopt refuses every entry: sync
+/// and `init` name a foreign skill without suggesting `skiman adopt`.
+#[test]
+fn no_adopt_hint_while_a_linked_folder_cannot_be_read() {
+    let sandbox = company();
+    let company = sandbox.home().join("work/company");
+    write(
+        sandbox.tool_dir(Tool::ClaudeCode).join("other/SKILL.md"),
+        skill_md("other"),
+    );
+    chmod(&company, 0o000);
+
+    let (code, _, sync_stderr) = sync(&sandbox, &["sync"]);
+    let init = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.canon())
+        .output()
+        .unwrap();
+    chmod(&company, 0o755);
+
+    assert_eq!(code, 3, "{sync_stderr}");
+    let init_stderr = String::from_utf8(init.stderr).unwrap();
+    for stderr in [&sync_stderr, &init_stderr] {
+        assert!(!stderr.contains("skiman adopt"), "{stderr}");
+        assert!(!stderr.contains("skiman import"), "{stderr}");
+        assert!(
+            stderr.contains("once linked folder `company` can be read"),
+            "{stderr}"
+        );
+    }
+}

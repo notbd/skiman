@@ -151,9 +151,10 @@ fn install_session_hooks(
 /// `skiman import`; otherwise `skiman adopt` for each foreign skill, and an
 /// instruction file is moved away by hand (skiman never replaces it).
 fn hint_not_owned(report: &sync::Report, repo: &Canon) {
-    // A link into a linked folder is never adopted or imported.
+    // A link into a linked folder is never adopted or imported, and nothing
+    // is while a linked folder cannot be read.
     let foreign = report.items.iter().any(|item| {
-        matches!(&item.kind, ItemKind::Foreign { into, .. } if !matches!(into, sync::PointsInto::Linked { .. }))
+        matches!(&item.kind, ItemKind::Foreign { into, .. } if matches!(into, sync::PointsInto::Elsewhere | sync::PointsInto::Registrable(_)))
     });
     let refused = report
         .items

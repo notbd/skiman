@@ -156,13 +156,6 @@ impl Context {
         })
     }
 
-    /// The linked folders as they are now. The lock keeps `skiman.toml` as
-    /// it is, not the file system: a registered path can lead elsewhere
-    /// once the user has answered a prompt.
-    fn linked_now(&self) -> Linked {
-        Linked::read(self.paths.home(), &self.repo, &self.manifest)
-    }
-
     fn backups(&self) -> Backups {
         Backups::new(&self.paths)
     }
@@ -785,8 +778,10 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     if !plan.confirm(Verb::Restore, yes, dry_run)? {
         return Ok(own);
     }
-    // The checks again, on the linked folders as they are after the answer.
-    let linked = ctx.linked_now();
+    // The checks again, on the registrations and folders as they are after
+    // the answer: the lock stops other skiman commands, not a re-pointed
+    // path or a hand edit.
+    let linked = Linked::load(ctx.paths.home(), &ctx.repo)?;
     refuse_while_unreadable(&linked, "restored")?;
     let mut backups = ctx.backups();
     let mut exit = own;

@@ -374,3 +374,24 @@ fn restore_writes_nothing_when_a_linked_folder_cannot_be_read_after_it_asked() {
     assert_eq!(read(&item), OLD);
     assert!(!exists(crate::support::backups(&sandbox)));
 }
+
+/// A folder registered by hand while `project restore` waits for its
+/// answer: the restore reads `skiman.toml` again once confirmed and skips
+/// the item inside it.
+#[test]
+fn restore_skips_an_item_inside_a_folder_registered_while_it_asked() {
+    let sandbox = adopted(&["app/AGENTS.md"], &[]);
+    write(mirror(&sandbox, "app/AGENTS.md"), NEW);
+    let item = work(&sandbox, "app/AGENTS.md");
+
+    let mut pty = sandbox.skiman_pty(["project".as_ref(), "restore".as_ref(), item.as_os_str()]);
+    pty.expect("Restore 1 item(s)? [y/N] ");
+    append_manifest(&sandbox, "\n[linked.app]\npath = \"~/work/app\"\n");
+    pty.send_line("y");
+    let (code, rest) = pty.wait();
+
+    assert_eq!(code, 1, "{rest}");
+    assert!(rest.contains("it overlaps linked folder `app`"), "{rest}");
+    assert_eq!(read(&item), OLD);
+    assert!(!exists(crate::support::backups(&sandbox)));
+}

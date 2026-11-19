@@ -101,6 +101,11 @@ canon's and never writes into it.
   in `skills/`; a group folder's name is taken the same way. Between two
   linked folders, the id that sorts first wins.
   sync and `skiman check` report each such collision.
+- While a linked folder, or a linked skill's `SKILL.md`, cannot be read,
+  its links stay as they are and keep their names, even against a new
+  skill in `skills/`. sync, `skiman check` and `skiman doctor` report the
+  skill folder that waits. The first sync that can read it again applies
+  the rule above.
 - To move the folder, move it and change its `path` line in `skiman.toml`.
   The next sync links it again. A sync between the two steps sees the
   folder missing and removes its links until then.

@@ -85,7 +85,11 @@ pub fn warnings(
     }
     let (_, collisions) = linked.names(layout, kept, |_| true);
     out.extend(collisions.iter().map(|c| c.message()));
-    out.extend(super::withheld(layout, kept).iter().map(|w| w.message()));
+    out.extend(
+        super::withheld(layout, manifest, kept)
+            .iter()
+            .map(|w| w.message()),
+    );
     for name in manifest.skills().keys() {
         if layout.find(name).is_none()
             && let Some((folder, _)) = linked.skill(name, kept)

@@ -62,7 +62,7 @@ fn doctor() -> Result<Exit, Failure> {
     report_tools(home, &manifest, &installed);
     let linked = Linked::read(home, &repo, &manifest);
     let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
-    report_linked(&repo, &linked, &kept).map_err(io)?;
+    report_linked(&repo, &manifest, &linked, &kept).map_err(io)?;
     report_entries(&paths, &repo, &manifest, &linked, &kept, &installed).map_err(io)?;
     report_instruction_locations(&paths, &repo, &installed);
     report_canon(&repo).map_err(io)?;
@@ -201,6 +201,7 @@ fn alias_note<'a>(
 /// or `linked/<id>` in the way. Nothing when no folder is registered.
 fn report_linked(
     repo: &Canon,
+    manifest: &Manifest,
     linked: &Linked,
     kept: &BTreeMap<String, Holder>,
 ) -> std::io::Result<()> {
@@ -225,7 +226,7 @@ fn report_linked(
     for collision in collisions {
         out!("{}", collision.message());
     }
-    for withheld in linked::withheld(&layout, kept) {
+    for withheld in linked::withheld(&layout, manifest, kept) {
         out!("{}", withheld.message());
     }
     for problem in linked::canon::problems(linked) {

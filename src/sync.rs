@@ -743,7 +743,7 @@ pub fn wanted_entries(
     let entries = manifest.skills();
     let scope = repo.skills_dir().display().to_string();
     let layout = Layout::read(&WorkingTree::new(repo.root()))?;
-    let withheld = linked::withheld(&layout, kept);
+    let withheld = linked::withheld(&layout, manifest, kept);
     let mut wanted = Vec::new();
     for placed in layout.skills() {
         let (name, dir) = (&placed.name, repo.root().join(placed.path()));

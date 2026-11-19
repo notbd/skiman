@@ -214,6 +214,30 @@ fn an_unreadable_folder_keeps_its_names_from_a_canon_skill_in_every_tool_directo
     }
 }
 
+/// A disabled canon skill under a kept name is not distributed anyway:
+/// sync, `check` and `doctor` all leave it out of the withheld report.
+#[test]
+fn a_disabled_canon_skill_under_a_kept_name_is_not_reported_as_withheld() {
+    let sandbox = company();
+    let company = sandbox.home().join("work/company");
+    write(
+        sandbox.canon().join("skills/alpha/SKILL.md"),
+        skill_md("alpha"),
+    );
+    append_manifest(&sandbox, "\n[skills.alpha]\nenabled = false\n");
+    chmod(&company, 0o000);
+
+    let said = ["sync", "check", "doctor"].map(|command| {
+        let output = sandbox.skiman().arg(command).output().unwrap();
+        String::from_utf8(output.stdout).unwrap() + &String::from_utf8(output.stderr).unwrap()
+    });
+    chmod(&company, 0o755);
+
+    for out in said {
+        assert!(!out.contains("skill folder skills/alpha"), "{out}");
+    }
+}
+
 /// The same for a linked skill whose `SKILL.md` cannot be probed: its kept
 /// link holds the name against a new canon skill until it can be.
 #[test]

@@ -501,12 +501,19 @@ impl Withheld {
     }
 }
 
-/// Every skill folder under `skills/` (`layout`) whose name `kept` holds,
-/// in layout order: sync, `check` and `doctor` report each.
-pub fn withheld(layout: &Layout, kept: &BTreeMap<String, Holder>) -> Vec<Withheld> {
+/// Every skill folder under `skills/` (`layout`) that is not `enabled =
+/// false` in `manifest` and whose name `kept` holds, in layout order:
+/// sync, `check` and `doctor` report each.
+pub fn withheld(
+    layout: &Layout,
+    manifest: &Manifest,
+    kept: &BTreeMap<String, Holder>,
+) -> Vec<Withheld> {
+    let entries = manifest.skills();
     layout
         .skills()
         .iter()
+        .filter(|placed| entries.get(&placed.name).is_none_or(|e| e.enabled))
         .filter_map(|placed| {
             Some(Withheld {
                 path: placed.path(),

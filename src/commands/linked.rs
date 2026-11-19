@@ -77,19 +77,23 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         .iter()
         .find(|f| f.id == id)
         .expect("the registration is in the candidate");
-    match &folder.state {
-        State::Read(_) => {}
-        State::Missing => {
-            return Err(Failure::refused(format!(
-                "{} is not an existing folder",
-                absolute.display()
-            )));
-        }
-        State::Broken(why) => return Err(Failure::refused(why.clone())),
-        State::Unreadable(why) => return Err(Failure::operational(why.clone())),
-    }
-    // Nor may it take the place of a registration that works now.
+    // Only a new registration needs an existing folder that passes the
+    // rules: a second run changes no record, so sync reports the folder's
+    // state and its links follow it (removed when it is gone, kept while
+    // it cannot be read).
     if new {
+        match &folder.state {
+            State::Read(_) => {}
+            State::Missing => {
+                return Err(Failure::refused(format!(
+                    "{} is not an existing folder",
+                    absolute.display()
+                )));
+            }
+            State::Broken(why) => return Err(Failure::refused(why.clone())),
+            State::Unreadable(why) => return Err(Failure::operational(why.clone())),
+        }
+        // Nor may it take the place of a registration that works now.
         let current = Linked::read(home, &repo, &manifest);
         for was in current
             .folders

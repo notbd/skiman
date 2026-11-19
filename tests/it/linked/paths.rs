@@ -612,6 +612,43 @@ fn adopt_refuses_an_old_link_that_resolves_into_a_linked_folder() {
     }
 }
 
+/// A tool directory aliased into a registered folder (which breaks the
+/// registration): an entry there sits inside the folder, so adopt refuses
+/// before it writes the canon and the folder's link stays where it is.
+#[test]
+fn adopt_refuses_an_entry_that_sits_inside_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = sandbox.home().join("work/company");
+    std::fs::create_dir_all(&company).unwrap();
+    let private = folder(&sandbox, "work/private", &["demo"]);
+    symlink("../private/demo", company.join("demo")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&claude).unwrap();
+    symlink(&company, &claude).unwrap();
+    let canon = crate::support::tree(sandbox.canon());
+    let before = contents(&[&company, &private]);
+
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "demo", "--from", "claude-code", "--yes"],
+    );
+
+    assert_eq!(code, 1, "{stderr}");
+    let line = format!(
+        "{} lies in linked folder `company`",
+        company.join("demo").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(crate::support::tree(sandbox.canon()), canon);
+    assert_eq!(contents(&[&company, &private]), before);
+    assert_eq!(
+        std::fs::read_link(company.join("demo")).unwrap(),
+        Path::new("../private/demo")
+    );
+}
+
 /// While a registered folder cannot be listed its child links are
 /// unknown, so adopt refuses any entry.
 #[test]

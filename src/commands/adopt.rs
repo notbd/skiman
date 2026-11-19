@@ -133,8 +133,8 @@ fn check_name(
 /// is in place (an adopt stopped part-way), what a move of the entry to the
 /// backup left when it was cut short, which is read from its complete copy.
 /// Nothing is copied out of a linked folder (spec "Nothing is moved out of
-/// a linked folder"): refuses an entry that resolves into one, and any
-/// entry while a linked folder cannot be read.
+/// a linked folder"): refuses an entry that sits in one or resolves into
+/// one, and any entry while a linked folder cannot be read.
 fn read(
     paths: &Paths,
     repo: &Canon,
@@ -166,6 +166,14 @@ fn read(
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
+    // Where the entry sits: moving it to the backup would move it out of the folder.
+    if let Some(folder) = linked.reaches_into(&entry) {
+        return Err(Failure::refused(format!(
+            "{} lies in linked folder `{}`, which skiman never moves anything out of; nothing was changed",
+            entry.display(),
+            folder.id
+        )));
+    }
     let ownership = Ownership::new(paths, repo, None);
     let refused = match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => {

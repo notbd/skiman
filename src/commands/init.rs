@@ -111,7 +111,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     let now = linked::written_through(&path);
     if now != place {
         return Err(Failure::refused(format!(
-            "{} now leads to {}, not to {} where the canon was made; {} is not written, run `skiman init` again",
+            "{} now leads to {}, not to {} where the canon is; {} is not written, run `skiman init` again",
             path.display(),
             now.display(),
             place.display(),

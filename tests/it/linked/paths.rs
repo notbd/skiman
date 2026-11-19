@@ -605,7 +605,7 @@ fn init_makes_the_canon_where_it_checked_the_path() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     let named = format!(
-        "{} now leads to {}, not to {} where the canon was made",
+        "{} now leads to {}, not to {} where the canon is",
         through.join("next").display(),
         company.join("next").canonicalize().unwrap().display(),
         plain.join("next").canonicalize().unwrap().display()

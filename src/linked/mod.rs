@@ -53,6 +53,8 @@ pub struct Folder {
     pub path: Option<PathBuf>,
     /// `path` resolved link by link, as far as it resolves.
     resolved: Option<PathBuf>,
+    /// The links met on the way to `resolved`.
+    links: Vec<PathBuf>,
     pub state: State,
 }
 
@@ -79,6 +81,7 @@ impl Linked {
                 id: entry.id,
                 path: None,
                 resolved: None,
+                links: Vec::new(),
                 state: State::Missing,
             };
             match entry.path {
@@ -452,6 +455,7 @@ fn check(folder: &mut Folder, places: &Places, earlier: &[Folder]) -> State {
     let path = folder.path.clone().expect("set by the caller");
     let resolved = resolve(&path);
     folder.resolved = Some(resolved.path.clone());
+    folder.links = resolved.links.clone();
     if let Some(why) = places.breaks(&resolved.path) {
         return State::Broken(why);
     }
@@ -493,10 +497,14 @@ fn check(folder: &mut Folder, places: &Places, earlier: &[Folder]) -> State {
     };
     let mine = [&path, &resolved.path];
     for other in earlier.iter().filter(|f| f.takes_part()) {
-        let theirs = [other.path.as_ref(), other.resolved.as_ref()];
-        if mine
-            .iter()
-            .any(|m| theirs.iter().flatten().any(|t| overlap(m, t)))
+        let theirs: Vec<&PathBuf> = other.registered().collect();
+        // A link met on the way that lies inside the other folder reaches into it.
+        let through = |links: &[PathBuf], into: &[&PathBuf]| {
+            links.iter().any(|l| into.iter().any(|p| l.starts_with(p)))
+        };
+        if mine.iter().any(|m| theirs.iter().any(|t| overlap(m, t)))
+            || through(&folder.links, &theirs)
+            || through(&other.links, &mine)
         {
             return State::Broken(format!(
                 "{} overlaps linked folder `{}`; linked folders must not contain each other",

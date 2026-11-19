@@ -114,6 +114,42 @@ fn a_path_through_a_file_and_dot_dot_is_not_an_existing_folder() {
     assert!(!exists(sandbox.canon().join("linked/alias")));
 }
 
+/// A path that reaches a registered folder only through a link on the way
+/// overlaps it all the same: `linked add` refuses it whichever id sorts
+/// first, and the registered folder keeps distributing its child link.
+#[test]
+fn linked_add_refuses_a_path_through_a_link_inside_a_registered_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let outside = sandbox.root().join("outside");
+    write(outside.join("SKILL.md"), skill_md("bridge"));
+    symlink(&outside, company.join("bridge")).unwrap();
+    let indirect = sandbox.home().join("indirect");
+    symlink(&company, &indirect).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    let before = records(&sandbox);
+
+    for id in ["aaa", "zzz"] {
+        let output = sandbox
+            .skiman()
+            .args(["linked", "add", "--id", id])
+            .arg(indirect.join("bridge"))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{id}: {stderr}");
+        assert!(stderr.contains("overlaps linked folder"), "{id}: {stderr}");
+        assert_eq!(records(&sandbox), before, "{id}");
+    }
+    assert_eq!(
+        std::fs::read_link(sandbox.tool_dir(Tool::ClaudeCode).join("bridge")).unwrap(),
+        sandbox.canon().join("linked/company/bridge")
+    );
+}
+
 /// Of two registrations that overlap, the one whose id sorts first keeps
 /// working; a table that is not well formed is skipped too (exit 3).
 #[test]

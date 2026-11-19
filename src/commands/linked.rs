@@ -197,7 +197,10 @@ fn summary_advice(name: &str, file: &Path, text: &str) -> Option<String> {
     let Ok(docs) = MarkedYaml::load_from_str(yaml) else {
         return Some(broken());
     };
-    let Some(YamlData::Mapping(fields)) = docs.first().map(|d| &d.data) else {
+    let Some(doc) = docs.first() else {
+        return Some(broken());
+    };
+    let YamlData::Mapping(fields) = &doc.data else {
         return Some(broken());
     };
     let description = match field(fields, "description").map(|(_, v)| &v.data) {
@@ -206,6 +209,12 @@ fn summary_advice(name: &str, file: &Path, text: &str) -> Option<String> {
     };
     let line = format!("summary: {}", quoted(&linked::stand_in(&description)));
     let Some((_, metadata)) = field(fields, "metadata") else {
+        // Block lines do not fit a frontmatter written as one flow map.
+        if is_flow(yaml, doc) {
+            return Some(format!(
+                "{name}: the frontmatter of {at} is written on one line (a flow map); write it as a block map, one key per line, and add `metadata:` holding `{line}`"
+            ));
+        }
         return Some(format!(
             "{name} has no `metadata.summary`; add these lines to the frontmatter of {at}:\n  metadata:\n    {line}"
         ));
@@ -256,9 +265,23 @@ fn is_flow(yaml: &str, value: &MarkedYaml) -> bool {
     yaml.chars().nth(value.span.start.index()) == Some('{')
 }
 
-/// `text` as a double-quoted YAML string.
+/// `text` as a double-quoted YAML string: `\`, `"` and every character
+/// YAML does not print as is (control characters, line and paragraph
+/// separators, the byte order mark) are escaped.
 fn quoted(text: &str) -> String {
-    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+    let mut out = String::from("\"");
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}' | '\u{feff}') => {
+                out.push_str(&format!("\\u{:04X}", u32::from(c)));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn run_remove(id: &str) -> Result<Exit, Failure> {

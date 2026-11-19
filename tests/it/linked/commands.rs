@@ -186,6 +186,70 @@ scalar: `metadata` in [..]/home/work/company/scalar/SKILL.md is not a map; make 
     assert!(!stdout.contains("/done/SKILL.md"), "{stdout}");
 }
 
+/// The lines `linked add` prints parse once pasted in: a description
+/// with control characters gets YAML escapes, and a frontmatter written as
+/// one flow map gets no block lines, which would not fit it.
+#[test]
+fn the_summary_lines_linked_add_prints_parse_once_applied() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.home().join("work/company");
+    let bell = dir.join("bell/SKILL.md");
+    write(
+        &bell,
+        "---\nname: bell\ndescription: \"A \\a bell, a \\e escape and a \\\\ slash.\"\n---\n\n# bell\n",
+    );
+    let flow = dir.join("flow/SKILL.md");
+    write(
+        &flow,
+        "---\n{name: flow, description: A flow-style document.}\n---\n",
+    );
+    write(
+        dir.join("done/SKILL.md"),
+        "---\n{name: done, description: Done., metadata: {summary: Already there}}\n---\n",
+    );
+
+    let output = linked_add(&sandbox, &[&dir])
+        .code(0)
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8(output).unwrap();
+    let mut lines = stdout.lines();
+    lines
+        .find(|l| l.starts_with("bell has no `metadata.summary`; add these lines"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    let added: String = lines
+        .take_while(|l| l.starts_with("  "))
+        .map(|l| format!("{}\n", &l[2..]))
+        .collect();
+    assert!(
+        !added.chars().any(|c| c.is_control() && c != '\n'),
+        "{added:?}"
+    );
+    let text = read(&bell).replacen("\n---\n", &format!("\n{added}---\n"), 1);
+    std::fs::write(&bell, text).unwrap();
+    assert!(
+        stdout.contains(&format!(
+            "flow: the frontmatter of {} is written on one line (a flow map); write it as a block map, one key per line, and add `metadata:` holding `summary: \"A flow-style document.\"`",
+            flow.display()
+        )),
+        "{stdout}"
+    );
+
+    assert!(!stdout.contains("/done/SKILL.md"), "{stdout}");
+
+    let output = sandbox.skiman().arg("check").output().unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("linked skill flow has no `metadata.summary`"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("bell"), "{stderr}");
+}
+
 /// `linked remove` of an id that is not registered changes nothing; when
 /// `linked/<id>` is left from an earlier registration, it says that sync
 /// removes it.

@@ -72,6 +72,12 @@ hold links to the canon.
   characters), and no symlinks or secrets inside. While Antigravity is
   enabled, it also warns about a body over 24000 bytes, which Antigravity
   cuts without a message.
+- When other machines use the canon, each needs the new skiman version
+  before you commit what it adds: keys and tables of `skiman.toml` (such as
+  `summary` or `[linked.<id>]`), which older versions report as unknown, or
+  group folders under `skills/`, which older versions read as skill folders
+  without a `SKILL.md`. The pre-commit hook of an older version then
+  refuses commits. Tell the user before such a change.
 
 ## Create a skill
 

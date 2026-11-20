@@ -234,9 +234,23 @@ fn table<const N: usize>(header: &[&str; N], rows: &[[String; N]]) {
     out!();
 }
 
-/// `text` safe inside a table cell: `|` escaped, line breaks as spaces.
+/// `text` safe inside a table cell: `|` escaped, line breaks as spaces,
+/// and `<` escaped outside code spans, so a renderer such as GitHub's shows
+/// `<b>` instead of dropping it as HTML. Inside a code span `<` is already
+/// shown as typed, and a backslash there would show too.
 fn cell(text: &str) -> String {
-    text.replace('|', "\\|").replace(['\r', '\n'], " ")
+    let parts: Vec<String> = text
+        .split('`')
+        .enumerate()
+        .map(|(i, part)| match i % 2 {
+            0 => part.replace('<', "\\<"),
+            _ => part.to_owned(),
+        })
+        .collect();
+    parts
+        .join("`")
+        .replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
 }
 
 #[cfg(test)]
@@ -246,5 +260,8 @@ mod tests {
     #[test]
     fn a_cell_keeps_the_table_whole() {
         assert_eq!(cell("a | b\nc\r\nd"), "a \\| b c  d");
+        assert_eq!(cell("Turns <b> into text"), "Turns \\<b> into text");
+        assert_eq!(cell("Use `Vec<T>` here"), "Use `Vec<T>` here");
+        assert_eq!(cell("https://a.test/?a=1&b=2"), "https://a.test/?a=1&b=2");
     }
 }

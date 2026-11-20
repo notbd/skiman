@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
 
-use super::list::{modified, source_text, yes_no};
+use super::list::{canon_skills, distributed, source_text, yes_no};
 use crate::Exit;
 use crate::canon::Canon;
 use crate::elsewhere::{self, OutsideSkill};
@@ -22,10 +22,8 @@ use crate::linked::summary::About;
 use crate::linked::{self, Linked, Shown};
 use crate::manifest::Manifest;
 use crate::paths::Paths;
-use crate::rules;
 use crate::skiman_manual;
 use crate::sync;
-use crate::tree::{Kind, Tree, WorkingTree};
 
 const CANON_HEADER: [&str; 7] = [
     "Skill",
@@ -56,42 +54,24 @@ fn overview() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
     let repo = Canon::from_config(&paths)?;
     let manifest = Manifest::load(&repo)?;
-    let tree = WorkingTree::new(repo.root());
-    let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let enabled = manifest.skills();
     // Groups in name order; skills without one come last.
     let mut groups: BTreeMap<String, Vec<[String; 7]>> = BTreeMap::new();
     let mut ungrouped = Vec::new();
-    let mut count = 0;
-    for placed in repo.layout()?.skills() {
-        let (name, path) = (&placed.name, placed.path());
-        if tree.kind(&path).map_err(io)? != Some(Kind::Dir) {
-            continue;
-        }
-        count += 1;
+    let skills = canon_skills(&repo, &manifest)?;
+    for skill in &skills {
+        let (name, path) = (&skill.placed.name, skill.placed.path());
         let info = manifest.info(name);
-        let conflicts = !rules::unresolved_conflicts(&tree, &path)
-            .map_err(io)?
-            .is_empty();
-        let (kind, source, modified) = match manifest.source(name) {
-            None => ("own", info.origin.clone(), "-".to_owned()),
-            Some(source) => {
-                let text = source_text(&source);
-                let text = match &info.origin {
-                    Some(origin) => format!("{text}; {origin}"),
-                    None => text,
-                };
-                (
-                    "third-party",
-                    Some(text),
-                    modified(&tree, &path, name).map_err(io)?,
-                )
-            }
+        let source = match &skill.source {
+            None => info.origin.clone(),
+            Some(source) => Some(match &info.origin {
+                Some(origin) => format!("{}; {origin}", source_text(source)),
+                None => source_text(source),
+            }),
         };
-        let modified = if conflicts {
-            format!("{modified}, unresolved conflicts")
+        let modified = if skill.conflicts {
+            format!("{}, unresolved conflicts", skill.modified)
         } else {
-            modified
+            skill.modified.clone()
         };
         let installed = info
             .installed
@@ -100,13 +80,13 @@ fn overview() -> Result<Exit, Failure> {
         let row = [
             name.clone(),
             or_dash(info.summary.clone()),
-            kind.to_owned(),
+            skill.kind().to_owned(),
             or_dash(source),
             or_dash(installed),
-            yes_no(enabled.get(name).is_none_or(|e| e.enabled)),
+            yes_no(skill.enabled),
             modified,
         ];
-        match &placed.group {
+        match &skill.placed.group {
             Some(group) => groups.entry(group.clone()).or_default().push(row),
             None => ungrouped.push(row),
         }
@@ -114,7 +94,7 @@ fn overview() -> Result<Exit, Failure> {
     let found = elsewhere::find(&paths, &repo);
 
     out!("# Skills\n");
-    out!("## In the canon ({count})\n");
+    out!("## In the canon ({})\n", skills.len());
     for (group, rows) in &groups {
         out!("### {} ({})\n", cell(group), rows.len());
         table(&CANON_HEADER, rows);
@@ -153,11 +133,7 @@ fn overview() -> Result<Exit, Failure> {
                     }
                     _ => "-".to_owned(),
                 };
-                let distributed = match lost {
-                    Some(holder) => format!("no: {holder}"),
-                    None => yes_no(true),
-                };
-                [name, summary, distributed]
+                [name, summary, distributed(lost)]
             })
             .collect();
         table(&LINKED_HEADER, &rows);

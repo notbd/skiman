@@ -500,6 +500,154 @@ fn a_special_file_in_an_entry_to_move_refuses_the_import_naming_it() {
     assert!(!sandbox.state_home().join("skiman/backups").exists());
 }
 
+/// A tool directory leading into the canon's `skills/`: running the import
+/// again would take the canon's own skills for a tool's and move them to
+/// the backup, so it is refused as sync's guard refuses writing there.
+#[test]
+fn a_tool_directory_that_leads_into_the_canon_refuses_the_import() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let folder = import_folder(&sandbox, TOOLS);
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&claude).unwrap();
+    std::os::unix::fs::symlink(sandbox.canon().join("skills"), &claude).unwrap();
+
+    assert_refused(
+        &sandbox,
+        &folder,
+        1,
+        &["inside the canon, so skiman writes nothing there"],
+    );
+    assert_eq!(
+        read(sandbox.canon().join("skills/notes/SKILL.md")),
+        skill_md("notes")
+    );
+}
+
+/// Codex's tool directory leads through `bundle`, a foreign skill the
+/// import moves: once moved, the tool directory would lead nowhere.
+#[test]
+fn a_tool_directory_through_an_entry_the_import_moves_refuses_the_import() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let bundle = sandbox.root().join("real-bundle");
+    write(bundle.join("SKILL.md"), skill_md("bundle"));
+    write(bundle.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::create_dir_all(&claude).unwrap();
+    std::os::unix::fs::symlink(&bundle, claude.join("bundle")).unwrap();
+    let codex = sandbox.tool_dir(Tool::Codex);
+    std::fs::remove_dir_all(&codex).unwrap();
+    std::os::unix::fs::symlink(claude.join("bundle/skills"), &codex).unwrap();
+    let folder = import_folder(&sandbox, TOOLS);
+
+    let through = format!(
+        "  {}: through {}",
+        codex.display(),
+        claude.join("bundle").display()
+    );
+    assert_refused(&sandbox, &folder, 1, &[&through]);
+}
+
+/// A backup folder that cannot be made stops the import before the canon
+/// is written; once it can be made, the same command finishes.
+#[test]
+fn a_backup_folder_that_cannot_be_made_stops_the_import_before_anything_is_written() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let original = sandbox.tool_dir(Tool::ClaudeCode).join("old");
+    write(original.join("SKILL.md"), skill_md("old"));
+    let backups = sandbox.state_home().join("skiman/backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // The canon's own skiman.toml and shared body: writing them backs nothing up.
+    let folder = import_folder(&sandbox, &read(sandbox.canon().join("skiman.toml")));
+    let body = read(sandbox.canon().join("instructions/shared.md"));
+    write(folder.join("instructions/shared.md"), body);
+
+    assert_refused(&sandbox, &folder, 4, &["nothing was changed"]);
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert!(!original.exists());
+    assert_eq!(
+        read(sandbox.canon().join("skills/notes/SKILL.md")),
+        skill_md("notes")
+    );
+}
+
+/// A canon `skiman.lock` that does not parse is reported before any
+/// upstream is fetched: here the upstream does not exist, and fetching it
+/// would fail first.
+#[test]
+fn a_broken_canon_lock_refuses_the_import_before_anything_is_fetched() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(sandbox.canon().join("skiman.lock"), "version = [\n");
+    let folder = import_folder(
+        &sandbox,
+        &format!(
+            "{TOOLS}\n[skills.pdf.source]\nurl = \"https://github.com/acme/skills.git\"\npath = \"\"\n"
+        ),
+    );
+    write(folder.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+
+    assert_refused(&sandbox, &folder, 1, &["skiman.lock: TOML parse error"]);
+}
+
+/// Running the import again with one more skill rewrites `skiman.toml`; a
+/// skill the folder gives no table keeps what the canon records about it,
+/// and one the folder gives a table keeps the folder's table alone.
+#[test]
+fn import_again_keeps_the_summary_origin_and_install_day_of_a_skill_without_a_table() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let folder = import_folder(&sandbox, TOOLS);
+    write(folder.join("skills/more/SKILL.md"), skill_md("more"));
+    let import = || {
+        sandbox
+            .skiman()
+            .arg("import")
+            .arg(&folder)
+            .arg("--yes")
+            .assert()
+            .code(0);
+    };
+    import();
+    let manifest = sandbox.canon().join("skiman.toml");
+    let notes = "[skills.notes]\nsummary = \"Keep notes\"\norigin = \"written here\"\ninstalled = 2026-11-14\n";
+    let canon_more = "[skills.more]\nenabled = false\nsummary = \"The canon's\"\n";
+    write(
+        &manifest,
+        format!("{}\n{notes}\n{canon_more}", read(&manifest)),
+    );
+    let folder_more = "[skills.more]\nsummary = \"The folder's\"\n";
+    write(
+        folder.join("skiman.toml"),
+        format!("{TOOLS}\n{folder_more}"),
+    );
+    write(folder.join("skills/extra/SKILL.md"), skill_md("extra"));
+
+    import();
+    let written = read(&manifest);
+    assert!(written.contains(notes), "{written}");
+    assert!(written.contains(folder_more), "{written}");
+    assert!(!written.contains("The canon's"), "{written}");
+    assert!(!written.contains("enabled = false"), "{written}");
+}
+
 #[test]
 fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {

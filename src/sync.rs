@@ -790,18 +790,39 @@ fn reconcile_instruction_locations(
     }
 }
 
-/// Reports `path` and returns `true` when skiman must not write there
-/// (exit 3): it resolves to `target` inside a linked folder, or into the
-/// canon itself or what its records, rules, git and machine-local state use
-/// (`rules::TOP_LEVEL_PATHS`, `linked/`, `.git/`, `.skiman/`), each as
-/// spelled. For a file (an instruction location, `file`) the folder it
-/// lands in counts, so a link beside `skiman.toml` is refused and
-/// `<canon>/.claude/CLAUDE.md` is not.
+/// Reports `path` and returns `true` when [`refusal`] refuses a write there
+/// (exit 3).
 fn guarded(
     (repo, linked): (&Canon, &Linked),
     (path, target, file): (&Path, &Path, bool),
     report: &mut Report,
 ) -> bool {
+    let Some(message) = refusal((repo, linked), (path, target, file)) else {
+        return false;
+    };
+    report.items.push(Item {
+        scope: target.display().to_string(),
+        path: path.to_owned(),
+        kind: ItemKind::Linked {
+            what: "guarded",
+            message,
+            attention: true,
+        },
+    });
+    true
+}
+
+/// Why skiman must not write at `path`, which resolves to `target`: inside
+/// a linked folder, or into the canon itself or what its records, rules,
+/// git and machine-local state use (`rules::TOP_LEVEL_PATHS`, `linked/`,
+/// `.git/`, `.skiman/`), each as spelled. For a file (an instruction
+/// location, `file`) the folder it lands in counts, so a link beside
+/// `skiman.toml` is refused and `<canon>/.claude/CLAUDE.md` is not. Sync
+/// and import's check before any write both ask this.
+pub fn refusal(
+    (repo, linked): (&Canon, &Linked),
+    (path, target, file): (&Path, &Path, bool),
+) -> Option<String> {
     let canon = repo.root();
     let folder = if file {
         target.parent().unwrap_or(target)
@@ -839,20 +860,7 @@ fn guarded(
             target.display()
         )
     };
-    let message = linked.refusal(path, target).or_else(|| inside.then(canons));
-    let Some(message) = message else {
-        return false;
-    };
-    report.items.push(Item {
-        scope: target.display().to_string(),
-        path: path.to_owned(),
-        kind: ItemKind::Linked {
-            what: "guarded",
-            message,
-            attention: true,
-        },
-    });
-    true
+    linked.refusal(path, target).or_else(|| inside.then(canons))
 }
 
 /// The realpath of `path`'s parent joined with its file name. Fails when the

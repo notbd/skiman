@@ -53,7 +53,7 @@ use crate::skiman_manual;
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
 use crate::staging::Staging;
-use crate::sync::{self, Output};
+use crate::sync::{self, Output, Place};
 use crate::test_hook;
 use crate::tree::{self, Kind, Overlay, Tree, WorkingTree};
 use crate::upstream::{self, Upstream, print_not_installed};
@@ -117,7 +117,8 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
 
     let content = Folder::read(&folder)?;
     refuse_linked_tables(&content)?;
-    let manifest_text = merge_canon_config(&content.manifest, &repo_manifest)?;
+    let holds = |name: &str| content.skills.contains_key(name);
+    let manifest_text = merge_canon_config(&content.manifest, &repo_manifest, holds)?;
     check_folder(&content, &manifest_text)?;
     let folder_manifest = Manifest::parse(&manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
@@ -208,6 +209,12 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_special_files(&plan)?;
     refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     let mut backups = Backups::new(&paths);
+    // The backup folder first, so one that cannot be made stops the run
+    // before the canon is written.
+    if !plan.moves.is_empty() {
+        let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
+        backups.dir().map_err(nothing)?;
+    }
     let mut moved = false;
     let done = match &writes {
         Some((_, change, todo)) => change.write(todo, &repo, &lock, &mut backups).map(|lines| {
@@ -408,12 +415,19 @@ impl Folder {
 /// by key, since an import brings skills and instructions only: the
 /// canon's `[tools]` when the folder has none, each canon `[projects.<id>]`
 /// and `[linked.<id>]` whose id the folder does not define (it defines no
-/// `[linked]`: [`refuse_linked_tables`]), and each canon `[[secrets.allow]]`
-/// entry for a path below `projects/` the folder does not hold already.
-/// Tables written inline count on both sides. The folder's own text keeps
-/// its bytes, except an inline `projects` or `secrets` table that takes
-/// canon entries, which becomes a standard table.
-fn merge_canon_config(folder: &str, canon: &str) -> Result<String, Failure> {
+/// `[linked]`: [`refuse_linked_tables`]), each canon `[[secrets.allow]]`
+/// entry for a path below `projects/` the folder does not hold already,
+/// and for each skill the folder `holds` but gives no `[skills.<name>]`
+/// table, the canon's `summary`, `origin` and `installed` of it (its
+/// `enabled` and `source` stay the folder's). Tables written inline count
+/// on both sides. The folder's own text keeps its bytes, except an inline
+/// `projects`, `secrets` or `skills` table that takes canon entries, which
+/// becomes a standard table.
+fn merge_canon_config(
+    folder: &str,
+    canon: &str,
+    holds: impl Fn(&str) -> bool,
+) -> Result<String, Failure> {
     let Ok(mut doc) = folder.parse::<DocumentMut>() else {
         // The rules report the syntax error with its line.
         return Ok(folder.to_owned());
@@ -441,6 +455,21 @@ fn merge_canon_config(folder: &str, canon: &str) -> Result<String, Failure> {
                 && let Some(into) = manifest::subtable(&mut doc, key)
             {
                 into.insert(id, Item::Table(appended(table)));
+                merged = true;
+            }
+        }
+    }
+    let skills = canon.get("skills").and_then(Item::as_table_like);
+    for (name, table) in skills.into_iter().flat_map(|t| t.iter()) {
+        if holds(name)
+            && doc.get("skills").and_then(|kept| kept.get(name)).is_none()
+            && let Ok(mut table) = table.clone().into_table()
+        {
+            table.retain(|key, _| ["summary", "origin", "installed"].contains(&key));
+            if !table.is_empty()
+                && let Some(into) = manifest::subtable(&mut doc, "skills")
+            {
+                into.insert(name, Item::Table(appended(table)));
                 merged = true;
             }
         }
@@ -568,6 +597,8 @@ fn fetch_sources(
 ) -> Result<Vec<Third>, Failure> {
     let manifest = Manifest::parse(manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
+    // Read before anything is fetched, so a broken lock is reported first.
+    let lock = Lockfile::load(repo)?;
     let mut thirds = Vec::new();
     for (name, source) in Folder::sources(&manifest) {
         let refuse = |why: &str| {
@@ -578,7 +609,7 @@ fn fetch_sources(
         };
         let url = &source.url;
         let kind = check_url(url).expect("check_folder refused an unsupported `url`");
-        if let Some(third) = fetched_before(paths, repo, &name, &source, prompts) {
+        if let Some(third) = fetched_before(paths, (repo, &lock), &name, &source, prompts) {
             thirds.push(third);
             continue;
         }
@@ -606,7 +637,7 @@ fn fetch_sources(
 
 /// The third-party skill `name` as the canon holds it, when an earlier
 /// run fetched it from a git upstream as `source` declares it: the repo's
-/// source table names the same `url`, `path` and `ref`, and its lock entry
+/// source table names the same `url`, `path` and `ref`, and its entry in `lock`
 /// has that `ref` and a commit. Its snapshot is `upstream/<name>` when that
 /// matches the entry, else the entry's commit read from the cache (fetched
 /// when the cache lacks it), for a run stopped before it wrote the
@@ -614,14 +645,14 @@ fn fetch_sources(
 /// moved since, and needs the network.
 fn fetched_before(
     paths: &Paths,
-    repo: &Canon,
+    (repo, lock): (&Canon, &Lockfile),
     name: &str,
     source: &SourceRecord,
     prompts: Prompts,
 ) -> Option<Third> {
     let manifest = Manifest::load(repo).ok()?;
     let recorded = manifest.source(name)?;
-    let entry = Lockfile::load(repo).ok()?.entry(name)?;
+    let entry = lock.entry(name)?;
     // A local folder has no commit: it is read again as it is now.
     let commit = entry.commit.clone()?;
     let same = (&recorded.url, &recorded.path, &recorded.git_ref)
@@ -736,8 +767,9 @@ fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
 /// be read, since what leads into it is unknown; when a skill folder or a
 /// group folder of the import folder uses a linked skill's name; and when
 /// a place the closing sync writes ([`sync::write_targets`], its cleanup of
-/// tools that are not enabled included) resolves into a linked folder
-/// (spec "Write targets never reach into a linked folder").
+/// tools that are not enabled included) is one sync's guard refuses
+/// ([`sync::refusal`]): in a linked folder (spec "Write targets never reach
+/// into a linked folder") or in the canon.
 fn linked_folders(
     paths: &Paths,
     repo: &Canon,
@@ -783,15 +815,19 @@ fn linked_folders(
             lines.join("\n")
         )));
     }
-    // Every place the closing sync writes, its cleanup included.
+    // Every place the closing sync writes, its cleanup included: the
+    // takeover moves nothing from where sync's guard writes nothing.
     let lines: Vec<String> = sync::write_targets(paths.home(), manifest)
         .iter()
-        .filter_map(|t| linked.refusal(&t.path, &t.lands))
+        .filter_map(|t| {
+            let file = t.place == Place::Instructions;
+            sync::refusal((repo, &linked), (&t.path, &t.lands, file))
+        })
         .map(|why| format!("  {why}"))
         .collect();
     if !lines.is_empty() {
         return Err(Failure::refused(format!(
-            "refusing to import {}: it would write into a linked folder; nothing was changed:\n{}",
+            "refusing to import {}: it would write into a linked folder or the canon; nothing was changed:\n{}",
             content.root.display(),
             lines.join("\n")
         )));
@@ -849,8 +885,9 @@ struct Plan {
 impl Plan {
     /// Classifies every entry of every installed tool's tool directory (tool
     /// directories resolving to one real directory once) and every
-    /// instruction location, as sync would after the import. Refuses (exit
-    /// 1) what [`linked_folders`] refuses.
+    /// instruction location, as sync would after the import. Refuses (exit 1)
+    /// what [`linked_folders`] refuses, and an installed tool's directory
+    /// whose [`resolution`] passes through an entry that moves.
     fn make(
         paths: &Paths,
         repo: &Canon,
@@ -931,6 +968,30 @@ impl Plan {
         })?;
         plan.moves
             .extend(order.into_iter().map(|i| entries[i].clone()));
+        // A tool directory resolved through an entry that moves would lead
+        // nowhere once it moved, and sync could not write there.
+        let lines: Vec<String> = sync::installed_tools(home, manifest)
+            .map(|tool| tool.tool_dir(home))
+            .filter_map(|dir| {
+                let hops = resolution(&dir);
+                let entry = plan
+                    .moves
+                    .iter()
+                    .find(|m| hops.iter().any(|hop| hop.starts_with(&m.real)))?;
+                Some(format!(
+                    "  {}: through {}",
+                    dir.display(),
+                    entry.path.display()
+                ))
+            })
+            .collect();
+        if !lines.is_empty() {
+            return Err(Failure::refused(format!(
+                "refusing to import {}: these tool directories lead through an entry the import moves to the backup, after which they would lead nowhere; replace each with a real folder, nothing was changed:\n{}",
+                content.root.display(),
+                lines.join("\n")
+            )));
+        }
         let mut seen = BTreeSet::new();
         for tool in sync::installed_tools(home, manifest) {
             let path = home.join(tool.instruction_file);
@@ -1678,9 +1739,9 @@ mod tests {
             ),
         ];
         for (canon, folder) in cases {
-            let merged = merge_canon_config(&folder, &canon).unwrap();
+            let merged = merge_canon_config(&folder, &canon, |_| true).unwrap();
             assert_eq!(
-                merge_canon_config(&folder, &merged).unwrap(),
+                merge_canon_config(&folder, &merged, |_| true).unwrap(),
                 merged,
                 "canon:\n{canon}\nfolder:\n{folder}"
             );

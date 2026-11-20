@@ -16,8 +16,10 @@ use crate::tree::is_ignored;
 /// link (an id no longer registered, missing or breaking a rule, or a
 /// temporary name a killed sync left). Returns the ids whose link is
 /// confirmed to point at the registered path: only their skills are offered
-/// to the tool directories. For [`Output::Plan`] nothing is written, and
-/// the ids returned are those whose link is there or would be made.
+/// to the tool directories. With no registration left, `linked` itself
+/// goes too once nothing else is in it; like its making, that is not
+/// reported. For [`Output::Plan`] nothing is written, and the ids returned
+/// are those whose link is there or would be made.
 pub fn reconcile(linked: &Linked, output: Output, report: &mut Report) -> BTreeSet<String> {
     let dir = linked.dir();
     let mut confirmed = BTreeSet::new();
@@ -143,6 +145,10 @@ pub fn reconcile(linked: &Linked, output: Output, report: &mut Report) -> BTreeS
             }
             None => {}
         }
+    }
+    // Fails, and changes nothing, while anything is left in it.
+    if linked.folders.is_empty() && output != Output::Plan {
+        let _ = std::fs::remove_dir(dir);
     }
     confirmed
 }

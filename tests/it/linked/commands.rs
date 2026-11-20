@@ -382,6 +382,39 @@ fn linked_remove_works_when_the_folder_is_gone() {
     assert!(std::fs::symlink_metadata(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).is_err());
 }
 
+/// With the last registration gone, sync removes the empty `linked/`
+/// (`doctor` writes nothing) and keeps one that holds a file of the
+/// user's; the next `linked add` makes it again.
+#[test]
+fn removing_the_last_linked_folder_removes_the_empty_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    linked_add(&sandbox, &[&company]).code(0);
+    let linked = sandbox.canon().join("linked");
+
+    sandbox
+        .skiman()
+        .args(["linked", "remove", "company"])
+        .assert()
+        .code(0);
+    assert!(std::fs::symlink_metadata(&linked).is_err());
+
+    std::fs::create_dir(&linked).unwrap();
+    sandbox.skiman().arg("doctor").output().unwrap();
+    assert!(linked.is_dir(), "doctor removed linked/");
+    sandbox.skiman().arg("sync").assert().code(0);
+    assert!(std::fs::symlink_metadata(&linked).is_err());
+
+    write(linked.join("notes.txt"), "mine");
+    sandbox.skiman().arg("sync").output().unwrap();
+    assert_eq!(read(linked.join("notes.txt")), "mine");
+    std::fs::remove_file(linked.join("notes.txt")).unwrap();
+
+    linked_add(&sandbox, &[&company]).code(0);
+    assert!(std::fs::symlink_metadata(linked.join("company")).is_ok());
+}
+
 /// A `linked add` killed right before it writes `skiman.toml` (after the
 /// `.gitignore` line) is finished by running it again.
 #[test]

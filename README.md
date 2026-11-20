@@ -113,8 +113,8 @@ canon's and never writes into it.
   The next sync links it again. A sync between the two steps sees the
   folder missing and removes its links until then.
 - To stop using the folder, run `skiman linked remove <id>`. It removes the
-  table, `linked/<id>` and every link to its skills. The folder's content
-  stays.
+  table, `linked/<id>` and every link to its skills, and `linked/` when it
+  is empty and no linked folder is left. The folder's content stays.
 - On a machine where the folder does not exist, sync reports it and goes
   on (the session-start hook reports it once). The skills come back when
   the folder does. Each machine has its own checkout of the canon, and

@@ -67,8 +67,9 @@ pub enum State {
     Broken(String),
     /// Nothing is at the path on this machine (exit 0).
     Missing,
-    /// The folder, an entry's own metadata, or the path to it cannot be
-    /// read (exit 3): its links and names stay exactly as they are.
+    /// The folder, its top-level `SKILL.md` (its shape is then unknown),
+    /// an entry's own metadata, or the path to it cannot be read (exit 3):
+    /// its links and names stay exactly as they are.
     Unreadable(String),
     Read(Contents),
 }
@@ -143,32 +144,29 @@ impl Linked {
 
     /// The linked skill `name`: the first folder, in id order, that holds a
     /// skill of that name (one whose `SKILL.md` cannot be probed included),
-    /// and the skill's folder. Distributed or not. While a folder is one
-    /// skill only through `kept` ([`Linked::is_single`]), its sub-folders
-    /// are no linked skills here either.
-    pub fn skill(&self, name: &str, kept: &BTreeMap<String, Holder>) -> Option<(&Folder, PathBuf)> {
+    /// and the skill's folder. Distributed or not.
+    pub fn skill(&self, name: &str) -> Option<(&Folder, PathBuf)> {
         self.folders.iter().find_map(|folder| {
             let State::Read(contents) = &folder.state else {
                 return None;
             };
-            // The single-skill shape, probed or not: the registered path.
-            if folder.id == name && (contents.single || contents.top_unprobed.is_some()) {
+            // The single-skill shape: the registered path.
+            if folder.id == name && contents.single {
                 return Some((folder, folder.path.clone().unwrap_or_default()));
             }
-            let holds = !Linked::is_single(folder, kept)
-                && contents
-                    .skills
-                    .iter()
-                    .chain(contents.unprobed.iter().map(|(n, _)| n))
-                    .any(|n| n == name);
+            let holds = contents
+                .skills
+                .iter()
+                .chain(contents.unprobed.iter().map(|(n, _)| n))
+                .any(|n| n == name);
             holds.then(|| (folder, folder.skill_dir(name)))
         })
     }
 
     /// The linked skill `name` as messages name it, "a linked skill in <its
     /// folder>, in linked folder `<id>`", and the linked folder's id.
-    pub fn described(&self, name: &str, kept: &BTreeMap<String, Holder>) -> Option<(String, &str)> {
-        let (folder, dir) = self.skill(name, kept)?;
+    pub fn described(&self, name: &str) -> Option<(String, &str)> {
+        let (folder, dir) = self.skill(name)?;
         Some((
             format!(
                 "a linked skill in {}, in linked folder `{}`",
@@ -189,7 +187,7 @@ impl Linked {
         kept: &'a BTreeMap<String, Holder>,
     ) -> Option<(String, &'a str)> {
         let edited = "it is edited there, and skiman never changes it";
-        if let Some((it, id)) = self.described(name, kept) {
+        if let Some((it, id)) = self.described(name) {
             return Some((format!("{name} is {it}; {edited}"), id));
         }
         let Holder::Kept(id) = kept.get(name)? else {
@@ -318,18 +316,14 @@ impl Linked {
     pub fn keeps_any(&self) -> bool {
         self.folders.iter().any(|f| match &f.state {
             State::Unreadable(_) => true,
-            State::Read(contents) => {
-                !contents.unprobed.is_empty() || contents.top_unprobed.is_some()
-            }
+            State::Read(contents) => !contents.unprobed.is_empty(),
             _ => false,
         })
     }
 
     /// What keeps a tool-directory link to `target` exactly as it is, with
     /// its name: the folder that cannot be read when `target` lies in its
-    /// `<canon>/linked/<id>`, the folder's top-level `SKILL.md` that cannot
-    /// be probed when `target` is `<canon>/linked/<id>` itself (the
-    /// single-skill shape), or the linked skill whose `SKILL.md` cannot be
+    /// `<canon>/linked/<id>`, or the linked skill whose `SKILL.md` cannot be
     /// probed when it lies in that skill's target.
     pub fn keeper(&self, target: &Path) -> Option<Holder> {
         self.folders.iter().find_map(|folder| {
@@ -342,9 +336,6 @@ impl Linked {
                 State::Unreadable(_) => target
                     .starts_with(&link)
                     .then(|| Holder::Kept(folder.id.clone())),
-                State::Read(contents) if contents.top_unprobed.is_some() && target == link => {
-                    Some(Holder::Single(folder.id.clone()))
-                }
                 State::Read(contents) => contents
                     .unprobed
                     .iter()
@@ -363,9 +354,7 @@ impl Linked {
     /// `skills/` (`layout`) holds its name, enabled or not, and so does
     /// every group folder (ADR 0009); then the folder whose id sorts
     /// first. A skill whose `SKILL.md` cannot be probed holds a name only
-    /// through `kept`, so it never takes a name it did not hold; nor do the
-    /// sub-folders of a single skill whose top-level `SKILL.md` cannot be
-    /// probed ([`Linked::skill_names`]).
+    /// through `kept`, so it never takes a name it did not hold.
     pub fn names(
         &self,
         layout: &Layout,
@@ -376,7 +365,7 @@ impl Linked {
         let mut wanted = Vec::new();
         let mut collisions = Vec::new();
         for folder in self.folders.iter().filter(|f| offers(&f.id)) {
-            for name in Linked::skill_names(folder, kept) {
+            for name in Linked::skill_names(folder) {
                 let holder = if let Some(holder) = kept.get(&name) {
                     Some(holder.clone())
                 } else if let Some(placed) = layout.find(&name) {
@@ -405,40 +394,26 @@ impl Linked {
 
     /// The names of `folder`'s linked skills, in name order, as every
     /// command reads them: the id for a folder that is one skill, none for
-    /// a folder that was not read, and none while [`Linked::is_single`]
-    /// holds only through `kept` (it stays one skill until its top-level
-    /// `SKILL.md` can be probed; [`Linked::shown`] shows it as that one
-    /// skill). Its sub-folders' targets stay protected all the same.
-    pub fn skill_names(folder: &Folder, kept: &BTreeMap<String, Holder>) -> Vec<String> {
+    /// a folder that was not read.
+    pub fn skill_names(folder: &Folder) -> Vec<String> {
         match &folder.state {
             State::Read(contents) if contents.single => vec![folder.id.clone()],
-            State::Read(_) if Linked::is_single(folder, kept) => Vec::new(),
             State::Read(contents) => contents.skills.clone(),
             _ => Vec::new(),
         }
     }
 
-    /// Whether `folder` is one skill: read as one, or its top-level
-    /// `SKILL.md` cannot be probed while the tool directories keep a link
-    /// `<id> -> <canon>/linked/<id>` (`kept` holds [`Holder::Single`]), so
-    /// it was one, whatever its sub-folders hold.
-    pub fn is_single(folder: &Folder, kept: &BTreeMap<String, Holder>) -> bool {
-        let State::Read(contents) = &folder.state else {
-            return false;
-        };
-        contents.single
-            || (contents.top_unprobed.is_some()
-                && kept.get(&folder.id) == Some(&Holder::Single(folder.id.clone())))
+    /// Whether `folder` was read as one skill.
+    pub fn is_single(folder: &Folder) -> bool {
+        matches!(&folder.state, State::Read(contents) if contents.single)
     }
 
     /// What `list` and `overview` show of each folder, in id order (spec
     /// "Display"): one not on this machine, or the linked skills of one that
     /// was read, each with the skill that holds its name when it lost a
     /// collision ([`Linked::names`] with every folder taking part and the
-    /// names `kept` in the tool directories); a folder that is one skill
-    /// only through `kept` ([`Linked::is_single`]) shows that skill. A
-    /// folder that breaks a rule or cannot be read is left out: sync,
-    /// `check` and `doctor` report it.
+    /// names `kept` in the tool directories). A folder that breaks a rule
+    /// or cannot be read is left out: sync, `check` and `doctor` report it.
     pub fn shown(&self, layout: &Layout, kept: &BTreeMap<String, Holder>) -> Vec<(&Folder, Shown)> {
         let (_, collisions) = self.names(layout, kept, |_| true);
         self.folders
@@ -446,14 +421,8 @@ impl Linked {
             .filter_map(|folder| {
                 let shown = match &folder.state {
                     State::Missing => Shown::Missing,
-                    // One skill only through its kept link, which holds the name.
-                    State::Read(contents)
-                        if !contents.single && Linked::is_single(folder, kept) =>
-                    {
-                        Shown::Skills(vec![(folder.id.clone(), None)])
-                    }
                     State::Read(_) => Shown::Skills(
-                        Linked::skill_names(folder, kept)
+                        Linked::skill_names(folder)
                             .into_iter()
                             .map(|name| {
                                 let lost = collisions
@@ -553,20 +522,11 @@ pub enum Holder {
     /// A link kept for the linked skill `name` of folder `id`, whose
     /// `SKILL.md` cannot be probed now.
     Unprobed { id: String, name: String },
-    /// A link `<id> -> <canon>/linked/<id>` kept for folder `id`, one skill
-    /// whose top-level `SKILL.md` cannot be probed now.
-    Single(String),
 }
 
 /// What holds the name, as sync, `check`, `doctor`, `list` and `overview` say it.
 impl std::fmt::Display for Holder {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let unprobed = |f: &mut std::fmt::Formatter, id: &str, name: &str| {
-            write!(
-                f,
-                "linked skill {name} of `{id}`, whose SKILL.md cannot be read now, keeps the name"
-            )
-        };
         match self {
             Holder::Canon(path) => write!(f, "the skill folder {path} uses the name"),
             Holder::Group(path) => write!(f, "the group folder {path} uses the name"),
@@ -575,8 +535,10 @@ impl std::fmt::Display for Holder {
                 f,
                 "linked folder `{id}`, which cannot be read now, keeps the name"
             ),
-            Holder::Unprobed { id, name } => unprobed(f, id, name),
-            Holder::Single(id) => unprobed(f, id, id),
+            Holder::Unprobed { id, name } => write!(
+                f,
+                "linked skill {name} of `{id}`, whose SKILL.md cannot be read now, keeps the name"
+            ),
         }
     }
 }

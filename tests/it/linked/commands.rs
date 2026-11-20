@@ -465,10 +465,11 @@ fn a_second_run_syncs_a_folder_that_is_gone_or_cannot_be_read() {
 }
 
 /// Run again while a single skill's top-level `SKILL.md` cannot be probed,
-/// `linked add` describes it as one skill, as sync reads it, not its
-/// sub-folders.
+/// `linked add` reads the folder as sync does, as one that cannot be read:
+/// it describes no skill, its sub-folders included, and returns sync's
+/// exit 3.
 #[test]
-fn a_second_run_describes_a_single_skill_that_cannot_be_probed_as_one_skill() {
+fn a_second_run_describes_no_skill_while_the_top_level_skill_md_cannot_be_probed() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let locked = super::unprobed_single(&sandbox);
@@ -484,6 +485,12 @@ fn a_second_run_describes_a_single_skill_that_cannot_be_probed_as_one_skill() {
 
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("it is one skill: solo\n"), "{stdout}");
-    assert!(!stdout.contains("kid"), "{stdout}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("linked folder `solo` is not read ("),
+        "{stderr}"
+    );
+    for line in ["it is one skill", "its skills", "kid"] {
+        assert!(!stdout.contains(line), "{line}\n{stdout}");
+    }
 }

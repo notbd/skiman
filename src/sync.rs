@@ -375,7 +375,7 @@ pub fn reconcile(
             .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
     }
     let kept = kept_names(paths, repo, manifest, linked);
-    linked::canon::report_folders(linked, &kept, &mut report);
+    linked::canon::report_folders(linked, &mut report);
     let offered = linked::canon::reconcile(linked, &mut report);
     let ownership = Ownership::new(paths, repo, previous_canon);
     let offers = |id: &str| offered.contains(id);
@@ -686,10 +686,8 @@ pub fn installed_tools<'a>(
 
 /// The names that links [`Linked::keeper`] keeps in the installed tool
 /// directories, with what keeps each: a transient read error never hands
-/// a name to another skill. A [`Holder::Single`] link in any tool
-/// directory decides the name, whatever the others hold. Reads the tool
-/// directories only while some link may be kept. Sync and every command
-/// that shows a winner use it.
+/// a name to another skill. Reads the tool directories only while some
+/// link may be kept. Sync and every command that shows a winner use it.
 pub fn kept_names(
     paths: &Paths,
     repo: &Canon,
@@ -713,9 +711,7 @@ pub fn kept_names(
             {
                 let name = fsutil::temporary_of(&name).unwrap_or(&name);
                 let name = name.to_string_lossy().into_owned();
-                if !matches!(kept.get(&name), Some(Holder::Single(_))) {
-                    kept.insert(name, holder);
-                }
+                kept.insert(name, holder);
             }
         }
     }

@@ -266,13 +266,13 @@ fn check_warns_about_what_cannot_be_read_without_changing_the_exit() {
     }
 }
 
-/// While a single skill's top-level `SKILL.md` cannot be probed and its
-/// link is kept, its sub-folders are no linked skills for `check`, sync or
-/// `doctor`: each says only that the single skill is not checked, and none
-/// shows a sub-folder's layout problem (an invalid name, a dangling link)
-/// or a sub-folder whose `SKILL.md` cannot be probed (`hidden`).
+/// While a single skill's top-level `SKILL.md` cannot be probed, the whole
+/// id is not read for `check`, sync or `doctor`: each says only that the
+/// folder is not read, and none shows a sub-folder's layout problem (an
+/// invalid name, a dangling link) or a sub-folder whose `SKILL.md` cannot
+/// be probed (`hidden`).
 #[test]
-fn no_command_reads_below_a_single_skill_that_cannot_be_probed() {
+fn no_command_reads_below_a_top_level_skill_md_that_cannot_be_probed() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let locked = super::unprobed_single(&sandbox);
@@ -294,7 +294,7 @@ fn no_command_reads_below_a_single_skill_that_cannot_be_probed() {
 
     for (command, text) in outputs {
         assert!(
-            text.contains("linked skill solo of `solo` is not checked ("),
+            text.contains("linked folder `solo` is not read ("),
             "{command}\n{text}"
         );
         for child in ["kid", "Bad_Name", "dangling", "hidden"] {

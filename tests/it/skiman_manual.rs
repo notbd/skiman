@@ -110,6 +110,10 @@ fn skiman_manual_covers_every_everyday_operation() {
             "register a project root",
             "skiman project add <path>".to_owned(),
         ),
+        (
+            "a project conflict is the user's choice",
+            "the choice is the user's".to_owned(),
+        ),
         ("tool directories", "~/.claude/skills".to_owned()),
         ("tool directories", "~/.agents/skills".to_owned()),
         ("tool directories", "~/.gemini/config/skills".to_owned()),

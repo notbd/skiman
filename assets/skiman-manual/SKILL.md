@@ -222,8 +222,10 @@ copies every change made in the project into it at each sync.
   under `projects/`: a change there reaches the project only through
   `skiman project restore <item path> --yes`.
 - After creating a project `AGENTS.md`, rules file or project skill under a
-  project root, run `skiman project adopt <its path> --yes`. Files a
-  project's own git repo tracks are left to that repo.
+  project root, run `skiman project adopt <its path> --dry-run`, then the
+  same with `--yes`. If the plan says `keep the project's version of`, the
+  mirror already holds another version: ask the user first (see below).
+  Files a project's own git repo tracks are left to that repo.
 - To compare the two sides, use `diff` or `git diff`; do not open files under
   `projects/` (an agent tool that reads a file in a folder loads that
   folder's instructions).
@@ -231,8 +233,19 @@ copies every change made in the project into it at each sync.
   run: `skiman project adopt <item path> --yes` keeps the project's version,
   `skiman project restore <item path> --yes` the mirror's; the other goes to
   a backup. Only the exact path of one item settles a conflict.
+- When both sides of an item changed (`it and its mirror both changed`),
+  the choice is the user's: show the user the difference and run the
+  command for the version the user keeps.
+- `its project folder is gone`: if the folder moved, adopt the item at its
+  new path, then forget the old one: run the
+  `skiman project eject <old folder>` the message names, with `--yes`. To
+  bring the item back from the mirror instead, create the folder again;
+  the next `skiman sync` reports the item as deleted in the project, with
+  the `skiman project restore <item path> --yes` that writes it.
 - `skiman project eject <path> --yes` stops managing what is under `<path>`;
-  the project files stay.
+  the project files stay. When another machine pulls the eject of a path
+  inside a project root, its sync reports each ejected item as deleted in
+  the mirror: run the eject for that path there too, which only forgets them.
 
 ## Bring in a foreign skill
 

@@ -244,6 +244,12 @@ impl Records {
         })
     }
 
+    /// `skiman.toml` for its readers outside the rules, when it parsed.
+    pub fn manifest(&self) -> Option<crate::manifest::Manifest> {
+        self.manifest.doc.as_ref()?;
+        crate::manifest::Manifest::parse(&self.manifest.text).ok()
+    }
+
     /// Whether `skiman.toml` parsed.
     pub fn manifest_parsed(&self) -> bool {
         self.manifest.doc.is_some()

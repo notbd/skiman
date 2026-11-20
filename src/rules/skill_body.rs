@@ -26,10 +26,12 @@ pub fn warning(skill_md: &[u8], enabled: &[String]) -> Option<String> {
     })
 }
 
-/// The warning for each canon skill's `SKILL.md`.
+/// The warning for each canon skill's `SKILL.md`, from `records` and
+/// `layout` as read from `tree`.
 pub(super) fn warnings(
     tree: &dyn Tree,
     records: &Records,
+    layout: &Layout,
     out: &mut BTreeSet<Violation>,
 ) -> io::Result<()> {
     let Some(enabled) = records.enabled_tools() else {
@@ -38,7 +40,7 @@ pub(super) fn warnings(
     if smallest_limit(&enabled).is_none() {
         return Ok(());
     }
-    for placed in Layout::read(tree)?.skills() {
+    for placed in layout.skills() {
         if tree.kind(&placed.path())? != Some(Kind::Dir) {
             continue;
         }

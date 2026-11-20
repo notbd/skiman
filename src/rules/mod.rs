@@ -3,17 +3,15 @@
 //!
 //! Entry points:
 //! - [`check_all`]: every rule on a whole [`Tree`] (the warnings a write
-//!   command prints); [`check_canon`] adds the unused secret exemptions
-//!   (`skiman check`).
+//!   command prints); [`check_canon`]: all `skiman check` reports, from one
+//!   reading of `skiman.toml`, `skiman.lock` and the layout.
 //! - [`check`]: only what a [`Scope`] names: what a write command writes.
 //! - [`allow_hint`]: the ready-to-paste `[[secrets.allow]]` entries for the
 //!   secret violations in a list.
 //!
-//! [`warnings_all`] returns what is printed as a warning but never fails:
-//! the shared body at 80 % of its size limit, and a skill body that an
-//! enabled tool cuts. [`missing_info`] returns the
-//! skills without a summary, group folder or origin, which only `skiman check`
-//! prints (every write command prints [`warnings_all`]).
+//! A warning is printed but never fails: the shared body at 80 % of its size
+//! limit, and a skill body that an enabled tool cuts. A skill without a
+//! summary, group folder or origin is reported only by `skiman check`.
 //!
 //! Both work on any [`Tree`]: the working tree, an [`crate::tree::Overlay`]
 //! of content about to be written, or another snapshot.
@@ -28,6 +26,7 @@ mod skill;
 pub mod skill_body;
 mod skill_info;
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
@@ -41,7 +40,6 @@ use crate::tree::{Kind, Tree};
 pub use config::{LOCKFILE, MANIFEST};
 pub use secrets::AllowEntry;
 pub use skill::{CONFLICT_MARKERS, CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR, unresolved_conflicts};
-pub use skill_info::gaps as missing_info;
 
 /// Rule ids, printed with every violation.
 pub mod rule {
@@ -229,8 +227,12 @@ pub struct Scope {
 impl Scope {
     /// Everything in `tree`: what `skiman check` validates.
     pub fn all(tree: &dyn Tree) -> io::Result<Scope> {
-        let records = config::Records::read(tree)?;
-        let skills = Layout::read(tree)?.names();
+        Scope::of(tree, &config::Records::read(tree)?, &Layout::read(tree)?)
+    }
+
+    /// [`Scope::all`] from `records` and `layout` as read from `tree`.
+    fn of(tree: &dyn Tree, records: &config::Records, layout: &Layout) -> io::Result<Scope> {
+        let skills = layout.names();
         let mut consistency: BTreeSet<String> = skills.iter().cloned().collect();
         let upstreams = folder_names(tree, "upstream")?;
         consistency.extend(upstreams.iter().cloned());
@@ -252,7 +254,7 @@ impl Scope {
             lock_entries: records.lock_skills(),
             lock: true,
             consistency,
-            projects: project::item_paths(tree, &records)?,
+            projects: project::item_paths(tree, records)?,
             project_layout: true,
         })
     }
@@ -286,19 +288,14 @@ pub fn consistent(tree: &dyn Tree) -> io::Result<bool> {
     let records = config::Records::read(tree)?;
     let mut out = BTreeSet::new();
     let layout = Layout::read(tree)?;
-    consistency::check(
-        tree,
-        &layout,
-        &records,
-        &Scope::all(tree)?.consistency,
-        &mut out,
-    )?;
+    let names = Scope::of(tree, &records, &layout)?.consistency;
+    consistency::check(tree, &layout, &records, &names, &mut out)?;
     Ok(records.parsed() && out.is_empty())
 }
 
 /// Every rule on everything in `tree`, sorted by path and line.
 pub fn check_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
-    check(tree, &Scope::all(tree)?)
+    Ok(run(tree, None)?.0)
 }
 
 /// What `skiman check` reports.
@@ -308,6 +305,13 @@ pub struct Report {
     pub violations: Vec<Violation>,
     /// `[[secrets.allow]]` entries that cover no match: listed, not violations.
     pub unused_allows: Vec<UnusedAllow>,
+    /// Printed as warnings, sorted by path and line.
+    pub warnings: Vec<Violation>,
+    /// The skills without a summary, group folder or origin (warnings).
+    pub missing_info: Vec<Violation>,
+    /// `skiman.toml` as the rules read it, when it parses: for what is
+    /// checked outside the rules (linked skills).
+    pub manifest: Option<crate::manifest::Manifest>,
 }
 
 /// A `[[secrets.allow]]` entry none of whose covered paths has its match.
@@ -335,9 +339,9 @@ impl fmt::Display for UnusedAllow {
     }
 }
 
-/// Every rule on everything in `tree`, plus the unused secret exemptions.
+/// Everything `skiman check` reports on `tree`.
 pub fn check_canon(tree: &dyn Tree) -> io::Result<Report> {
-    let (violations, found, records) = run(tree, &Scope::all(tree)?)?;
+    let (violations, found, records, layout) = run(tree, None)?;
     let unused_allows = records
         .secret_allows()
         .into_iter()
@@ -347,23 +351,32 @@ pub fn check_canon(tree: &dyn Tree) -> io::Result<Report> {
     Ok(Report {
         violations,
         unused_allows,
+        warnings: warnings(tree, &records, &layout)?,
+        missing_info: skill_info::gaps(tree, &records, &layout)?,
+        manifest: records.manifest(),
     })
 }
 
 /// The rules on what `scope` names, sorted by path and line.
 pub fn check(tree: &dyn Tree, scope: &Scope) -> io::Result<Vec<Violation>> {
-    Ok(run(tree, scope)?.0)
+    Ok(run(tree, Some(scope))?.0)
 }
 
-/// The violations, every secret match (exempted or not) and the config records.
-fn run(
-    tree: &dyn Tree,
-    scope: &Scope,
-) -> io::Result<(Vec<Violation>, Vec<secrets::Found>, config::Records)> {
-    let mut out = BTreeSet::new();
-    let mut found = Vec::new();
+/// What [`run`] returns.
+type Run = (Vec<Violation>, Vec<secrets::Found>, config::Records, Layout);
+
+/// The rules on what `scope` names (everything when `None`): the
+/// violations, every secret match (exempted or not), and the records and
+/// layout they read, each read once here.
+fn run(tree: &dyn Tree, scope: Option<&Scope>) -> io::Result<Run> {
     let records = config::Records::read(tree)?;
     let layout = Layout::read(tree)?;
+    let scope = match scope {
+        Some(scope) => Cow::Borrowed(scope),
+        None => Cow::Owned(Scope::of(tree, &records, &layout)?),
+    };
+    let mut out = BTreeSet::new();
+    let mut found = Vec::new();
     for name in &scope.skills {
         skill::check_skill(tree, &layout, name, &mut out, &mut found)?;
     }
@@ -402,7 +415,7 @@ fn run(
     for path in &scope.projects {
         project::check_item(tree, path, &mut out, &mut found)?;
     }
-    records.check(scope, &mut out);
+    records.check(&scope, &mut out);
     consistency::check(tree, &layout, &records, &scope.consistency, &mut out)?;
     // Exemptions name a skill's files without its group.
     for f in &mut found {
@@ -414,7 +427,7 @@ fn run(
             out.insert(Violation::secret(f));
         }
     }
-    Ok((out.into_iter().collect(), found, records))
+    Ok((out.into_iter().collect(), found, records, layout))
 }
 
 /// The ready-to-paste `[[secrets.allow]]` entries for the secret violations
@@ -434,11 +447,14 @@ pub fn allow_hint(violations: &[Violation]) -> Option<String> {
 }
 
 /// Warnings on everything in `tree`, sorted by path and line.
-pub fn warnings_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
+fn warnings(
+    tree: &dyn Tree,
+    records: &config::Records,
+    layout: &Layout,
+) -> io::Result<Vec<Violation>> {
     let mut out = BTreeSet::new();
-    let records = config::Records::read(tree)?;
-    shared_body::warnings(tree, &records, &mut out)?;
-    skill_body::warnings(tree, &records, &mut out)?;
+    shared_body::warnings(tree, records, &mut out)?;
+    skill_body::warnings(tree, records, layout, &mut out)?;
     Ok(out.into_iter().collect())
 }
 
@@ -489,12 +505,13 @@ pub fn refuse_write(
 /// The warning half of [`validate_write`]: every violation in `tree` but
 /// those `excused` accepts, printed to stderr.
 pub fn warn(tree: &dyn Tree, excused: &dyn Fn(&Violation) -> bool) -> Result<(), Failure> {
-    for violation in check_all(tree).map_err(unreadable)? {
+    let (violations, _, records, layout) = run(tree, None).map_err(unreadable)?;
+    for violation in violations {
         if !excused(&violation) {
             err!("warning: {violation}");
         }
     }
-    for warning in warnings_all(tree).map_err(unreadable)? {
+    for warning in warnings(tree, &records, &layout).map_err(unreadable)? {
         err!("warning: {warning}");
     }
     Ok(())

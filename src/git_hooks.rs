@@ -26,10 +26,11 @@ pub fn hook_names() -> impl Iterator<Item = &'static str> {
 pub struct Installed {
     /// Hook files written (absent before, or skiman's with other content).
     pub written: Vec<PathBuf>,
-    /// Hook files that are not skiman's, left unchanged.
+    /// Hook files that are not skiman's and lack the line to add, left unchanged.
     pub foreign: Vec<PathBuf>,
-    /// `core.hooksPath` points away from the repo's own hooks folder: nothing was written.
-    pub hooks_path_elsewhere: Option<PathBuf>,
+    /// `core.hooksPath` points away from the repo's own hooks folder: nothing
+    /// was written. With the hooks there that lack the line to add.
+    pub hooks_path_elsewhere: Option<(PathBuf, Vec<&'static str>)>,
     /// The canon is not in a git repo: nothing was written.
     pub not_a_git_repo: bool,
 }
@@ -44,7 +45,14 @@ pub fn install(repo_root: &Path, binary: &Path) -> Result<Installed, Failure> {
         return Ok(installed);
     };
     if hooks_dir != own_dir {
-        installed.hooks_path_elsewhere = Some(hooks_dir);
+        let lacking = hook_names()
+            .filter(|name| {
+                !std::fs::read(hooks_dir.join(name)).is_ok_and(|current| {
+                    current == script(name, binary).as_bytes() || holds_line(&current, name, binary)
+                })
+            })
+            .collect();
+        installed.hooks_path_elsewhere = Some((hooks_dir, lacking));
         return Ok(installed);
     }
     let io_error = |path: &Path, e: std::io::Error| {
@@ -57,7 +65,9 @@ pub fn install(repo_root: &Path, binary: &Path) -> Result<Installed, Failure> {
         match std::fs::read(&path) {
             Ok(current) if current == wanted.as_bytes() => continue,
             Ok(current) if !is_skimans(&current) => {
-                installed.foreign.push(path);
+                if !holds_line(&current, name, binary) {
+                    installed.foreign.push(path);
+                }
                 continue;
             }
             Ok(_) => {}
@@ -122,10 +132,7 @@ pub fn status(repo_root: &Path, binary: &Path) -> Result<Status, Failure> {
                         Hook::Installed
                     } else if is_skimans(&current) {
                         Hook::Outdated
-                    } else if current
-                        .split(|b| *b == b'\n')
-                        .any(|line| line.trim_ascii() == line_to_add(name, binary).as_bytes())
-                    {
+                    } else if holds_line(&current, name, binary) {
                         Hook::HoldsLine
                     } else {
                         Hook::Foreign
@@ -148,6 +155,14 @@ pub fn status(repo_root: &Path, binary: &Path) -> Result<Status, Failure> {
         dir: hooks_dir,
         hooks,
     })
+}
+
+/// Whether a hook file holds the line [`line_to_add`] gives.
+fn holds_line(content: &[u8], name: &str, binary: &Path) -> bool {
+    let line = line_to_add(name, binary);
+    content
+        .split(|b| *b == b'\n')
+        .any(|l| l.trim_ascii() == line.as_bytes())
 }
 
 fn is_skimans(content: &[u8]) -> bool {

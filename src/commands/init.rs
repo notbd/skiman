@@ -248,12 +248,18 @@ fn install_git_hooks(repo: &Canon, binary: &Path) -> Result<(), Failure> {
             git_hooks::line_to_add(&name, binary)
         );
     }
-    if let Some(dir) = &installed.hooks_path_elsewhere {
+    if let Some((dir, lacking)) = &installed.hooks_path_elsewhere
+        && !lacking.is_empty()
+    {
+        let what = match lacking.len() {
+            1 => "this line to the hook",
+            _ => "these lines to the hooks",
+        };
         err!(
-            "warning: core.hooksPath points to {}, so skiman installed no git hooks; add these lines to the hooks there:",
+            "warning: core.hooksPath points to {}, so skiman installed no git hooks; add {what} there:",
             dir.display()
         );
-        for name in git_hooks::hook_names() {
+        for name in lacking {
             err!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
         }
     }

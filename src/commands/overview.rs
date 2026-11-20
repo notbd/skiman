@@ -70,7 +70,7 @@ fn overview() -> Result<Exit, Failure> {
         }
         count += 1;
         let info = manifest.info(name);
-        let conflicts = !rules::unresolved_conflicts(&tree, name)
+        let conflicts = !rules::unresolved_conflicts(&tree, &path)
             .map_err(io)?
             .is_empty();
         let (kind, source, modified) = match manifest.source(name) {

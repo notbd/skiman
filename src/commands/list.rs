@@ -44,7 +44,7 @@ fn list() -> Result<Exit, Failure> {
         if tree.kind(&placed.path()).map_err(io)? != Some(Kind::Dir) {
             continue;
         }
-        let conflicts = !rules::unresolved_conflicts(&tree, &name)
+        let conflicts = !rules::unresolved_conflicts(&tree, &placed.path())
             .map_err(io)?
             .is_empty();
         let enabled = enabled.get(&name).is_none_or(|e| e.enabled);

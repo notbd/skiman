@@ -270,6 +270,23 @@ fn check_entry(
     Ok(())
 }
 
+/// The unresolved-conflict violations in the skill folder `dir` (spec
+/// Merge semantics: markers, conflict records, `.skiman-conflicts`), sorted
+/// by path and line: only the conflict rules of [`check_entry`].
+pub fn unresolved_conflicts(tree: &dyn Tree, dir: &str) -> io::Result<Vec<Violation>> {
+    let mut out = BTreeSet::new();
+    for entry in tree.walk(dir)? {
+        if is_ignored(&entry.path) {
+            continue;
+        }
+        check_conflict_name(&entry.path, entry.kind == Kind::Dir, &mut out);
+        if readable(entry.kind) {
+            check_markers(&entry.path, &tree.read(&entry.path)?, &mut out);
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
 fn check_conflict_name(path: &str, is_dir: bool, out: &mut BTreeSet<Violation>) {
     let name = basename(path);
     if is_dir && name == CONFLICTS_DIR {

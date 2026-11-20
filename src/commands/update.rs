@@ -226,7 +226,7 @@ impl Current {
                 "{skill} is not a folder; run `skiman check`"
             )));
         }
-        refuse_unresolved(repo, &skill, name)?;
+        refuse_unresolved(repo, &skill)?;
         let lock_text = read_text(&repo.lockfile())?.unwrap_or_default();
         Ok(Current {
             skill,
@@ -240,9 +240,9 @@ impl Current {
 
 /// Refuses (exit 1) a skill with unresolved conflicts, printing the
 /// `skiman check` lines.
-fn refuse_unresolved(repo: &Canon, skill: &str, name: &str) -> Result<(), Failure> {
+fn refuse_unresolved(repo: &Canon, skill: &str) -> Result<(), Failure> {
     let tree = WorkingTree::new(repo.root());
-    let conflicts = rules::unresolved_conflicts(&tree, name)
+    let conflicts = rules::unresolved_conflicts(&tree, skill)
         .map_err(|e| Failure::operational(format!("cannot read the canon: {e}")))?;
     if conflicts.is_empty() {
         return Ok(());

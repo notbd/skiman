@@ -40,7 +40,7 @@ use crate::tree::{Kind, Tree};
 
 pub use config::{LOCKFILE, MANIFEST};
 pub use secrets::AllowEntry;
-pub use skill::{CONFLICT_MARKERS, CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR};
+pub use skill::{CONFLICT_MARKERS, CONFLICT_RECORD_SUFFIXES, CONFLICTS_DIR, unresolved_conflicts};
 pub use skill_info::gaps as missing_info;
 
 /// Rule ids, printed with every violation.
@@ -415,18 +415,6 @@ fn run(
         }
     }
     Ok((out.into_iter().collect(), found, records))
-}
-
-/// The unresolved-conflict violations of the skill folder `skills/<name>`
-/// (spec Merge semantics: markers, conflict records, `.skiman-conflicts`).
-pub fn unresolved_conflicts(tree: &dyn Tree, name: &str) -> io::Result<Vec<Violation>> {
-    let scope = Scope {
-        skills: BTreeSet::from([name.to_owned()]),
-        ..Scope::default()
-    };
-    let mut violations = check(tree, &scope)?;
-    violations.retain(|v| v.rule == rule::UNRESOLVED_CONFLICT);
-    Ok(violations)
 }
 
 /// The ready-to-paste `[[secrets.allow]]` entries for the secret violations

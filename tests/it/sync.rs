@@ -808,3 +808,79 @@ fn a_command_that_waited_while_the_canon_was_switched_writes_nothing() {
     );
     assert!(!sandbox.canon().join("skills/pdf").exists());
 }
+
+/// `sync --hook` spawns no `git` (spec "Performance"), also when it has work:
+/// it relinks a skill in every tool directory and mirrors a project item of
+/// a root that is a git repo. A `git` first on the `PATH` logs each call and
+/// runs the real one; an empty `PATH` would not do, since the hook exits 0
+/// whatever fails.
+#[test]
+fn sync_hook_spawns_no_git_while_it_relinks_and_mirrors() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write_skill(&sandbox.canon().join("skills"), "notes");
+    let work = sandbox.home().join("work");
+    write(work.join("proj/AGENTS.md"), "v1\n");
+    sandbox
+        .command("git")
+        .args(["init", "-q"])
+        .current_dir(&work)
+        .assert()
+        .success();
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&work)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    for tool in Tool::ALL {
+        std::fs::remove_file(sandbox.tool_dir(tool).join("notes")).unwrap();
+    }
+    write(work.join("proj/AGENTS.md"), "v2\n");
+    let real = sandbox
+        .command("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    let bin = sandbox.root().join("logging-bin");
+    let log = sandbox.root().join("git-calls.log");
+    write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            real.trim()
+        ),
+    );
+    std::fs::set_permissions(
+        bin.join("git"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+
+    sandbox
+        .skiman()
+        .env("PATH", path)
+        .args(["sync", "--hook"])
+        .assert()
+        .code(0);
+
+    for tool in Tool::ALL {
+        let target = sandbox.canon().join("skills/notes");
+        assert_symlink(sandbox.tool_dir(tool).join("notes"), &target, &target);
+    }
+    let mirrored = sandbox.canon().join("projects/work/proj/AGENTS.md");
+    assert_eq!(std::fs::read_to_string(mirrored).unwrap(), "v2\n");
+    assert!(
+        !exists(&log),
+        "sync --hook ran git: {}",
+        std::fs::read_to_string(&log).unwrap()
+    );
+}

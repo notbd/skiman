@@ -1,5 +1,5 @@
 //! Machine state: the items reported at the last sync, per tool directory and
-//! skill repo (spec Data formats, "Machine state"). `sync --hook` prints only
+//! canon (spec Data formats, "Machine state"). `sync --hook` prints only
 //! items missing from this set. Stored in `<state dir>/reported.toml`:
 //! one key per scope (a realpath), holding the item ids as an array.
 

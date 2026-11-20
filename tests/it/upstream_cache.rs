@@ -82,7 +82,7 @@ fn an_add_waits_while_another_skiman_fetches_into_the_same_cache() {
         )
     );
     assert!(status.success(), "{status}");
-    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/pdf/SKILL.md").is_file());
     let cache = cache(&sandbox, &up.url());
     assert_eq!(
         sandbox.git(
@@ -160,7 +160,7 @@ fn a_fetch_left_running_by_a_killed_skiman_keeps_the_cache_locked() {
         )
     );
     assert!(status.success(), "{status}");
-    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/pdf/SKILL.md").is_file());
     assert!(!cache(&sandbox, &url).join("shallow.lock").exists());
 }
 
@@ -215,7 +215,7 @@ fn a_fetch_killed_after_the_commit_object_arrived_does_not_stop_the_next_add() {
         .args(["add", "acme/pdf", "--yes"])
         .assert()
         .code(0);
-    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/pdf/SKILL.md").is_file());
     assert!(!cache.join("shallow.lock").exists());
 }
 

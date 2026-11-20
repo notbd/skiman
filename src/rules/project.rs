@@ -31,7 +31,7 @@ pub fn check_layout(
             continue;
         }
         let id = crate::tree::basename(&entry.path);
-        let Some(root) = roots.iter().find(|r| r.id == id) else {
+        if !roots.iter().any(|r| r.id == id) {
             // A folder of ignored files only (`.DS_Store`) is nothing to report.
             if tree
                 .walk(&entry.path)?
@@ -51,7 +51,7 @@ pub fn check_layout(
             ));
             scan_files(tree, &entry.path, found)?;
             continue;
-        };
+        }
         if entry.kind != Kind::Dir {
             out.insert(Violation::new(
                 &entry.path,
@@ -61,19 +61,41 @@ pub fn check_layout(
             ));
             continue;
         }
-        for stray in read_mirror_of(tree, id, &root.skill_dirs)?.strays {
+        for stray in read_mirror_of(tree, id)?.strays {
             scan_files(tree, &stray, found)?;
-            out.insert(Violation::new(
-                &stray,
-                None,
-                rule::PROJECT_PATH,
+            let message = if in_skill_folder(tree, &entry.path, &stray)? {
+                format!(
+                    "belongs to no project item; it is left from the retired `skill_dirs` (a skill folder outside every project skill folder), so `git rm -r {stray}`, and register the original folder with `skiman linked add` if it is still in use"
+                )
+            } else {
                 format!(
                     "belongs to no project item (an instruction file or a project skill); restore the configuration that made it one, or `git rm -r {stray}`"
-                ),
-            ));
+                )
+            };
+            out.insert(Violation::new(&stray, None, rule::PROJECT_PATH, message));
         }
     }
     Ok(())
+}
+
+/// Whether the stray file `stray` lies in a folder below the mirror `base`
+/// that holds a `SKILL.md`: a skill folder that only the retired
+/// `skill_dirs` (ADR 0013) made an item, since every project skill folder
+/// has an item shape.
+fn in_skill_folder(tree: &dyn Tree, base: &str, stray: &str) -> io::Result<bool> {
+    let mut dir = stray;
+    while let Some((parent, _)) = dir.rsplit_once('/')
+        && parent.len() > base.len()
+    {
+        if matches!(
+            tree.kind(&format!("{parent}/SKILL.md"))?,
+            Some(Kind::File { .. })
+        ) {
+            return Ok(true);
+        }
+        dir = parent;
+    }
+    Ok(false)
 }
 
 /// The secret rule on every readable file at or below `path`, so content
@@ -99,7 +121,7 @@ fn scan_files(tree: &dyn Tree, path: &str, found: &mut Vec<Found>) -> io::Result
 pub fn item_paths(tree: &dyn Tree, records: &Records) -> io::Result<BTreeSet<String>> {
     let mut paths = BTreeSet::new();
     for root in records.projects() {
-        for item in read_mirror_of(tree, &root.id, &root.skill_dirs)?.items {
+        for item in read_mirror_of(tree, &root.id)?.items {
             paths.insert(item.mirror_rel());
         }
     }

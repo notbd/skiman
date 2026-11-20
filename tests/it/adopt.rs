@@ -1,5 +1,5 @@
 //! `skiman adopt <name> --from <tool id>`: copy a foreign skill into the
-//! skill repo, move the original entry to a backup, link the copy.
+//! canon, move the original entry to a backup, link the copy.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -11,10 +11,10 @@ use crate::support::{
     is_executable, only_backup, read, skill_md, tree, write,
 };
 
-/// The whole skill repo except `.git`, every tool directory and the
+/// The whole canon except `.git`, every tool directory and the
 /// backups, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let mut world = vec![
         tree(repo.join("skills")),
         tree(repo.join("upstream")),
@@ -30,7 +30,7 @@ fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> 
 }
 
 fn assert_linked(sandbox: &Sandbox, name: &str) {
-    let target = sandbox.skill_repo().join("skills").join(name);
+    let target = sandbox.canon().join("skills").join(name);
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join(name), &target, &target);
     }
@@ -66,7 +66,7 @@ fn adopt_of_a_foreign_folder_copies_it_backs_up_the_original_and_links_the_copy(
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created [..]/skill-repo/skills/notes
+created [..]/canon/skills/notes
 moved [..]/home/.claude/skills/notes to [..]/state/skiman/backups/[..]/claude-code/notes
 linked [..]/home/.claude/skills/notes
 linked [..]/home/.agents/skills/notes
@@ -75,7 +75,7 @@ linked [..]/home/.gemini/config/skills/notes
 "#]])
         .stderr_eq("");
 
-    let copy = sandbox.skill_repo().join("skills/notes");
+    let copy = sandbox.canon().join("skills/notes");
     assert_eq!(
         read(copy.join("SKILL.md")),
         skill_md("my-notes").replace("name: my-notes", "name: notes"),
@@ -84,7 +84,7 @@ linked [..]/home/.gemini/config/skills/notes
     assert!(is_executable(copy.join("scripts/run.sh")));
     assert!(
         !exists(copy.join(".DS_Store")),
-        "never copied into the skill repo"
+        "never copied into the canon"
     );
     assert!(
         !exists(copy.join(".git")),
@@ -114,7 +114,7 @@ fn adopt_of_a_foreign_symlink_moves_the_link_as_a_link_and_never_touches_its_tar
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created [..]/skill-repo/skills/ext
+created [..]/canon/skills/ext
 moved [..]/home/.agents/skills/ext to [..]/state/skiman/backups/[..]/codex/ext
 linked [..]/home/.claude/skills/ext
 linked [..]/home/.agents/skills/ext
@@ -131,7 +131,7 @@ linked [..]/home/.gemini/config/skills/ext
     );
     assert_eq!(tree(&target), target_before, "the link target is untouched");
     assert_eq!(
-        read(sandbox.skill_repo().join("skills/ext/reference.md")),
+        read(sandbox.canon().join("skills/ext/reference.md")),
         "# Reference\n"
     );
     assert_linked(&sandbox, "ext");
@@ -142,14 +142,14 @@ linked [..]/home/.gemini/config/skills/ext
 fn adopt_refuses_every_name_conflict_and_changes_nothing() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for name in [
         "dangling",
         "tabled",
         "locked",
         "snapped",
         "Bad_Name",
-        "managing-skills",
+        "skiman-manual",
         "synced",
     ] {
         write(
@@ -181,7 +181,7 @@ fn adopt_refuses_every_name_conflict_and_changes_nothing() {
         ("locked", "skiman.lock already has an entry for locked"),
         ("snapped", "upstream/snapped already exists"),
         ("Bad_Name", "is not a valid skill name"),
-        ("managing-skills", "is a reserved skill name"),
+        ("skiman-manual", "is a reserved skill name"),
         ("synced", "is a reserved skill name"),
     ] {
         let assert = sandbox
@@ -265,7 +265,7 @@ fn files_inside_a_dot_git_folder_do_not_count_toward_the_file_limit() {
         .assert()
         .code(0);
 
-    let copy = sandbox.skill_repo().join("skills/notes");
+    let copy = sandbox.canon().join("skills/notes");
     assert!(copy.join("reference.md").is_file());
     assert!(copy.join("scripts/run.sh").is_file());
     assert!(!exists(copy.join(".git")));
@@ -323,7 +323,7 @@ fn adopt_whose_original_cannot_be_moved_exits_4_and_finishes_when_run_again() {
         stderr.ends_with("run the same command again to finish it\n"),
         "{stderr}"
     );
-    assert!(sandbox.skill_repo().join("skills/notes/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/notes/SKILL.md").is_file());
     assert!(original.join("SKILL.md").is_file(), "the original stays");
 
     sandbox
@@ -361,7 +361,7 @@ fn with_an_unwritable_backups_folder_adopt_stops_and_changes_nothing() {
             && stderr.contains("nothing was changed"),
         "{stderr}"
     );
-    assert!(!exists(sandbox.skill_repo().join("skills/notes")));
+    assert!(!exists(sandbox.canon().join("skills/notes")));
     assert!(original.join("SKILL.md").is_file(), "the original stays");
     assert_eq!(world(&sandbox), before);
 }
@@ -453,7 +453,7 @@ fn adopt_refuses_an_entry_that_is_missing_owned_or_not_a_skill() {
 }
 
 /// `skiman adopt notes --from claude-code --yes` running the shell command
-/// `run` between the confirmation and the repo lock (debug builds only).
+/// `run` between the confirmation and the canon lock (debug builds only).
 fn adopt_with_hook(sandbox: &Sandbox, run: &str) -> std::process::Output {
     sandbox
         .skiman()
@@ -539,7 +539,7 @@ fn adopt_of_a_copy_of_an_installed_third_party_skill_is_refused() {
     let entry = sandbox.tool_dir(Tool::ClaudeCode).join("pdf");
     std::fs::remove_file(&entry).unwrap();
     for file in ["SKILL.md", "reference.md"] {
-        let text = read(sandbox.skill_repo().join("skills/pdf").join(file));
+        let text = read(sandbox.canon().join("skills/pdf").join(file));
         write(entry.join(file), text);
     }
     let before = world(&sandbox);

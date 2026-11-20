@@ -2,16 +2,18 @@
 //! import folder (ADR 0001), and `skiman import --guide`, the guide an agent
 //! follows to prepare one (read-only).
 //!
-//! Order: no TTY and no `--yes` -> exit 2 -> config -> the skill repo's
+//! Order: no TTY and no `--yes` -> exit 2 -> config -> the canon's
 //! `skiman.toml`, `skiman.lock` and shared body are regular files, and it is
-//! initialised -> phase 1 on the folder (layout, path safety, every rule
-//! except Consistency) -> whether the skill repo already holds the whole
-//! import ([`progress`]; if so, nothing is fetched or written and the run
-//! goes on at the takeover plan) -> fetch every declared source -> phase 2
+//! initialised -> phase 1 on the folder (layout, path safety, no `[linked]`
+//! table, every rule except Consistency) -> the canon's linked folders
+//! ([`linked_folders`]: none unreadable, none of their names, no write into
+//! one) -> whether the canon already holds the whole import
+//! ([`progress`]; if so, nothing is fetched or written and the run goes on
+//! at the takeover plan) -> fetch every declared source -> phase 2
 //! on the complete result (Consistency, secrets, everything) -> what the
-//! skill repo holds against what the import writes ([`repo_todo`]) ->
+//! canon holds against what the import writes ([`canon_todo`]) ->
 //! takeover plan, no special file in it and no local source it moves away
-//! -> preview -> confirm -> repo lock, checks again (the takeover plan
+//! -> preview -> confirm -> canon lock, checks again (the takeover plan
 //! included) -> tmp leftovers -> `skiman.toml`, `skiman.lock`, `upstream/`,
 //! `instructions/shared.md`, `skills/`, each not yet in place ([`crate::change`],
 //! which backs up what it replaces) -> originals in tool directories and instruction
@@ -30,6 +32,8 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::Exit;
 use crate::backup::{self, Backups};
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{self, Change, Held, Want};
 use crate::commands::{confirm, has_terminal, prompts};
 use crate::failure::{Failure, finish};
@@ -37,16 +41,15 @@ use crate::fetch::Cache;
 use crate::git::Prompts;
 use crate::import_guide;
 use crate::layout::{Layout, Placed};
+use crate::linked::{Linked, State};
 use crate::lockfile::{self, LockEntry, Lockfile};
-use crate::managing_skills;
 use crate::manifest::{self, Manifest, SkillEntry, SourceRecord};
 use crate::ownership::{Entry, Ownership};
 use crate::path_safety::{self, Content};
 use crate::paths::Paths;
 use crate::project::item::MIRROR_DIR;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
+use crate::skiman_manual;
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
 use crate::staging::Staging;
@@ -64,15 +67,15 @@ pub fn guide() -> Exit {
     )
 }
 
-/// `folder` defaults to `<skill repo>/.skiman/import/`.
+/// `folder` defaults to `<canon>/.skiman/import/`.
 pub fn run(folder: Option<&Path>, yes: bool) -> Exit {
     finish(import(folder, yes))
 }
 
 const SHARED_BODY: &str = "instructions/shared.md";
 
-/// The skill repo's files the import replaces whole, each a regular file.
-const REPO_FILES: [&str; 3] = [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY];
+/// The canon's files the import replaces whole, each a regular file.
+const CANON_FILES: [&str; 3] = [rules::MANIFEST, rules::LOCKFILE, SHARED_BODY];
 
 fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let terminal = has_terminal();
@@ -82,7 +85,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         ));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let folder = folder.map_or_else(|| repo.default_import_dir(), Path::to_path_buf);
     let folder = folder.canonicalize().map_err(|e| {
         Failure::refused(format!(
@@ -94,12 +97,12 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     // Which way the run goes, the skiman.toml it writes and the one its
     // takeover follows come from these as first read: under the lock, any
     // byte of them that changed refuses.
-    let repo_files = || REPO_FILES.map(|rel| std::fs::read(repo.root().join(rel)).ok());
-    let first_read = repo_files();
+    let canon_files = || CANON_FILES.map(|rel| std::fs::read(repo.root().join(rel)).ok());
+    let first_read = canon_files();
     let repo_manifest = std::fs::read_to_string(repo.manifest_file()).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Failure::refused(format!(
-                "{} is not an initialised skill repo (it has no skiman.toml); run `skiman init {}`",
+                "{} is not an initialised canon (it has no skiman.toml); run `skiman init {}`",
                 repo.root().display(),
                 repo.root().display()
             ))
@@ -113,11 +116,14 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     let prompts = prompts();
 
     let content = Folder::read(&folder)?;
-    let manifest_text = merge_repo_config(&content.manifest, &repo_manifest)?;
+    refuse_linked_tables(&content)?;
+    let manifest_text = merge_canon_config(&content.manifest, &repo_manifest)?;
     check_folder(&content, &manifest_text)?;
     let folder_manifest = Manifest::parse(&manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
-    // `None` when the skill repo already holds the whole import (an earlier
+    // Before anything is fetched; again with the takeover plan.
+    linked_folders(&paths, &repo, &folder_manifest, &content)?;
+    // `None` when the canon already holds the whole import (an earlier
     // run wrote it): nothing is fetched or written, and the takeover follows
     // the repo's own skiman.toml.
     let (writes, manifest) = match progress(&repo, &content, &folder_manifest, &repo_manifest)? {
@@ -141,7 +147,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
                 thirds,
             };
             let change = candidate.change();
-            let todo = repo_todo(&repo, &candidate, &change)?;
+            let todo = canon_todo(&repo, &candidate, &change)?;
             (Some((candidate, change, todo)), manifest)
         }
     };
@@ -150,7 +156,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_moving_sources(&paths, &content, &manifest, &plan)?;
 
     out!(
-        "import {} into the skill repo {}:",
+        "import {} into the canon {}:",
         content.root.display(),
         repo.root().display()
     );
@@ -158,12 +164,12 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         Some((candidate, change, todo)) => print_writes(&repo, candidate, change, todo),
         None => {
             out!(
-                "  the skill repo already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is"
+                "  the canon already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is"
             );
             let differs = config_differences(&folder_manifest, &manifest, &content);
             if !differs.is_empty() {
                 out!(
-                    "  the import folder's skiman.toml differs from the skill repo's in {}; the skill repo's are kept",
+                    "  the import folder's skiman.toml differs from the canon's in {}; the canon's are kept",
                     differs.join(", ")
                 );
             }
@@ -175,16 +181,16 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     }
 
     test_hook::at("import", "confirmed");
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     refuse_irregular_files(&repo)?;
-    let changed = repo_files() != first_read
+    let changed = canon_files() != first_read
         || match &writes {
-            Some((candidate, change, todo)) => repo_todo(&repo, candidate, change)? != *todo,
+            Some((candidate, change, todo)) => canon_todo(&repo, candidate, change)? != *todo,
             None => progress(&repo, &content, &folder_manifest, &repo_manifest)? != Progress::Done,
         };
     if changed {
         return Err(Failure::refused(
-            "the skill repo changed after the preview; nothing was changed, run the import again",
+            "the canon changed after the preview; nothing was changed, run the import again",
         ));
     }
     if Folder::hash(&folder)? != content.hash {
@@ -228,7 +234,7 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         out!("imported {}; {originals}", folder.display());
     } else {
         out!(
-            "the skill repo {} already held this import; {originals}",
+            "the canon {} already held this import; {originals}",
             repo.root().display()
         );
     }
@@ -249,7 +255,7 @@ struct Folder {
 
 /// One skill folder of the import folder.
 struct Skill {
-    /// `skills/[<group>/]<name>`, the same in the skill repo.
+    /// `skills/[<group>/]<name>`, the same in the canon.
     path: String,
     snapshot: Snapshot,
 }
@@ -398,25 +404,26 @@ impl Folder {
     }
 }
 
-/// The folder's `skiman.toml` with the skill repo's configuration merged in
-/// by key, since an import brings skills and instructions only: the repo's
-/// `[tools]` when the folder has none, each repo `[projects.<id>]` whose id
-/// the folder does not define, and each repo `[[secrets.allow]]` entry for a
-/// path below `projects/` the folder does not hold already. Tables written
-/// inline count on both sides. The folder's own text keeps its bytes, except
-/// an inline `projects` or `secrets` table that takes repo entries, which
-/// becomes a standard table.
-fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
+/// The folder's `skiman.toml` with the canon's configuration merged in
+/// by key, since an import brings skills and instructions only: the
+/// canon's `[tools]` when the folder has none, each canon `[projects.<id>]`
+/// and `[linked.<id>]` whose id the folder does not define (it defines no
+/// `[linked]`: [`refuse_linked_tables`]), and each canon `[[secrets.allow]]`
+/// entry for a path below `projects/` the folder does not hold already.
+/// Tables written inline count on both sides. The folder's own text keeps
+/// its bytes, except an inline `projects` or `secrets` table that takes
+/// canon entries, which becomes a standard table.
+fn merge_canon_config(folder: &str, canon: &str) -> Result<String, Failure> {
     let Ok(mut doc) = folder.parse::<DocumentMut>() else {
         // The rules report the syntax error with its line.
         return Ok(folder.to_owned());
     };
-    let Ok(repo) = repo.parse::<DocumentMut>() else {
+    let Ok(canon) = canon.parse::<DocumentMut>() else {
         return Ok(folder.to_owned());
     };
     let mut merged = false;
     if !doc.contains_key("tools")
-        && let Some(mut tools) = repo.get("tools").cloned()
+        && let Some(mut tools) = canon.get("tools").cloned()
     {
         if let Some(table) = tools.as_table_mut() {
             table.set_position(Some(-1));
@@ -424,19 +431,22 @@ fn merge_repo_config(folder: &str, repo: &str) -> Result<String, Failure> {
         doc.insert("tools", tools);
         merged = true;
     }
-    if let Some(projects) = repo.get("projects").and_then(Item::as_table_like) {
-        for (id, project) in projects.iter() {
-            if doc.get("projects").and_then(|kept| kept.get(id)).is_none()
-                && let Ok(project) = project.clone().into_table()
-                && let Some(into) = manifest::subtable(&mut doc, "projects")
+    for key in ["projects", "linked"] {
+        let Some(tables) = canon.get(key).and_then(Item::as_table_like) else {
+            continue;
+        };
+        for (id, table) in tables.iter() {
+            if doc.get(key).and_then(|kept| kept.get(id)).is_none()
+                && let Ok(table) = table.clone().into_table()
+                && let Some(into) = manifest::subtable(&mut doc, key)
             {
-                into.insert(id, Item::Table(appended(project)));
+                into.insert(id, Item::Table(appended(table)));
                 merged = true;
             }
         }
     }
     let mirror = format!("{MIRROR_DIR}/");
-    let allows = repo
+    let allows = canon
         .get("secrets")
         .and_then(|secrets| secrets.get("allow"))
         .and_then(Item::as_array_of_tables);
@@ -485,7 +495,7 @@ fn appended(mut table: Table) -> Table {
     table
 }
 
-/// The folder as the skill repo would hold it, with `manifest` as its `skiman.toml`.
+/// The folder as the canon would hold it, with `manifest` as its `skiman.toml`.
 fn folder_tree<'a>(working_tree: &'a WorkingTree, manifest: &str) -> Overlay<'a> {
     Overlay::new(
         working_tree,
@@ -539,7 +549,7 @@ struct Third {
     source: SourceRecord,
     snapshot: Snapshot,
     entry: LockEntry,
-    /// The kind of `source.ref`: derived when fetched, else the skill repo's.
+    /// The kind of `source.ref`: derived when fetched, else the canon's.
     ref_kind: Option<&'static str>,
     /// `at <commit> (tag v1)`, `(local folder)`: after the source in the preview.
     version: String,
@@ -547,11 +557,11 @@ struct Third {
 
 /// Fetches every declared source at its declared `ref` (the default branch
 /// when there is none) and reads its snapshot; path safety runs on each. A
-/// source the skill repo already holds ([`fetched_before`]) is not fetched
+/// source the canon already holds ([`fetched_before`]) is not fetched
 /// again.
 fn fetch_sources(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     content: &Folder,
     manifest_text: &str,
     prompts: Prompts,
@@ -595,7 +605,7 @@ fn fetch_sources(
     Ok(thirds)
 }
 
-/// The third-party skill `name` as the skill repo holds it, when an earlier
+/// The third-party skill `name` as the canon holds it, when an earlier
 /// run fetched it from a git upstream as `source` declares it: the repo's
 /// source table names the same `url`, `path` and `ref`, and its lock entry
 /// has that `ref` and a commit. Its snapshot is `upstream/<name>` when that
@@ -605,7 +615,7 @@ fn fetch_sources(
 /// moved since, and needs the network.
 fn fetched_before(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     name: &str,
     source: &SourceRecord,
     prompts: Prompts,
@@ -626,7 +636,7 @@ fn fetched_before(
     Some(Third {
         name: name.to_owned(),
         source: source.clone(),
-        version: format!("at {commit} (as the skill repo holds it)"),
+        version: format!("at {commit} (as the canon holds it)"),
         ref_kind: recorded.ref_kind,
         snapshot,
         entry,
@@ -696,6 +706,101 @@ fn check_result(
     )
 }
 
+/// Refuses (exit 1) an import folder whose `skiman.toml` has `[linked]`
+/// tables: an import brings skills and instructions only, and the canon's
+/// own registrations are kept. Names the command that registers each.
+fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
+    let Ok(manifest) = Manifest::parse(&content.manifest) else {
+        // The rules report the syntax error with its line.
+        return Ok(());
+    };
+    let tables = manifest.linked();
+    if tables.is_empty() {
+        return Ok(());
+    }
+    let lines: Vec<String> = tables
+        .iter()
+        .map(|entry| match &entry.path {
+            Ok(path) => format!("  skiman linked add {path} --id {}", entry.id),
+            Err(malformed) => format!("  [linked.{}]: {}", entry.id, malformed.why),
+        })
+        .collect();
+    Err(Failure::refused(format!(
+        "refusing to import {}: its skiman.toml has [linked] tables, but an import brings skills and instructions only; remove them from the import folder, and once the import is done register each folder with skiman linked add; nothing was changed:\n{}",
+        content.root.display(),
+        lines.join("\n")
+    )))
+}
+
+/// The canon's linked folders on this machine, as registered in `manifest`
+/// (the canon's, which the import keeps). Refuses (exit 1) while one cannot
+/// be read, since what leads into it is unknown; when a skill folder or a
+/// group folder of the import folder uses a linked skill's name; and when
+/// a place the closing sync writes ([`sync::write_targets`], its cleanup of
+/// tools that are not enabled included) resolves into a linked folder
+/// (spec "Write targets never reach into a linked folder").
+fn linked_folders(
+    paths: &Paths,
+    repo: &Canon,
+    manifest: &Manifest,
+    content: &Folder,
+) -> Result<Linked, Failure> {
+    let linked = Linked::read(paths.home(), repo, manifest);
+    let unreadable = linked.folders.iter().find_map(|f| match &f.state {
+        State::Unreadable(why) => Some((f, why)),
+        _ => None,
+    });
+    if let Some((folder, why)) = unreadable {
+        return Err(Failure::refused(format!(
+            "refusing to import {}: linked folder `{}` cannot be read now ({why}), so skiman cannot tell what in the tool directories leads into it; nothing was changed, run the import again once it can be read",
+            content.root.display(),
+            folder.id
+        )));
+    }
+    // Every folder the import writes under `skills/`, by path, with the name
+    // it takes: each skill folder, and each group folder above one.
+    let mut folders = BTreeMap::new();
+    for (name, skill) in &content.skills {
+        folders.insert(skill.path.as_str(), name.as_str());
+        let mut path = skill.path.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/')
+            && let Some((_, group)) = parent.rsplit_once('/')
+        {
+            folders.insert(parent, group);
+            path = parent;
+        }
+    }
+    let kept = sync::kept_names(paths, repo, manifest, &linked);
+    let lines: Vec<String> = folders
+        .iter()
+        .filter_map(|(path, name)| {
+            let (it, _) = linked.described(name, &kept)?;
+            Some(format!("  {path}: it is {it}"))
+        })
+        .collect();
+    if !lines.is_empty() {
+        return Err(Failure::refused(format!(
+            "refusing to import {}: these skill folders and group folders use the name of a linked skill, which skiman never replaces; rename them in the import folder, nothing was changed:\n{}",
+            content.root.display(),
+            lines.join("\n")
+        )));
+    }
+    // Every place the closing sync writes, its cleanup included.
+    let lines: Vec<String> = sync::write_targets(paths.home(), manifest)
+        .iter()
+        .filter_map(|t| linked.refusal(&t.path, &t.lands))
+        .map(|why| format!("  {why}"))
+        .collect();
+    if !lines.is_empty() {
+        return Err(Failure::refused(format!(
+            "refusing to import {}: it would write into a linked folder; nothing was changed:\n{}",
+            content.root.display(),
+            lines.join("\n")
+        )));
+    }
+    Ok(linked)
+}
+
 /// The import folder's content, checked, plus what skiman built.
 struct Candidate<'a> {
     content: &'a Folder,
@@ -714,7 +819,7 @@ struct Move {
     path: PathBuf,
     /// Where it is: the realpath of its tool directory plus its name (for an
     /// instruction location, `path`). The move order compares this one, since
-    /// what a link resolves through is a real path.
+    /// what a link resolves through is a real path, and the move takes it.
     real: PathBuf,
     /// Where it goes, relative to the backup folder.
     backup: PathBuf,
@@ -726,7 +831,7 @@ struct Move {
 }
 
 /// What happens to the tool directories and instruction locations. Worked
-/// out again under the repo lock: a plan that differs from the previewed
+/// out again under the canon lock: a plan that differs from the previewed
 /// one refuses the run.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Plan {
@@ -737,19 +842,25 @@ struct Plan {
     /// Non-skill entries at a name the import distributes: left alone, so
     /// that skill is not distributed there. `(path, skill name)`.
     staying: Vec<(PathBuf, String)>,
+    /// Entries that are, hold or lie in a linked folder or a target of one
+    /// of its child links: never moved (spec "Nothing is moved out of a
+    /// linked folder"). `(path, linked folder id)`.
+    linked: Vec<(PathBuf, String)>,
 }
 
 impl Plan {
     /// Classifies every entry of every installed tool's tool directory (tool
     /// directories resolving to one real directory once) and every
-    /// instruction location, as sync would after the import.
+    /// instruction location, as sync would after the import. Refuses (exit
+    /// 1) what [`linked_folders`] refuses.
     fn make(
         paths: &Paths,
-        repo: &SkillRepo,
+        repo: &Canon,
         manifest: &Manifest,
         content: &Folder,
     ) -> Result<Plan, Failure> {
         let home = paths.home();
+        let linked = linked_folders(paths, repo, manifest, content)?;
         let entries = manifest.skills();
         let mut wanted: BTreeMap<String, PathBuf> = content
             .skills
@@ -757,8 +868,14 @@ impl Plan {
             .filter(|(name, _)| entries.get(*name).is_none_or(|e| e.enabled))
             .map(|(name, skill)| (name.clone(), repo.root().join(&skill.path)))
             .collect();
-        wanted.insert(managing_skills::NAME.to_owned(), repo.managing_skills_dir());
-        let ownership = Ownership::new(paths, repo, manifest, None);
+        wanted.insert(skiman_manual::NAME.to_owned(), repo.manual_dir());
+        // No import skill uses a linked skill's name ([`linked_folders`]).
+        let layout = Layout::read(&WorkingTree::new(&content.root)).map_err(|e| {
+            Failure::operational(format!("cannot read {}: {e}", content.root.display()))
+        })?;
+        let kept = sync::kept_names(paths, repo, manifest, &linked);
+        wanted.extend(linked.names(&layout, &kept, |_| true).0);
+        let ownership = Ownership::new(paths, repo, None);
         let io = |path: &Path, e: std::io::Error| {
             Failure::operational(format!("cannot read {}: {e}", path.display()))
         };
@@ -790,6 +907,10 @@ impl Plan {
                     // Moving a moved one again finishes the move.
                     Entry::Foreign | Entry::Moved(_) => {
                         let real = real.join(&name);
+                        if let Some(folder) = linked.reaches_into(&real) {
+                            plan.linked.push((path, folder.id.clone()));
+                            continue;
+                        }
                         entries.push(Move {
                             resolution: resolution(&real),
                             path,
@@ -819,6 +940,10 @@ impl Plan {
                 continue;
             };
             if !seen.insert(location.clone()) {
+                continue;
+            }
+            if let Some(folder) = linked.reaches_into(&location) {
+                plan.linked.push((location, folder.id.clone()));
                 continue;
             }
             let meta = match std::fs::symlink_metadata(&location) {
@@ -988,10 +1113,10 @@ fn refuse_moving_sources(
     )))
 }
 
-/// Where the import folder's `skiman.toml` (`folder`, merged with the skill
-/// repo's as the import would write it) differs from the skill repo's
+/// Where the import folder's `skiman.toml` (`folder`, merged with the canon's
+/// as the import would write it) differs from the canon's
 /// (`repo`) in what is distributed: `[tools] enabled` as a set, `enabled` of
-/// each skill, and the `ref` of each source. Shown when the skill repo
+/// each skill, and the `ref` of each source. Shown when the canon
 /// already holds the import, which keeps the repo's.
 fn config_differences(folder: &Manifest, repo: &Manifest, content: &Folder) -> Vec<String> {
     let mut differs = Vec::new();
@@ -1043,8 +1168,8 @@ fn local_modifications(skill: &Snapshot, upstream: &Snapshot) -> Vec<String> {
     out
 }
 
-/// The preview lines for what the import writes to the skill repo.
-fn print_writes(repo: &SkillRepo, candidate: &Candidate, change: &Change, todo: &[Held]) {
+/// The preview lines for what the import writes to the canon.
+fn print_writes(repo: &Canon, candidate: &Candidate, change: &Change, todo: &[Held]) {
     let held = |rel: &str| {
         let i = change.pieces.iter().position(|(r, _)| r == rel);
         i.map(|i| &todo[i])
@@ -1089,7 +1214,7 @@ fn print_writes(repo: &SkillRepo, candidate: &Candidate, change: &Change, todo: 
 }
 
 /// The preview lines for the tool directories and instruction locations.
-fn print_plan(repo: &SkillRepo, plan: &Plan, paths: &Paths) {
+fn print_plan(repo: &Canon, plan: &Plan, paths: &Paths) {
     for location in &plan.moves {
         match &location.link {
             Some(target) if target == &repo.shared_body() => out!(
@@ -1116,6 +1241,12 @@ fn print_plan(repo: &SkillRepo, plan: &Plan, paths: &Paths) {
             path.display()
         );
     }
+    for (path, id) in &plan.linked {
+        out!(
+            "  keep {}: it holds or lies in linked folder `{id}`, whose content skiman never moves",
+            path.display()
+        );
+    }
     out!(
         "originals go to a new folder in {}",
         paths.state_dir().join("backups").display()
@@ -1126,7 +1257,7 @@ impl Candidate<'_> {
     /// Every piece, in the order the import writes them: `skiman.toml`,
     /// `skiman.lock`, `upstream/`, the shared body, `skills/`. [`progress`]
     /// and [`fetched_before`] depend on that order:
-    /// - `skiman.toml` comes first, so a skill repo that holds any other
+    /// - `skiman.toml` comes first, so a canon that holds any other
     ///   piece as the import writes it holds the import's `skiman.toml` too,
     ///   and a shared body that is the import's says so.
     /// - The source tables and lock entries come before the snapshots, so a
@@ -1177,10 +1308,10 @@ fn names_in(dir: &Path) -> Result<Vec<String>, Failure> {
 }
 
 /// Refuses (exit 1) when `skiman.toml`, `skiman.lock` or the shared body of
-/// the skill repo is there but is not a regular file.
-fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
+/// the canon is there but is not a regular file.
+fn refuse_irregular_files(repo: &Canon) -> Result<(), Failure> {
     let mut lines = Vec::new();
-    for rel in REPO_FILES {
+    for rel in CANON_FILES {
         let path = repo.root().join(rel);
         match std::fs::symlink_metadata(&path) {
             Ok(meta) if !meta.is_file() => lines.push(format!("  {rel} is not a regular file")),
@@ -1197,13 +1328,13 @@ fn refuse_irregular_files(repo: &SkillRepo) -> Result<(), Failure> {
         return Ok(());
     }
     Err(Failure::refused(format!(
-        "the skill repo {} holds a link, folder or special file where import needs a regular file; replace each with a regular file or move it away, nothing was changed:\n{}",
+        "the canon {} holds a link, folder or special file where import needs a regular file; replace each with a regular file or move it away, nothing was changed:\n{}",
         repo.root().display(),
         lines.join("\n")
     )))
 }
 
-/// How far the skill repo is with this import, decided before anything is fetched.
+/// How far the canon is with this import, decided before anything is fetched.
 #[derive(Debug, PartialEq, Eq)]
 enum Progress {
     /// The repo holds everything the import writes.
@@ -1211,7 +1342,7 @@ enum Progress {
     /// The repo holds everything but the import's shared body, and its own
     /// holds more than whitespace.
     OtherSharedBody,
-    /// Anything else: the whole import is worked out again ([`repo_todo`]).
+    /// Anything else: the whole import is worked out again ([`canon_todo`]).
     NotDone,
 }
 
@@ -1225,7 +1356,7 @@ enum Progress {
 /// that holds something. `repo_manifest` is the repo's `skiman.toml`; one
 /// that does not parse is not done.
 fn progress(
-    repo: &SkillRepo,
+    repo: &Canon,
     content: &Folder,
     folder_manifest: &Manifest,
     repo_manifest: &str,
@@ -1281,31 +1412,27 @@ fn progress(
 /// The refusal for [`Progress::OtherSharedBody`]. The repo alone cannot tell
 /// an import that ran (finished or stopped part-way) from one that never
 /// did, so the way on depends on which it is.
-fn other_shared_body(repo: &SkillRepo, folder: &Path) -> Failure {
+fn other_shared_body(repo: &Canon, folder: &Path) -> Failure {
     let theirs = folder.join(SHARED_BODY).display().to_string();
     let ours = repo.shared_body().display().to_string();
     Failure::refused(format!(
-        "refusing to import {}: the skill repo {} already holds everything this import writes except {SHARED_BODY}, which differs from the import folder's; nothing was changed.\n  \
-         If this import has run on this skill repo before (it finished or stopped part-way), make the two files the same and run it again: it finishes what is left and writes nothing else to the skill repo, whose skiman.toml stays as it is.\n    \
-         to keep the skill repo's shared body, copy {ours} over {theirs};\n    \
+        "refusing to import {}: the canon {} already holds everything this import writes except {SHARED_BODY}, which differs from the import folder's; nothing was changed.\n  \
+         If this import has run on this canon before (it finished or stopped part-way), make the two files the same and run it again: it finishes what is left and writes nothing else to the canon, whose skiman.toml stays as it is.\n    \
+         to keep the canon's shared body, copy {ours} over {theirs};\n    \
          to use the import folder's, copy {theirs} over {ours} (skiman keeps no copy of the file you overwrite).\n  \
-         If it has never run on this skill repo, empty {ours} (put what it holds into the import folder's shared body first if you want to keep it) and run it again: it imports everything, the import folder's skiman.toml included.\n  \
+         If it has never run on this canon, empty {ours} (put what it holds into the import folder's shared body first if you want to keep it) and run it again: it imports everything, the import folder's skiman.toml included.\n  \
          If you cannot tell which, do the first.",
         folder.display(),
         repo.root().display(),
     ))
 }
 
-/// What the skill repo holds where each piece of `change` goes. Refuses
+/// What the canon holds where each piece of `change` goes. Refuses
 /// (exit 1, nothing changed), naming each with its ways out, a
 /// `skills/<name>` that differs from the folder's, anything in `skills/`,
 /// `upstream/` or `skiman.lock` that the import does not write, and a piece
 /// that is not a regular file or folder.
-fn repo_todo(
-    repo: &SkillRepo,
-    candidate: &Candidate,
-    change: &Change,
-) -> Result<Vec<Held>, Failure> {
+fn canon_todo(repo: &Canon, candidate: &Candidate, change: &Change) -> Result<Vec<Held>, Failure> {
     let todo = change.held(repo.root())?;
     let mut lines = Vec::new();
     for ((rel, want), held) in change.pieces.iter().zip(&todo) {
@@ -1317,7 +1444,7 @@ fn repo_todo(
                 "{rel} is not a regular file: replace it with one, or move it away"
             )),
             (Held::Other(_), _) if rel.starts_with("skills/") => lines.push(format!(
-                "{rel} differs from the import folder's {rel}: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's"
+                "{rel} differs from the import folder's {rel}: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's"
             )),
             _ => {}
         }
@@ -1327,21 +1454,21 @@ fn repo_todo(
     for path in repo.layout()?.skills().iter().map(Placed::path) {
         if !imported(&path) && !tree::basename(&path).starts_with('.') {
             lines.push(format!(
-                "{path} is not in the import folder: remove it from the skill repo, or put it in the import folder"
+                "{path} is not in the import folder: remove it from the canon, or put it in the import folder"
             ));
         }
     }
     for name in names_in(&repo.root().join("upstream"))? {
         if !third(&name) {
             lines.push(format!(
-                "upstream/{name} is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put {name} in the import folder as a third-party skill"
+                "upstream/{name} is the snapshot of no third-party skill in the import folder: remove it from the canon, or put {name} in the import folder as a third-party skill"
             ));
         }
     }
     for name in Lockfile::load(repo)?.skill_names() {
         if !third(&name) {
             lines.push(format!(
-                "skiman.lock has an entry for {name}, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put {name} in the import folder as a third-party skill"
+                "skiman.lock has an entry for {name}, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put {name} in the import folder as a third-party skill"
             ));
         }
     }
@@ -1350,20 +1477,22 @@ fn repo_todo(
     }
     let lines: Vec<String> = lines.iter().map(|l| format!("  {l}")).collect();
     Err(Failure::refused(format!(
-        "the skill repo {} holds content that is not this import's; nothing was changed:\n{}",
+        "the canon {} holds content that is not this import's; nothing was changed:\n{}",
         repo.root().display(),
         lines.join("\n")
     )))
 }
 
 /// Moves each original of `plan` to the backup, `moved` once one is in. Sync
-/// creates the owned link in its place. An original that is gone needs nothing.
+/// creates the owned link in its place. An original that is gone needs
+/// nothing. Each is taken from where the plan checked it (`real`), never
+/// through a link on its way that may have changed since.
 fn take_over(plan: &Plan, backups: &mut Backups, moved: &mut bool) -> Result<(), Failure> {
     for entry in &plan.moves {
         let point = entry.backup.display();
         test_hook::at("import", &format!("back-up:{point}"));
-        if std::fs::symlink_metadata(&entry.path).is_ok() {
-            let dest = backups.move_in(&entry.path, &entry.backup).map_err(|e| {
+        if std::fs::symlink_metadata(&entry.real).is_ok() {
+            let dest = backups.move_in(&entry.real, &entry.backup).map_err(|e| {
                 Failure::operational(format!(
                     "cannot move {} to the backup: {e}",
                     entry.path.display()
@@ -1381,7 +1510,7 @@ fn take_over(plan: &Plan, backups: &mut Backups, moved: &mut bool) -> Result<(),
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::{Move, merge_repo_config, move_order, resolution};
+    use super::{Move, merge_canon_config, move_order, resolution};
 
     fn entry(path: &str, hops: &[&str]) -> Move {
         Move {
@@ -1504,11 +1633,11 @@ mod tests {
     }
 
     #[test]
-    fn merging_the_skill_repos_configuration_into_its_own_result_changes_no_byte() {
+    fn merging_the_canons_configuration_into_its_own_result_changes_no_byte() {
         let tools = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
         let allow = "[[secrets.allow]]\npath = \"projects/proj/AGENTS.md\"\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n";
         let proj = "[projects.proj]\npath = \"~/proj\"\n";
-        // (the skill repo's skiman.toml, the import folder's)
+        // (the canon's skiman.toml, the import folder's)
         let cases = [
             (format!("{tools}\n{proj}\n{allow}"), tools.to_owned()),
             (
@@ -1545,13 +1674,17 @@ mod tests {
                 format!("{tools}\n{proj}\n{allow}"),
                 format!("{tools}\n[projects.other]\npath = \"~/other\"\n\n{allow}"),
             ),
+            (
+                format!("{tools}\n[linked.company]\npath = \"~/work/company\"\n\n{proj}"),
+                tools.to_owned(),
+            ),
         ];
-        for (repo, folder) in cases {
-            let merged = merge_repo_config(&folder, &repo).unwrap();
+        for (canon, folder) in cases {
+            let merged = merge_canon_config(&folder, &canon).unwrap();
             assert_eq!(
-                merge_repo_config(&folder, &merged).unwrap(),
+                merge_canon_config(&folder, &merged).unwrap(),
                 merged,
-                "repo:\n{repo}\nfolder:\n{folder}"
+                "canon:\n{canon}\nfolder:\n{folder}"
             );
         }
     }

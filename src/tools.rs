@@ -33,6 +33,26 @@ pub enum SkillsElsewhere {
     },
 }
 
+/// Where a tool keeps its session-start hooks, and in what shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionHook {
+    /// The JSON file (relative to `HOME`).
+    pub file: &'static str,
+    pub shape: HookShape,
+}
+
+/// How a session-start hook file lists its hooks. A handler is
+/// `{"type": "command", "command": ..., "timeout": ...}` in both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookShape {
+    /// `hooks.SessionStart` is a list of groups `{"matcher", "hooks": [handler]}`;
+    /// skiman adds one group with this matcher.
+    Grouped { matcher: &'static str },
+    /// The top level maps hook names to hooks whose `SessionStart` is a flat
+    /// list of handlers; skiman adds the hook with this name.
+    Named { name: &'static str },
+}
+
 /// Any folder that contains this file is managed elsewhere (a plugin), in every tool.
 pub const PLUGIN_MARKER: &str = ".claude-plugin/plugin.json";
 
@@ -49,8 +69,16 @@ pub struct AgentTool {
     /// Files (relative to `HOME`) the tool loads instead of the instruction
     /// file when they exist; `doctor` reports them.
     pub instruction_overrides: &'static [&'static str],
+    /// Files (relative to `HOME`) the tool loads on top of the instruction
+    /// file when they exist; `doctor` reports them.
+    pub instruction_additions: &'static [&'static str],
     /// Size limit of the global instruction file in bytes; `None` when none is known.
     pub instruction_size_limit: Option<u64>,
+    /// Bytes of a `SKILL.md` body the tool keeps when the skill is used,
+    /// counted after the frontmatter's closing `---` line and without
+    /// surrounding whitespace; the rest is cut without a message. `None`
+    /// when none is known.
+    pub skill_body_size_limit: Option<u64>,
     pub managed_elsewhere: &'static [ManagedElsewhere],
     /// Where other managers keep skills this tool reads (`skiman overview`).
     pub skills_elsewhere: &'static [SkillsElsewhere],
@@ -59,8 +87,8 @@ pub struct AgentTool {
     pub skills_not_listed: &'static [&'static str],
     /// Skill names this tool reserves (on top of [`crate::names::RESERVED`]).
     pub reserved_names: &'static [&'static str],
-    /// Settings file that holds the tool's session-start hooks; `None` when the tool has none.
-    pub session_hook_file: Option<&'static str>,
+    /// Where the tool's session-start hooks are; `None` when the tool has none.
+    pub session_hook: Option<SessionHook>,
     /// Why skiman writes no session-start hook entry for this tool yet; `None` when it does.
     pub session_hook_unavailable: Option<&'static str>,
     /// Instruction files the tool loads inside a project folder, as patterns
@@ -95,7 +123,9 @@ pub const TOOLS: &[AgentTool] = &[
         tool_dir: ".claude/skills",
         instruction_file: ".claude/CLAUDE.md",
         instruction_overrides: &[],
+        instruction_additions: &[],
         instruction_size_limit: None,
+        skill_body_size_limit: None,
         managed_elsewhere: &[
             ManagedElsewhere::Path(".claude/skills/synced"),
             ManagedElsewhere::Path(".claude/skills/.trash"),
@@ -115,7 +145,13 @@ pub const TOOLS: &[AgentTool] = &[
         ],
         skills_not_listed: &["built-in skills that are not stored on disk"],
         reserved_names: &["synced"],
-        session_hook_file: Some(".claude/settings.json"),
+        // Phase 1 experiment 5: not on `clear` or `compact`.
+        session_hook: Some(SessionHook {
+            file: ".claude/settings.json",
+            shape: HookShape::Grouped {
+                matcher: "startup|resume",
+            },
+        }),
         session_hook_unavailable: None,
         // `docs/project-scope-evidence.md`: Claude Code also loads `AGENTS.md`,
         // and every `.md` under `.claude/rules/` at any depth.
@@ -135,7 +171,9 @@ pub const TOOLS: &[AgentTool] = &[
         instruction_file: ".codex/AGENTS.md",
         // Codex reads `AGENTS.override.md` instead of `AGENTS.md` when it exists.
         instruction_overrides: &[".codex/AGENTS.override.md"],
+        instruction_additions: &[],
         instruction_size_limit: Some(32768),
+        skill_body_size_limit: None,
         managed_elsewhere: &[
             ManagedElsewhere::RealpathUnder(".codex/plugins"),
             ManagedElsewhere::Path(".codex/skills/.system"),
@@ -149,11 +187,16 @@ pub const TOOLS: &[AgentTool] = &[
         // skiman does not read.
         skills_not_listed: &["the skills of its plugins in `~/.codex/plugins`"],
         reserved_names: &[],
-        session_hook_file: Some(".codex/hooks.json"),
+        session_hook: Some(SessionHook {
+            file: ".codex/hooks.json",
+            shape: HookShape::Grouped {
+                matcher: "startup|resume",
+            },
+        }),
         // Phase 1 could not confirm that a trusted entry runs on startup and
         // resume (`docs/phase1-results.md`, experiment 4).
         session_hook_unavailable: Some(
-            "Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks",
+            "Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the canon's git hooks",
         ),
         // Codex reads `AGENTS.override.md` instead of `AGENTS.md` at each level.
         project_instruction_files: &["AGENTS.md", "AGENTS.override.md"],
@@ -165,14 +208,34 @@ pub const TOOLS: &[AgentTool] = &[
         tool_dir: ".gemini/config/skills",
         instruction_file: ".gemini/GEMINI.md",
         instruction_overrides: &[],
+        // agy 1.5.12 loads all four global locations together.
+        instruction_additions: &[
+            ".gemini/AGENTS.md",
+            ".gemini/config/GEMINI.md",
+            ".gemini/config/AGENTS.md",
+        ],
         // Bytes, inclusive: phase 1 measured 24000 loads whole, 24001 is
         // truncated (`docs/phase1-results.md`, 1c).
         instruction_size_limit: Some(24000),
+        // Bytes, inclusive: agy 1.5.12 keeps a body of 24000 bytes whole and
+        // cuts one of 24001; the frontmatter does not count
+        // (`docs/project-scope-evidence.md`).
+        skill_body_size_limit: Some(24000),
         managed_elsewhere: &[],
         skills_elsewhere: &[],
-        skills_not_listed: &[],
+        // agy 1.5.12 also loads these two folders (`docs/project-scope-evidence.md`).
+        skills_not_listed: &[
+            "the skills in `~/.gemini/skills`",
+            "the skills in `~/.gemini/antigravity-cli/skills`",
+        ],
         reserved_names: &[],
-        session_hook_file: None,
+        // agy 1.5.12 runs it when a conversation starts, at its first prompt,
+        // after it has read the skills for that prompt; a skill it links is
+        // there from the next prompt (`docs/project-scope-evidence.md`).
+        session_hook: Some(SessionHook {
+            file: ".gemini/config/hooks.json",
+            shape: HookShape::Named { name: "skiman" },
+        }),
         session_hook_unavailable: None,
         project_instruction_files: &["GEMINI.md", "AGENTS.md"],
         project_skill_dirs: &[".agent/skills", ".agents/skills"],

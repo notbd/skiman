@@ -1,10 +1,12 @@
 //! `skiman overview`: every skill on this machine as Markdown, for a person
-//! who wants to see what each one is and where it came from. The skill
-//! repo's skills come by group with their summary, kind, source, install
+//! who wants to see what each one is and where it came from. The canon's
+//! skills come by group with their summary, kind, source, install
 //! day, whether they are enabled and whether they have local modifications;
-//! then the skill skiman brings, and the skills other managers keep, which
-//! are only listed. Read-only; takes no lock. Spawns `git log` (read-only)
-//! for install days that `skiman.toml` does not record.
+//! then each linked folder as one section, with each linked skill's summary
+//! (ADR 0011) and whether it is distributed; then the skill skiman brings,
+//! and the skills other managers keep, which are only listed. Read-only;
+//! takes no lock. Spawns `git log` (read-only) for install days that
+//! `skiman.toml` does not record.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,17 +14,20 @@ use std::process::Stdio;
 
 use super::list::{modified, source_text, yes_no};
 use crate::Exit;
+use crate::canon::Canon;
 use crate::elsewhere::{self, OutsideSkill};
 use crate::failure::{Failure, finish};
 use crate::git;
-use crate::managing_skills;
+use crate::linked::summary::About;
+use crate::linked::{self, Linked, Shown};
 use crate::manifest::Manifest;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::rules;
+use crate::skiman_manual;
+use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree};
 
-const REPO_HEADER: [&str; 7] = [
+const CANON_HEADER: [&str; 7] = [
     "Skill",
     "Summary",
     "Kind",
@@ -31,12 +36,16 @@ const REPO_HEADER: [&str; 7] = [
     "Enabled",
     "Modified",
 ];
+const LINKED_HEADER: [&str; 3] = ["Skill", "Summary", "Distributed"];
 const ELSEWHERE_HEADER: [&str; 4] = ["Skill", "Managed by", "Location", "Read by"];
+/// Under a linked folder's table that shows a stand-in.
+const STAND_IN_NOTE: &str = "A summary in italics stands in for a missing `metadata.summary`: \
+     it is the first sentence of the skill's description.";
 /// The summary of the skill skiman brings, which has no `[skills.<name>]` table.
-const MANAGING_SKILLS_SUMMARY: &str = "How to change skills and global instructions with skiman";
+const MANUAL_SUMMARY: &str = "How to change skills and global instructions with skiman";
 /// What a day marked `(git)` means.
 const GIT_DAY_NOTE: &str = "An installed day marked (git) is the day of the latest commit that added \
-     the skill's SKILL.md to the skill repo, which can be later than the real install; \
+     the skill's SKILL.md to the canon, which can be later than the real install; \
      `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.";
 
 pub fn run() -> Exit {
@@ -45,7 +54,7 @@ pub fn run() -> Exit {
 
 fn overview() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let manifest = Manifest::load(&repo)?;
     let tree = WorkingTree::new(repo.root());
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
@@ -102,24 +111,71 @@ fn overview() -> Result<Exit, Failure> {
             None => ungrouped.push(row),
         }
     }
-    let found = elsewhere::find(&paths, &repo, &manifest);
+    let found = elsewhere::find(&paths, &repo);
 
     out!("# Skills\n");
-    out!("## In the skill repo ({count})\n");
+    out!("## In the canon ({count})\n");
     for (group, rows) in &groups {
         out!("### {} ({})\n", cell(group), rows.len());
-        table(&REPO_HEADER, rows);
+        table(&CANON_HEADER, rows);
     }
     if !ungrouped.is_empty() {
         out!("### No group ({})\n", ungrouped.len());
-        table(&REPO_HEADER, &ungrouped);
+        table(&CANON_HEADER, &ungrouped);
+    }
+    let linked = Linked::read(paths.home(), &repo, &manifest);
+    let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
+    for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
+        let path = folder.path.as_ref().expect("a shown folder has a path");
+        let (id, path) = (&folder.id, home_relative(path, paths.home()));
+        let Shown::Skills(skills) = shown else {
+            out!("## Linked folder {id}: `{path}`\n");
+            out!("Not on this machine.\n");
+            continue;
+        };
+        out!("## Linked folder {id} ({}): `{path}`\n", skills.len());
+        if skills.is_empty() {
+            continue;
+        }
+        let mut stand_in = false;
+        let single = Linked::is_single(folder, &kept);
+        let rows: Vec<[String; 3]> = skills
+            .into_iter()
+            .map(|(name, lost)| {
+                let dir = match &folder.path {
+                    Some(path) if single => path.clone(),
+                    _ => folder.skill_dir(&name),
+                };
+                let about = std::fs::read_to_string(dir.join("SKILL.md"))
+                    .ok()
+                    .and_then(|text| About::read(&text))
+                    .unwrap_or_default();
+                let summary = match (about.summary, about.description) {
+                    (Some(summary), _) => summary,
+                    (None, Some(description)) if !linked::stand_in(&description).is_empty() => {
+                        stand_in = true;
+                        format!("*{}*", linked::stand_in(&description).replace('*', "\\*"))
+                    }
+                    _ => "-".to_owned(),
+                };
+                let distributed = match lost {
+                    Some(holder) => format!("no: {holder}"),
+                    None => yes_no(true),
+                };
+                [name, summary, distributed]
+            })
+            .collect();
+        table(&LINKED_HEADER, &rows);
+        if stand_in {
+            out!("{STAND_IN_NOTE}\n");
+        }
     }
     out!("## Built into skiman (1)\n");
     table(
-        &REPO_HEADER,
+        &CANON_HEADER,
         &[[
-            managing_skills::NAME.to_owned(),
-            MANAGING_SKILLS_SUMMARY.to_owned(),
+            skiman_manual::NAME.to_owned(),
+            MANUAL_SUMMARY.to_owned(),
             "built-in".to_owned(),
             format!("skiman {}", env!("CARGO_PKG_VERSION")),
             "-".to_owned(),
@@ -145,23 +201,27 @@ fn overview() -> Result<Exit, Failure> {
 }
 
 fn elsewhere_row(skill: &OutsideSkill, home: &Path) -> [String; 4] {
-    let location = match skill.location.strip_prefix(home) {
-        Ok(rel) => format!("~/{}", rel.display()),
-        Err(_) => skill.location.display().to_string(),
-    };
     [
         skill.name.clone(),
         skill.owner.clone(),
-        location,
+        home_relative(&skill.location, home),
         skill.read_by.join(", "),
     ]
+}
+
+/// `path`, written with `~/` when it is under `home`.
+fn home_relative(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rel) => format!("~/{}", rel.display()),
+        Err(_) => path.display().to_string(),
+    }
 }
 
 /// The day (`YYYY-MM-DD`) of the latest commit that added the `SKILL.md`
 /// of the skill folder `skill`, or created it as a copy of another file (a
 /// skill removed and installed again counts from its last install),
 /// following renames (a move to another group is one); `None` when the
-/// skill repo is not in a git repo or the file was never committed.
+/// canon is not in a git repo or the file was never committed.
 fn install_commit_day(root: &Path, skill: &str) -> Option<String> {
     let output = git::query_command(root)
         // `--follow` sees a skill adapted from another as a copy (C) of it:

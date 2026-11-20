@@ -4,11 +4,11 @@ use snapbox::str;
 
 use crate::support::{Sandbox, Tool, assert_each_kill_finishes, assert_symlink, init, tree};
 
-/// The skill repo and every tool directory, to prove a command changed nothing.
+/// The canon and every tool directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<std::path::PathBuf, String>> {
     let mut world = vec![
-        tree(sandbox.skill_repo().join("skills")),
-        tree(sandbox.skill_repo().join("upstream")),
+        tree(sandbox.canon().join("skills")),
+        tree(sandbox.canon().join("upstream")),
     ];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
@@ -21,7 +21,7 @@ fn new_creates_a_valid_skill_and_links_it_into_every_installed_tool_directory() 
     // Codex is enabled but no longer present; Antigravity's tool directory is missing.
     std::fs::remove_dir_all(sandbox.presence_dir(Tool::Codex)).unwrap();
     std::fs::remove_dir_all(sandbox.tool_dir(Tool::Antigravity)).unwrap();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -29,10 +29,10 @@ fn new_creates_a_valid_skill_and_links_it_into_every_installed_tool_directory() 
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created [..]/skill-repo/skills/pdf
+created [..]/canon/skills/pdf
 linked [..]/home/.claude/skills/pdf
 linked [..]/home/.gemini/config/skills/pdf
-linked [..]/home/.gemini/config/skills/managing-skills
+linked [..]/home/.gemini/config/skills/skiman-manual
 
 "#]])
         .stderr_eq("");
@@ -59,7 +59,7 @@ linked [..]/home/.gemini/config/skills/managing-skills
 }
 
 #[test]
-fn an_edit_in_the_skill_repo_is_visible_through_every_link_at_once() {
+fn an_edit_in_the_canon_is_visible_through_every_link_at_once() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     sandbox
@@ -69,7 +69,7 @@ fn an_edit_in_the_skill_repo_is_visible_through_every_link_at_once() {
         .code(0);
 
     let edited = "---\nname: pdf\ndescription: Fill and sign PDF forms\n---\n\nUse pdftk.\n";
-    std::fs::write(sandbox.skill_repo().join("skills/pdf/SKILL.md"), edited).unwrap();
+    std::fs::write(sandbox.canon().join("skills/pdf/SKILL.md"), edited).unwrap();
 
     for tool in Tool::ALL {
         let through_link = sandbox.tool_dir(tool).join("pdf/SKILL.md");
@@ -81,7 +81,7 @@ fn an_edit_in_the_skill_repo_is_visible_through_every_link_at_once() {
 fn new_also_links_a_skill_folder_created_by_hand() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir(repo.join("skills/notes")).unwrap();
     std::fs::write(
         repo.join("skills/notes/SKILL.md"),
@@ -118,7 +118,7 @@ fn new_writes_the_description_as_valid_yaml_whatever_it_contains() {
         .code(0);
 
     assert_eq!(
-        std::fs::read_to_string(sandbox.skill_repo().join("skills/quote/SKILL.md")).unwrap(),
+        std::fs::read_to_string(sandbox.canon().join("skills/quote/SKILL.md")).unwrap(),
         "---\nname: quote\ndescription: \"Say \\\"hi\\\": a\\\\b\\nnext # not a comment\"\n---\n\n# quote\n"
     );
 }
@@ -141,7 +141,7 @@ fn new_refuses_invalid_and_reserved_names_and_writes_nothing() {
                 "error: `{name}` is not a valid skill name: use 1 to 64 lowercase letters, digits and single hyphens between them (^[a-z0-9]+(-[a-z0-9]+)*$)\n"
             ));
     }
-    for name in ["managing-skills", "synced", ".hidden"] {
+    for name in ["skiman-manual", "synced", ".hidden"] {
         sandbox
             .skiman()
             .args(["new", "-d", "d", "--", name])
@@ -149,10 +149,17 @@ fn new_refuses_invalid_and_reserved_names_and_writes_nothing() {
             .code(1)
             .stdout_eq("")
             .stderr_eq(format!(
-                "error: `{name}` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)\n"
+                "error: `{name}` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)\n"
             ));
     }
     assert_eq!(world(&sandbox), before);
+
+    // The manual's name before the rename is an ordinary skill name.
+    sandbox
+        .skiman()
+        .args(["new", "managing-skills", "-d", "d"])
+        .assert()
+        .code(0);
 
     sandbox
         .skiman()
@@ -165,7 +172,7 @@ fn new_refuses_invalid_and_reserved_names_and_writes_nothing() {
 fn new_refuses_each_form_of_taken_name_and_writes_nothing() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::write(repo.join("skills/file"), "not a folder").unwrap();
     std::os::unix::fs::symlink(repo.join("nowhere"), repo.join("skills/dangling")).unwrap();
     std::fs::create_dir(repo.join("skills/no-skill-md")).unwrap();
@@ -262,7 +269,7 @@ fn new_in_a_terminal_asks_for_the_description() {
 
     assert_eq!(code, 0);
     assert_eq!(
-        std::fs::read_to_string(sandbox.skill_repo().join("skills/pdf/SKILL.md")).unwrap(),
+        std::fs::read_to_string(sandbox.canon().join("skills/pdf/SKILL.md")).unwrap(),
         "---\nname: pdf\ndescription: \"Fill PDF forms\"\n---\n\n# pdf\n"
     );
 }
@@ -282,13 +289,13 @@ error: [..]/home/.config/skiman/config.toml does not exist; run `skiman init <pa
 "#]]);
 }
 
-/// Staging never writes outside the skill repo: a `.skiman/tmp` or a
+/// Staging never writes outside the canon: a `.skiman/tmp` or a
 /// `skills/` that is a link stops `new` before anything is written there.
 #[test]
 fn new_writes_nothing_through_a_linked_tmp_or_skills_folder() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let elsewhere = sandbox.root().join("elsewhere");
     std::fs::create_dir(&elsewhere).unwrap();
     // What a link leads to is not skiman's to move either: no tmp leftover.

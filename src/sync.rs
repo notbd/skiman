@@ -1,7 +1,7 @@
 //! Distribution: the reconcile loop behind `skiman sync`, `sync --hook` and
 //! the sync every write command ends with (spec Distribution and refresh).
 //!
-//! [`run`] is the entry point; it needs the repo lock. [`reconcile`] computes
+//! [`run`] is the entry point; it needs the canon lock. [`reconcile`] computes
 //! and applies the changes and returns a [`Report`] of what it did and found.
 //! Only owned entries and instruction locations are created, retargeted or
 //! removed (spec Ownership);
@@ -13,17 +13,18 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::layout::Layout;
-use crate::managing_skills;
+use crate::layout::{Layout, Placed};
+use crate::linked::{self, Holder, Linked, State};
 use crate::manifest::Manifest;
 use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::reported::Reported;
+use crate::skiman_manual;
 use crate::test_hook;
 use crate::tools::{AgentTool, TOOLS};
 use crate::tree::WorkingTree;
@@ -51,9 +52,14 @@ pub struct Item {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemKind {
     /// A foreign skill; `tool` is the id of the tool whose directory holds it.
-    Foreign { name: String, tool: &'static str },
-    /// Sync wants to link skill `name` here, but something it does not own is there (exit 3).
-    Occupied { name: String },
+    Foreign {
+        name: String,
+        tool: &'static str,
+        into: PointsInto,
+    },
+    /// Sync wants to link skill `name` here, but something it does not own
+    /// is there (exit 3); `same` when that is a link to the same folder.
+    Occupied { name: String, same: bool },
     /// A folder under `skills/` that is never distributed, and why.
     InvalidSkillFolder { reason: &'static str },
     /// An instruction location skiman does not own, so the shared body is not linked there (exit 3).
@@ -65,6 +71,80 @@ pub enum ItemKind {
         message: String,
         attention: bool,
     },
+    /// A report on a linked folder, a linked skill or `<canon>/linked`
+    /// (`crate::linked`), named and judged as [`ItemKind::Project`].
+    Linked {
+        what: &'static str,
+        message: String,
+        attention: bool,
+    },
+}
+
+/// Where a foreign entry leads, for the way in sync names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PointsInto {
+    /// Anywhere else: `skiman adopt` brings it in.
+    Elsewhere,
+    /// A link into a folder outside the canon that could be registered:
+    /// `skiman linked add <folder>` is a way in too.
+    Registrable(PathBuf),
+    /// Into a registered linked folder (`id`): adopting it would copy
+    /// linked content into the canon, so no adopt hint. `distributed` when
+    /// the folder was read, so skiman distributes its skills; not when it
+    /// is skipped or cannot be read.
+    Linked { id: String, distributed: bool },
+    /// Unknown while the linked folder `id` cannot be read: adopt and import
+    /// refuse every entry until it can.
+    Unknown(String),
+}
+
+/// The [`ItemKind::Foreign`] of the entry `name` (metadata `meta`) at
+/// `path` in `tool`'s directory: a link into a linked folder gets no adopt
+/// hint, nor does any entry while a linked folder cannot be read, and a
+/// link into a folder that could be registered gets that hint.
+pub fn foreign(
+    name: &std::ffi::OsStr,
+    tool: &'static str,
+    path: &Path,
+    meta: &std::fs::Metadata,
+    repo: &Canon,
+    linked: &Linked,
+) -> ItemKind {
+    let real = path.canonicalize().ok();
+    let into = match &real {
+        Some(real) if let Some(folder) = linked.reaches_into(real) => PointsInto::Linked {
+            id: folder.id.clone(),
+            distributed: matches!(folder.state, State::Read(_)),
+        },
+        _ if let Some(folder) = linked.unreadable() => PointsInto::Unknown(folder.id.clone()),
+        Some(real)
+            if meta.is_symlink()
+                && !real.starts_with(repo.root())
+                && let Some(parent) = real.parent()
+                && linked.admits(parent) =>
+        {
+            PointsInto::Registrable(parent.to_owned())
+        }
+        _ => PointsInto::Elsewhere,
+    };
+    ItemKind::Foreign {
+        name: name.to_string_lossy().into_owned(),
+        tool,
+        into,
+    }
+}
+
+/// The [`ItemKind::Occupied`] of `path`, which holds the name of the skill
+/// `name` whose link would point at `target`.
+pub fn occupied(name: &str, path: &Path, target: &Path) -> ItemKind {
+    let same = std::fs::symlink_metadata(path).is_ok_and(|m| m.is_symlink())
+        && path
+            .canonicalize()
+            .is_ok_and(|real| target.canonicalize().is_ok_and(|t| t == real));
+    ItemKind::Occupied {
+        name: name.to_owned(),
+        same,
+    }
 }
 
 impl Item {
@@ -78,6 +158,9 @@ impl Item {
             ItemKind::Project { what, .. } => {
                 return format!("project-{what} {}", self.path.display());
             }
+            ItemKind::Linked { what, .. } => {
+                return format!("linked-{what} {}", self.path.display());
+            }
         };
         format!("{kind} {}", self.path.display())
     }
@@ -85,10 +168,43 @@ impl Item {
     pub fn message(&self) -> String {
         let path = self.path.display();
         match &self.kind {
-            ItemKind::Foreign { name, tool } => format!(
+            ItemKind::Foreign {
+                name,
+                tool,
+                into: PointsInto::Elsewhere,
+            } => format!(
                 "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`"
             ),
-            ItemKind::Occupied { name } => format!(
+            ItemKind::Foreign {
+                name,
+                tool,
+                into: PointsInto::Registrable(folder),
+            } => format!(
+                "foreign skill {path} is not managed by skiman; bring it in with `skiman adopt {name} --from {tool}`, or register the folder it is in with `skiman linked add {}`",
+                crate::project::shell_quote(&folder.display().to_string())
+            ),
+            ItemKind::Foreign {
+                into: PointsInto::Unknown(id),
+                ..
+            } => format!(
+                "foreign skill {path} is not managed by skiman; it can be brought in once linked folder `{id}` can be read"
+            ),
+            ItemKind::Foreign {
+                into: PointsInto::Linked { id, distributed },
+                ..
+            } => {
+                let hint = if *distributed {
+                    ", which skiman already distributes; delete it once nothing needs it"
+                } else {
+                    ""
+                };
+                format!("{path} is a link into linked folder `{id}`{hint}")
+            }
+            ItemKind::Occupied { name, same: true } => format!(
+                "{path} is a link to the same folder as skill {name}, but skiman did not make it; deleting it is safe: rm {}",
+                crate::project::shell_quote(&path.to_string())
+            ),
+            ItemKind::Occupied { name, same: false } => format!(
                 "{path} is occupied by an entry skiman does not own, so skill {name} is not linked there; move it away, then run `skiman sync`"
             ),
             ItemKind::InvalidSkillFolder { reason } => {
@@ -97,7 +213,7 @@ impl Item {
             ItemKind::RefusedLocation => format!(
                 "instruction file {path} is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`"
             ),
-            ItemKind::Project { message, .. } => message.clone(),
+            ItemKind::Project { message, .. } | ItemKind::Linked { message, .. } => message.clone(),
         }
     }
 }
@@ -136,6 +252,10 @@ impl Report {
                         attention: true,
                         ..
                     }
+                    | ItemKind::Linked {
+                        attention: true,
+                        ..
+                    }
             )
         }) {
             Exit::NeedsAttention
@@ -146,26 +266,39 @@ impl Report {
 }
 
 /// Syncs `repo` while the caller holds its lock and prints the result for `output`.
-pub fn run(paths: &Paths, repo: &SkillRepo, lock: &RepoLock, output: Output) -> Exit {
+pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exit {
     run_with(paths, repo, lock, output, None, &[]).0
 }
 
-/// [`run`], also returning the report. `previous_repo` is the realpath of the
-/// skill repo `init` just switched away from: its links count as owned.
-/// Nothing is said about `failed`, paths whose write the command just
-/// reported failing: the way out sync names for them is that same write.
+/// The canon `init` just switched away from.
+#[derive(Debug)]
+pub struct PreviousCanon {
+    /// Its realpath: skiman's links into it count as owned for one sync.
+    pub root: PathBuf,
+    /// Its registrations, when its `skiman.toml` can be read: they guard
+    /// every write that sync makes.
+    pub linked: Option<Linked>,
+}
+
+/// [`run`], also returning the report, after `init` switched away from
+/// `previous`. Nothing is said about `failed`, paths whose write the
+/// command just reported failing: the way out sync names for them is that
+/// same write.
 pub fn run_with(
     paths: &Paths,
-    repo: &SkillRepo,
-    _lock: &RepoLock,
+    repo: &Canon,
+    _lock: &CanonLock,
     output: Output,
-    previous_repo: Option<PathBuf>,
+    previous: Option<&PreviousCanon>,
     failed: &[PathBuf],
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let mut report = reconcile(paths, repo, &manifest, previous_repo, output);
-            crate::project::sync::reconcile(paths, repo, &manifest, &mut report);
+            let linked = Linked::read(paths.home(), repo, &manifest)
+                .guarding_also(previous.and_then(|p| p.linked.as_ref()));
+            let previous_canon = previous.map(|p| p.root.clone());
+            let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
+            crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);
             report
         }
         Err(failure) => return (report_failure(failure, output), Report::default()),
@@ -221,27 +354,32 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
     }
 }
 
-/// Materialises `managing-skills`, then makes every installed tool's tool
-/// directory hold an owned link for every wanted entry, removes owned entries
-/// nothing wants, and removes owned entries from tool directories of known
-/// tools that are not enabled. Then does the same for instruction locations
-/// and the shared body.
+/// Materialises `skiman-manual` and links each linked folder into the
+/// canon, then makes every installed tool's tool directory hold an owned
+/// link for every wanted entry, removes owned entries nothing wants, and
+/// removes owned entries from tool directories of known tools that are not
+/// enabled. Then does the same for instruction locations and the shared body.
 pub fn reconcile(
     paths: &Paths,
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
-    previous_repo: Option<PathBuf>,
+    linked: &Linked,
+    previous_canon: Option<PathBuf>,
     output: Output,
 ) -> Report {
     let home = paths.home();
     let mut report = Report::default();
-    if let Err(e) = managing_skills::materialise(repo) {
-        report.errors.push(format!(
-            "cannot write {}: {e}",
-            repo.managing_skills_dir().display()
-        ));
+    if let Err(e) = skiman_manual::materialise(repo) {
+        report
+            .errors
+            .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
     }
-    let wanted = match wanted_entries(repo, manifest, &mut report) {
+    let kept = kept_names(paths, repo, manifest, linked);
+    linked::canon::report_folders(linked, &kept, &mut report);
+    let offered = linked::canon::reconcile(linked, &mut report);
+    let ownership = Ownership::new(paths, repo, previous_canon);
+    let offers = |id: &str| offered.contains(id);
+    let wanted = match wanted_entries(repo, manifest, linked, &kept, &offers, &mut report) {
         Ok(wanted) => wanted,
         Err(e) => {
             report
@@ -250,19 +388,28 @@ pub fn reconcile(
             return report;
         }
     };
-    let ownership = Ownership::new(paths, repo, manifest, previous_repo);
+    let targets = write_targets(home, manifest);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
-    for tool in installed_tools(home, manifest) {
-        let dir = tool.tool_dir(home);
-        // The tool directory itself may be missing; its parent chain is never replaced.
-        if let Err(e) = std::fs::create_dir_all(&dir) {
+    for target in targets
+        .iter()
+        .filter(|t| t.place == Place::ToolDir && t.links)
+    {
+        let (tool, dir, through) = (target.tool, &target.path, &target.lands);
+        if reconciled.contains(through) || guarded(linked, dir, through, &mut report) {
+            reconciled.push(through.clone());
+            continue;
+        }
+        // Created and written where the guard checked, never through `dir`
+        // again: a link on its way may change meanwhile. The tool directory
+        // itself may be missing; its parent chain is never replaced.
+        if let Err(e) = std::fs::create_dir_all(through) {
             report
                 .errors
                 .push(format!("cannot create {}: {e}", dir.display()));
             continue;
         }
-        let real = match dir.canonicalize() {
+        let real = match through.canonicalize() {
             Ok(real) => real,
             Err(e) => {
                 report
@@ -271,28 +418,115 @@ pub fn reconcile(
                 continue;
             }
         };
+        // A folder created as a link meanwhile is checked where it leads.
+        if real != *through && guarded(linked, dir, &real, &mut report) {
+            reconciled.push(real);
+            continue;
+        }
         if !reconciled.contains(&real) {
-            reconcile_tool_dir(tool, &dir, &real, &wanted, &ownership, &mut report);
+            let tool_dir = ToolDir {
+                tool,
+                dir,
+                real: &real,
+            };
+            let names = Names {
+                wanted: &wanted,
+                kept: &kept,
+            };
+            reconcile_tool_dir(&tool_dir, repo, linked, &names, &ownership, &mut report);
             reconciled.push(real);
         }
     }
-    let enabled = manifest.enabled_tools();
-    for tool in TOOLS
+    for target in targets
         .iter()
-        .filter(|t| !enabled.iter().any(|id| id == t.id))
+        .filter(|t| t.place == Place::ToolDir && !t.links)
     {
-        let dir = tool.tool_dir(home);
-        let Ok(real) = dir.canonicalize() else {
-            continue;
-        };
-        if !reconciled.contains(&real) {
-            remove_owned_entries(&dir, &real, &ownership, &mut report);
-            reconciled.push(real);
+        let (dir, real) = (&target.path, &target.lands);
+        if !reconciled.contains(real) && !guarded(linked, dir, real, &mut report) {
+            remove_owned_entries(
+                &ToolDir {
+                    tool: target.tool,
+                    dir,
+                    real,
+                },
+                &ownership,
+                &mut report,
+            );
         }
+        reconciled.push(real.clone());
     }
     let sweep = output == Output::Normal;
-    reconcile_instruction_locations(home, repo, manifest, &ownership, sweep, &mut report);
+    let context = (repo, linked, &ownership);
+    reconcile_instruction_locations(&targets, context, sweep, &mut report);
     report
+}
+
+/// A tool directory or an instruction location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    ToolDir,
+    Instructions,
+}
+
+/// A place outside the canon that sync writes in (spec "Write targets never
+/// reach into a linked folder").
+#[derive(Debug)]
+pub struct WriteTarget {
+    pub tool: &'static AgentTool,
+    pub place: Place,
+    /// The tool is installed and enabled, so sync links there; otherwise
+    /// sync only removes its own links.
+    pub links: bool,
+    /// As the tool names it.
+    pub path: PathBuf,
+    /// Where a write there lands, as the write guard compares it.
+    pub lands: PathBuf,
+}
+
+/// Every place sync writes in under `manifest`, in the order it writes
+/// them: each installed tool's directory, each other known tool's that
+/// exists, then the same for instruction locations (one whose parent does
+/// not resolve is left out for a tool that is not enabled). Sync and
+/// import's check before any write both use this list.
+pub fn write_targets(home: &Path, manifest: &Manifest) -> Vec<WriteTarget> {
+    let enabled = manifest.enabled_tools();
+    let installed: Vec<&'static AgentTool> = installed_tools(home, manifest).collect();
+    let others = || {
+        TOOLS
+            .iter()
+            .filter(|t| !enabled.iter().any(|id| id == t.id))
+    };
+    let target = |tool, place, links, path, lands| WriteTarget {
+        tool,
+        place,
+        links,
+        path,
+        lands,
+    };
+    let mut targets = Vec::new();
+    for &tool in &installed {
+        let dir = tool.tool_dir(home);
+        let lands = linked::written_through(&dir);
+        targets.push(target(tool, Place::ToolDir, true, dir, lands));
+    }
+    for tool in others() {
+        let dir = tool.tool_dir(home);
+        if let Ok(real) = dir.canonicalize() {
+            targets.push(target(tool, Place::ToolDir, false, dir, real));
+        }
+    }
+    for &tool in &installed {
+        let path = home.join(tool.instruction_file);
+        let lands = linked::location(&path);
+        targets.push(target(tool, Place::Instructions, true, path, lands));
+    }
+    for tool in others() {
+        let path = home.join(tool.instruction_file);
+        if let Ok(location) = instruction_location(&path) {
+            targets.push(target(tool, Place::Instructions, false, path, location));
+        }
+    }
+    targets
 }
 
 /// Links the shared body to every installed tool's instruction location and
@@ -301,17 +535,24 @@ pub fn reconcile(
 /// with the file name (the file itself is not followed), so aliased locations
 /// are reconciled once and a link from one location to another is not owned.
 fn reconcile_instruction_locations(
-    home: &Path,
-    repo: &SkillRepo,
-    manifest: &Manifest,
-    ownership: &Ownership,
+    targets: &[WriteTarget],
+    (repo, linked, ownership): (&Canon, &Linked, &Ownership),
     sweep: bool,
     report: &mut Report,
 ) {
     let target = repo.shared_body();
     let mut reconciled = Vec::new();
-    for tool in installed_tools(home, manifest) {
-        let path = home.join(tool.instruction_file);
+    // Locations inside a linked folder: never written, never swept.
+    let mut refused = Vec::new();
+    for to in targets
+        .iter()
+        .filter(|t| t.place == Place::Instructions && t.links)
+    {
+        let (path, lands) = (to.path.clone(), &to.lands);
+        if refused.contains(lands) || guarded(linked, &path, lands, report) {
+            refused.push(lands.clone());
+            continue;
+        }
         let location = match instruction_location(&path) {
             Ok(location) => location,
             Err(e) => {
@@ -322,6 +563,11 @@ fn reconcile_instruction_locations(
             }
         };
         if reconciled.contains(&location) {
+            continue;
+        }
+        // Resolved again here, so checked again where it is written.
+        if location != *lands && guarded(linked, &path, &location, report) {
+            refused.push(location);
             continue;
         }
         let refused = |path: PathBuf| Item {
@@ -364,16 +610,16 @@ fn reconcile_instruction_locations(
         }
         reconciled.push(location);
     }
-    let enabled = manifest.enabled_tools();
-    for tool in TOOLS
+    for to in targets
         .iter()
-        .filter(|t| !enabled.iter().any(|id| id == t.id))
+        .filter(|t| t.place == Place::Instructions && !t.links)
     {
-        let path = home.join(tool.instruction_file);
-        let Ok(location) = instruction_location(&path) else {
+        let (path, location) = (to.path.clone(), to.lands.clone());
+        if reconciled.contains(&location) || refused.contains(&location) {
             continue;
-        };
-        if reconciled.contains(&location) {
+        }
+        if guarded(linked, &path, &location, report) {
+            refused.push(location);
             continue;
         }
         if let Ok(meta) = std::fs::symlink_metadata(&location)
@@ -402,6 +648,24 @@ fn reconcile_instruction_locations(
     }
 }
 
+/// Reports `path` and returns `true` when it resolves to `target` inside a
+/// linked folder: skiman writes nothing there (exit 3).
+fn guarded(linked: &Linked, path: &Path, target: &Path, report: &mut Report) -> bool {
+    let Some(message) = linked.refusal(path, target) else {
+        return false;
+    };
+    report.items.push(Item {
+        scope: target.display().to_string(),
+        path: path.to_owned(),
+        kind: ItemKind::Linked {
+            what: "guarded",
+            message,
+            attention: true,
+        },
+    });
+    true
+}
+
 /// The realpath of `path`'s parent joined with its file name. Fails when the
 /// parent cannot be resolved; sync never creates or replaces it.
 pub fn instruction_location(path: &Path) -> std::io::Result<PathBuf> {
@@ -420,74 +684,168 @@ pub fn installed_tools<'a>(
         .filter(move |tool| enabled.iter().any(|id| id == tool.id) && tool.is_present(home))
 }
 
+/// The names that links [`Linked::keeper`] keeps in the installed tool
+/// directories, with what keeps each: a transient read error never hands
+/// a name to another skill. A [`Holder::Single`] link in any tool
+/// directory decides the name, whatever the others hold. Reads the tool
+/// directories only while some link may be kept. Sync and every command
+/// that shows a winner use it.
+pub fn kept_names(
+    paths: &Paths,
+    repo: &Canon,
+    manifest: &Manifest,
+    linked: &Linked,
+) -> BTreeMap<String, Holder> {
+    let mut kept = BTreeMap::new();
+    if !linked.keeps_any() {
+        return kept;
+    }
+    let home = paths.home();
+    let ownership = Ownership::new(paths, repo, None);
+    for tool in installed_tools(home, manifest) {
+        let dir = tool.tool_dir(home);
+        let Ok(real) = dir.canonicalize() else {
+            continue;
+        };
+        for (name, meta) in read_entries(&real, &dir, &mut Report::default()) {
+            if let Entry::Owned(target) = ownership.classify(&real, &name, &meta)
+                && let Some(holder) = linked.keeper(&target)
+            {
+                let name = fsutil::temporary_of(&name).unwrap_or(&name);
+                let name = name.to_string_lossy().into_owned();
+                if !matches!(kept.get(&name), Some(Holder::Single(_))) {
+                    kept.insert(name, holder);
+                }
+            }
+        }
+    }
+    kept
+}
+
 /// One entry sync wants in every installed tool directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wanted {
     pub name: String,
     /// The exact absolute link target: `<repo realpath>/skills/<n>`,
-    /// `<repo realpath>/skills/<group>/<n>` or
-    /// `<repo realpath>/.skiman/managing-skills`.
+    /// `<repo realpath>/skills/<group>/<n>`,
+    /// `<repo realpath>/.skiman/skiman-manual`, or for a linked skill
+    /// `<repo realpath>/linked/<id>/<n>` or `<repo realpath>/linked/<id>`.
     pub target: PathBuf,
 }
 
-/// Every distributable skill that is not `enabled = false`, in name order,
-/// then `managing-skills`. Folders under `skills/` that are not
-/// distributable are added to `report.items`.
+/// Every distributable skill that is not `enabled = false` and whose name
+/// no kept link holds ([`linked::withheld`]), in name order, then
+/// `skiman-manual`, then the linked skills of the folders `offers` accepts
+/// that no other skill holds the name of ([`Linked::names`]; `kept` from
+/// [`kept_names`]). Folders under `skills/` that are not distributable or
+/// are withheld, and linked skills that lose their name, are added to
+/// `report.items`.
 pub fn wanted_entries(
-    repo: &SkillRepo,
+    repo: &Canon,
     manifest: &Manifest,
+    linked: &Linked,
+    kept: &BTreeMap<String, Holder>,
+    offers: &dyn Fn(&str) -> bool,
     report: &mut Report,
 ) -> std::io::Result<Vec<Wanted>> {
     let entries = manifest.skills();
     let scope = repo.skills_dir().display().to_string();
     let layout = Layout::read(&WorkingTree::new(repo.root()))?;
+    let withheld = linked::withheld(repo.root(), &layout, manifest, kept);
     let mut wanted = Vec::new();
     for placed in layout.skills() {
         let (name, dir) = (&placed.name, repo.root().join(placed.path()));
-        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.is_dir()) {
-            continue;
-        }
-        let reason = match layout.all_of(name).len() {
-            1 => not_distributable(name, &dir),
-            _ => Some("its name is in more than one group folder"),
-        };
-        match reason {
-            Some(reason) => report.items.push(Item {
+        match skill_folder(&layout, placed, &dir) {
+            SkillFolder::NotAFolder => {}
+            SkillFolder::Invalid(reason) => report.items.push(Item {
                 scope: scope.clone(),
                 path: dir,
                 kind: ItemKind::InvalidSkillFolder { reason },
             }),
-            None if entries.get(name).is_some_and(|e| !e.enabled) => {}
-            None => wanted.push(Wanted {
+            SkillFolder::Distributable if entries.get(name).is_some_and(|e| !e.enabled) => {}
+            SkillFolder::Distributable
+                if let Some(withheld) = withheld.iter().find(|w| w.path == placed.path()) =>
+            {
+                report.items.push(Item {
+                    scope: scope.clone(),
+                    kind: ItemKind::Linked {
+                        what: "collision",
+                        message: withheld.message(),
+                        attention: true,
+                    },
+                    path: dir,
+                })
+            }
+            SkillFolder::Distributable => wanted.push(Wanted {
                 name: name.clone(),
                 target: dir,
             }),
         }
     }
     wanted.push(Wanted {
-        name: managing_skills::NAME.to_owned(),
-        target: repo.managing_skills_dir(),
+        name: skiman_manual::NAME.to_owned(),
+        target: repo.manual_dir(),
     });
+    let (offered, collisions) = linked.names(&layout, kept, offers);
+    wanted.extend(
+        offered
+            .into_iter()
+            .map(|(name, target)| Wanted { name, target }),
+    );
+    for collision in collisions {
+        report.items.push(Item {
+            scope: linked.dir().display().to_string(),
+            path: collision.dir.clone(),
+            kind: ItemKind::Linked {
+                what: "collision",
+                message: collision.message(),
+                attention: true,
+            },
+        });
+    }
     Ok(wanted)
 }
 
-/// Why the skill folder `dir` (`skills/<name>` or `skills/<group>/<name>`) is not distributable; a
-/// distributable one's name passes the regex, is not reserved, and its
-/// folder holds a `SKILL.md`.
-fn not_distributable(name: &str, dir: &Path) -> Option<&'static str> {
-    if names::is_reserved(name) {
-        Some("its name is reserved")
+/// What sync makes of a skill folder under `skills/`
+/// ([`skill_folder`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillFolder {
+    /// Not a real folder: sync leaves it to the rules, which report it.
+    NotAFolder,
+    /// An invalid skill folder, not distributed for this reason.
+    Invalid(&'static str),
+    /// Distributed while it is enabled and no kept link holds its name.
+    Distributable,
+}
+
+/// What sync makes of the skill folder `placed` of `layout`, at `dir`. A
+/// distributable one is a real folder whose name passes the regex, is not
+/// reserved and is in one place only, and that holds a `SKILL.md`. Sync,
+/// `check` and `doctor` all decide by it.
+pub fn skill_folder(layout: &Layout, placed: &Placed, dir: &Path) -> SkillFolder {
+    let name = &placed.name;
+    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
+        SkillFolder::NotAFolder
+    } else if layout.all_of(name).len() > 1 {
+        SkillFolder::Invalid("its name is in more than one group folder")
+    } else if names::is_reserved(name) {
+        SkillFolder::Invalid("its name is reserved")
     } else if !names::is_valid(name) {
-        Some("its name is not a valid skill name")
+        SkillFolder::Invalid("its name is not a valid skill name")
     } else if !dir.join("SKILL.md").is_file() {
-        Some("it holds no SKILL.md")
+        SkillFolder::Invalid("it holds no SKILL.md")
     } else {
-        None
+        SkillFolder::Distributable
     }
 }
 
-/// The entries of `dir` with their own metadata (links not followed), sorted by name.
-fn read_entries(dir: &Path, report: &mut Report) -> Vec<(OsString, std::fs::Metadata)> {
+/// The entries of `dir` with their own metadata (links not followed),
+/// sorted by name; a failure is reported as reading `shown`.
+fn read_entries(
+    dir: &Path,
+    shown: &Path,
+    report: &mut Report,
+) -> Vec<(OsString, std::fs::Metadata)> {
     let read = || -> std::io::Result<Vec<(OsString, std::fs::Metadata)>> {
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(dir)? {
@@ -500,61 +858,87 @@ fn read_entries(dir: &Path, report: &mut Report) -> Vec<(OsString, std::fs::Meta
     read().unwrap_or_else(|e| {
         report
             .errors
-            .push(format!("cannot read {}: {e}", dir.display()));
+            .push(format!("cannot read {}: {e}", shown.display()));
         Vec::new()
     })
 }
 
-/// `dir` is the tool directory as spelled for `tool`, `real` its realpath.
+/// A tool directory of `tool`: `dir` as spelled, which messages show, and
+/// `real` its realpath as the write guard checked it, which every read
+/// and write goes through.
+struct ToolDir<'a> {
+    tool: &'a AgentTool,
+    dir: &'a Path,
+    real: &'a Path,
+}
+
+/// The same for every tool directory in one sync: the entries it wants
+/// ([`wanted_entries`]) and the names kept links hold ([`kept_names`]).
+struct Names<'a> {
+    wanted: &'a [Wanted],
+    kept: &'a BTreeMap<String, Holder>,
+}
+
+/// Links every wanted entry in the tool directory and removes the owned
+/// entries nothing wants; owned links [`Linked::keeper`] keeps, and any
+/// owned link under a name one of them holds elsewhere (`kept`), stay
+/// exactly as they are and keep their name.
 fn reconcile_tool_dir(
-    tool: &AgentTool,
-    dir: &Path,
-    real: &Path,
-    wanted: &[Wanted],
+    tool_dir: &ToolDir,
+    repo: &Canon,
+    linked: &Linked,
+    names: &Names,
     ownership: &Ownership,
     report: &mut Report,
 ) {
+    let ToolDir { tool, dir, real } = *tool_dir;
+    let Names { wanted, kept } = *names;
     let by_name: BTreeMap<&str, &Path> = wanted
         .iter()
         .map(|w| (w.name.as_str(), w.target.as_path()))
         .collect();
     let scope = real.display().to_string();
-    let occupied = |name: &str, path: PathBuf| Item {
+    let occupied = |name: &str, at: &Path, path: PathBuf| Item {
         scope: scope.clone(),
+        kind: occupied(name, at, by_name[name]),
         path,
-        kind: ItemKind::Occupied {
-            name: name.to_owned(),
-        },
     };
     let mut handled = BTreeSet::new();
-    for (name, meta) in read_entries(dir, report) {
-        let path = dir.join(&name);
+    for (name, meta) in read_entries(real, dir, report) {
+        let (at, path) = (real.join(&name), dir.join(&name));
         let want = name.to_str().and_then(|n| by_name.get_key_value(n));
-        match (ownership.classify(real, &name, &meta), want) {
+        let entry = ownership.classify(real, &name, &meta);
+        if let Entry::Owned(current) = &entry
+            && (linked.keeper(current).is_some()
+                || name.to_str().is_some_and(|n| kept.contains_key(n)))
+        {
+            if let Some((name, _)) = want {
+                handled.insert(*name);
+            }
+            continue;
+        }
+        match (entry, want) {
             (Entry::Owned(current), Some((name, target))) => {
                 handled.insert(*name);
                 if current != *target {
-                    match fsutil::relink(&path, real, &current, Some(target)) {
+                    match fsutil::relink(&at, real, &current, Some(target)) {
                         Ok(true) => report.changes.push((Change::Retargeted, path)),
-                        Ok(false) => report.items.push(occupied(name, path)),
+                        Ok(false) => report.items.push(occupied(name, &at, path)),
                         Err(e) => report
                             .errors
                             .push(format!("cannot retarget {}: {e}", path.display())),
                     }
                 }
             }
-            (Entry::Owned(current), None) => remove(&path, real, &current, path.clone(), report),
+            (Entry::Owned(current), None) => remove(&at, real, &current, path, report),
             (Entry::Foreign, None) => report.items.push(Item {
                 scope: scope.clone(),
+                kind: foreign(&name, tool.id, &at, &meta, repo, linked),
                 path,
-                kind: ItemKind::Foreign {
-                    name: name.to_string_lossy().into_owned(),
-                    tool: tool.id,
-                },
             }),
             (_, Some((name, _))) => {
                 handled.insert(*name);
-                report.items.push(occupied(name, path));
+                report.items.push(occupied(name, &at, path));
             }
             (Entry::ManagedElsewhere | Entry::NotASkill | Entry::Moved(_), None) => {}
         }
@@ -563,16 +947,16 @@ fn reconcile_tool_dir(
         if handled.contains(name.as_str()) {
             continue;
         }
-        let path = dir.join(name);
-        match std::fs::symlink_metadata(&path) {
+        let (at, path) = (real.join(name), dir.join(name));
+        match std::fs::symlink_metadata(&at) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 test_hook::at("sync", &format!("link:{}", path.display()));
                 // `symlink` never replaces: an entry that appeared since the
                 // check is occupied like one the check found.
-                match std::os::unix::fs::symlink(target, &path) {
+                match std::os::unix::fs::symlink(target, &at) {
                     Ok(()) => report.changes.push((Change::Linked, path)),
                     Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        report.items.push(occupied(name, path))
+                        report.items.push(occupied(name, &at, path))
                     }
                     Err(e) => report
                         .errors
@@ -583,19 +967,19 @@ fn reconcile_tool_dir(
                 .errors
                 .push(format!("cannot inspect {}: {e}", path.display())),
             // Another spelling of the name (APFS is case-insensitive) holds it.
-            Ok(_) => report.items.push(occupied(name, path)),
+            Ok(_) => report.items.push(occupied(name, &at, path)),
         }
     }
 }
 
 /// Removes every owned entry of a tool directory nothing is distributed to.
-fn remove_owned_entries(dir: &Path, real: &Path, ownership: &Ownership, report: &mut Report) {
-    for (name, meta) in read_entries(dir, report) {
+fn remove_owned_entries(tool_dir: &ToolDir, ownership: &Ownership, report: &mut Report) {
+    let ToolDir { dir, real, .. } = *tool_dir;
+    for (name, meta) in read_entries(real, dir, report) {
         if let (true, Entry::Owned(current)) =
             (meta.is_symlink(), ownership.classify(real, &name, &meta))
         {
-            let path = dir.join(name);
-            remove(&path, real, &current, path.clone(), report);
+            remove(&real.join(&name), real, &current, dir.join(name), report);
         }
     }
 }

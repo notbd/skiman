@@ -2,15 +2,15 @@
 //! refresh), taken in this order: `<state dir>/lock`, one per machine,
 //! because the user config, the tool directories and the backups belong to
 //! the machine; then `<repo>/.skiman/lock`, because two state folders (two
-//! `XDG_STATE_HOME`s) can share one skill repo.
+//! `XDG_STATE_HOME`s) can share one canon.
 
 use std::fs::{File, TryLockError};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::canon::Canon;
 use crate::failure::Failure;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 
 /// How long a command waits for busy locks before failing with exit 4.
 pub const WAIT: Duration = Duration::from_secs(10);
@@ -18,7 +18,7 @@ const POLL: Duration = Duration::from_millis(50);
 
 /// Held until dropped; the operating system releases it when the process ends.
 #[derive(Debug)]
-pub struct RepoLock {
+pub struct CanonLock {
     _machine: File,
     _repo: File,
 }
@@ -30,63 +30,63 @@ pub enum Acquire {
     TryOnce,
 }
 
-impl RepoLock {
+impl CanonLock {
     /// Takes both locks, creating their folders and files when missing.
     /// Refuses (exit 4) when, by the time the machine lock is taken, the user
-    /// config names another skill repo: a command switched it meanwhile.
+    /// config names another canon: a command switched it meanwhile.
     pub fn acquire(
         paths: &Paths,
-        repo: &SkillRepo,
+        repo: &Canon,
         how: Acquire,
-    ) -> Result<Option<RepoLock>, Failure> {
+    ) -> Result<Option<CanonLock>, Failure> {
         let deadline = Instant::now() + WAIT;
         let Some(machine) = take(&paths.state_dir().join("lock"), &how, deadline)? else {
             return Ok(None);
         };
-        let configured = SkillRepo::from_config(paths)?;
+        let configured = Canon::from_config(paths)?;
         if configured.root() != repo.root() {
             return Err(Failure::operational(format!(
-                "the skill repo changed to {} while this command waited; nothing was changed, run it again",
+                "the canon changed to {} while this command waited; nothing was changed, run it again",
                 configured.root().display()
             )));
         }
-        let Some(file) = take(&repo.repo_lock_file(), &how, deadline)? else {
+        let Some(file) = take(&repo.canon_lock_file(), &how, deadline)? else {
             return Ok(None);
         };
-        Ok(Some(RepoLock {
+        Ok(Some(CanonLock {
             _machine: machine,
             _repo: file,
         }))
     }
 
     /// Takes both locks, waiting up to [`WAIT`].
-    pub fn wait(paths: &Paths, repo: &SkillRepo) -> Result<RepoLock, Failure> {
-        Ok(RepoLock::acquire(paths, repo, Acquire::Wait)?.expect("waiting never returns busy"))
+    pub fn wait(paths: &Paths, repo: &Canon) -> Result<CanonLock, Failure> {
+        Ok(CanonLock::acquire(paths, repo, Acquire::Wait)?.expect("waiting never returns busy"))
     }
 
     /// The machine lock alone, for `init`: it decides what to do with a folder
-    /// and which skill repo the user config names, so two inits wait for
-    /// each other; [`RepoLock::of_init`] adds the repo lock.
+    /// and which canon the user config names, so two inits wait for
+    /// each other; [`CanonLock::of_init`] adds the canon lock.
     pub fn machine(paths: &Paths) -> Result<File, Failure> {
         let deadline = Instant::now() + WAIT;
         Ok(take(&paths.state_dir().join("lock"), &Acquire::Wait, deadline)?.expect("waits"))
     }
 
-    /// `init`'s locks: `machine` from [`RepoLock::machine`], then the repo lock.
-    pub fn of_init(machine: File, repo: &SkillRepo) -> Result<RepoLock, Failure> {
+    /// `init`'s locks: `machine` from [`CanonLock::machine`], then the canon lock.
+    pub fn of_init(machine: File, repo: &Canon) -> Result<CanonLock, Failure> {
         let deadline = Instant::now() + WAIT;
-        let file = take(&repo.repo_lock_file(), &Acquire::Wait, deadline)?.expect("waits");
-        Ok(RepoLock {
+        let file = take(&repo.canon_lock_file(), &Acquire::Wait, deadline)?.expect("waits");
+        Ok(CanonLock {
             _machine: machine,
             _repo: file,
         })
     }
 
-    /// Whether another process holds the repo lock. Read-only: a missing
+    /// Whether another process holds the canon lock. Read-only: a missing
     /// lock file means nobody holds it, and it is never created; when the
     /// lock is free, it is taken and released at once.
-    pub fn is_held(repo: &SkillRepo) -> std::io::Result<bool> {
-        let file = match File::open(repo.repo_lock_file()) {
+    pub fn is_held(repo: &Canon) -> std::io::Result<bool> {
+        let file = match File::open(repo.canon_lock_file()) {
             Ok(file) => file,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e),

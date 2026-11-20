@@ -74,7 +74,7 @@ fn list_shows_every_column_for_each_kind_of_skill() {
     let edited = add(&sandbox, "edited");
     let conflicted = add(&sandbox, "conflicted");
     let parked = add(&sandbox, "parked");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     // `add` has no --ref yet: pin and follow refs by hand, as the spec allows.
     let manifest = repo.join("skiman.toml");
@@ -216,7 +216,7 @@ fn columns(stdout: &[u8]) -> Vec<[String; 7]> {
 fn list_shows_the_upstream_folder_of_a_skill_inside_a_bigger_repo() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     // Multi-skill sources need --skill (another ticket): install a
     // single-skill upstream, then point its recorded path at a sub-folder.
     let single = sandbox.upstream("acme/pdf");

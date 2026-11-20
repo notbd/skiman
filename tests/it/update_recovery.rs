@@ -1,5 +1,5 @@
 //! `skiman update` failure paths (spec Merge semantics; ADR 0005): a change
-//! between the merge and the repo lock, or while the update writes; a write
+//! between the merge and the canon lock, or while the update writes; a write
 //! that fails or is killed part-way, which the same command finishes when
 //! it runs again; an unwritable backups directory.
 //!
@@ -39,7 +39,7 @@ fn pdf_with_an_update(sandbox: &Sandbox) -> Upstream {
     init(sandbox);
     let up = installed(sandbox, "pdf");
     write(
-        sandbox.skill_repo().join("skills/pdf/forms.md"),
+        sandbox.canon().join("skills/pdf/forms.md"),
         lines(&[(1, "uncommitted edit")]),
     );
     up.write("reference.md", lines(&[(20, "upstream fix")]));
@@ -64,7 +64,7 @@ fn update_with_hook(
         .assert()
 }
 
-/// update fetches and merges without the repo lock: another command run
+/// update fetches and merges without the canon lock: another command run
 /// meanwhile goes through, and the merge leaves no folder behind.
 #[test]
 #[cfg_attr(
@@ -74,7 +74,7 @@ fn update_with_hook(
 fn another_command_runs_while_update_fetches_and_merges() {
     let sandbox = Sandbox::new();
     let up = pdf_with_an_update(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let skiman = env!("CARGO_BIN_EXE_skiman");
 
     update_with_hook(
@@ -93,7 +93,7 @@ fn another_command_runs_while_update_fetches_and_merges() {
     assert_eq!(std::fs::read_dir(sandbox.tmp_dir()).unwrap().count(), 0);
 }
 
-/// Under the repo lock, update checks what it decided from: a change to
+/// Under the canon lock, update checks what it decided from: a change to
 /// `skills/<name>` or the skill's records after the merge refuses the skill
 /// (exit 1), and nothing of it changes. Another update of the same skill
 /// meanwhile changes its lock entry: its result stays. `upstream/<name>` is
@@ -105,7 +105,7 @@ fn another_command_runs_while_update_fetches_and_merges() {
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
+fn a_change_after_the_merge_refuses_the_skill_under_the_canon_lock() {
     let changed = "skills/pdf, upstream/pdf or their records changed after the update read them; nothing of pdf changed, run the update again";
     for (file, line) in [
         ("skills/pdf/forms.md", "an edit\n"),
@@ -113,7 +113,7 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
     ] {
         let sandbox = Sandbox::new();
         let up = pdf_with_an_update(&sandbox);
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         let lock = read(repo.join("skiman.lock"));
 
         let assert = update_with_hook(
@@ -134,7 +134,7 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
 
     let sandbox = Sandbox::new();
     let up = pdf_with_an_update(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let forms = repo.join("upstream/pdf/forms.md");
     update_with_hook(
         &sandbox,
@@ -160,7 +160,7 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
     .code(1)
     .stdout_eq("");
     assert_eq!(stderr_of(&assert), format!("error: skill pdf: {changed}\n"));
-    assert!(read(sandbox.skill_repo().join("skiman.lock")).contains(&up.head()));
+    assert!(read(sandbox.canon().join("skiman.lock")).contains(&up.head()));
     sandbox.skiman().arg("check").assert().code(0);
 
     let sandbox = Sandbox::new();
@@ -189,7 +189,7 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
             .env("GIT_SSH_VARIANT", "simple")
     };
     skiman(&["add", &url, "--yes"]).assert().code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(
         repo.join("skills/pdf/forms.md"),
         lines(&[(1, "local edit")]),
@@ -208,11 +208,11 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
     sandbox.skiman().arg("check").assert().code(0);
 }
 
-/// update reads a skill's records without the repo lock. Read while another
+/// update reads a skill's records without the canon lock. Read while another
 /// command was writing them (here: the lock entry not there yet), they
 /// refuse the skill; read again under the lock they are whole, so the
-/// update goes on with them instead of sending the user to repair a skill
-/// repo that is fine.
+/// update goes on with them instead of sending the user to repair a canon
+/// that is fine.
 #[test]
 #[cfg_attr(
     not(debug_assertions),
@@ -221,7 +221,7 @@ fn a_change_after_the_merge_refuses_the_skill_under_the_repo_lock() {
 fn records_read_while_another_command_writes_them_are_read_again_under_the_lock() {
     let sandbox = Sandbox::new();
     let up = pdf_with_an_update(&sandbox);
-    let lock = sandbox.skill_repo().join("skiman.lock");
+    let lock = sandbox.canon().join("skiman.lock");
     let aside = sandbox.root().join("skiman.lock");
     std::fs::rename(&lock, &aside).unwrap();
 
@@ -244,7 +244,7 @@ fn records_read_while_another_command_writes_them_are_read_again_under_the_lock(
 
 const NEWER: &str = "edit made during the update\n";
 
-/// An edit to `skills/<name>` between the repo lock and the swap stops the
+/// An edit to `skills/<name>` between the canon lock and the swap stops the
 /// skill before it is touched: exit 4, nothing written, the newer edit kept.
 #[test]
 #[cfg_attr(
@@ -254,7 +254,7 @@ const NEWER: &str = "edit made during the update\n";
 fn an_edit_while_the_update_writes_stops_it_before_the_skill_is_replaced() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let forms = repo.join("skills/pdf/forms.md");
     let mut expected = tree(&repo);
 
@@ -294,7 +294,7 @@ fn stderr_of(assert: &snapbox::cmd::OutputAssert) -> String {
 
 /// A lock entry that cannot be written stops the update (exit 4) after
 /// what was written before it, which it lists; once the cause is gone, the
-/// same command finishes it: the skill repo ends as an update that never
+/// same command finishes it: the canon ends as an update that never
 /// stopped leaves it. With `--ref`, `skiman.toml` is written before the
 /// lock entry; with the same snapshot, only the records move.
 #[test]
@@ -342,7 +342,7 @@ fn a_failed_lock_write_stops_the_update_and_running_it_again_finishes_it() {
 
         let sandbox = Sandbox::new();
         setup(&sandbox);
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         let assert = sandbox
             .skiman()
             .args(args)
@@ -385,7 +385,7 @@ fn a_failed_lock_write_stops_the_update_and_running_it_again_finishes_it() {
 fn a_piece_of_the_wrong_kind_stops_the_update_before_anything_is_written() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::remove_dir_all(repo.join("upstream/pdf")).unwrap();
     write(repo.join("upstream/pdf"), "not a folder\n");
     let before = [tree(repo.join("skills")), tree(repo.join("upstream"))];
@@ -419,7 +419,7 @@ fn a_piece_of_the_wrong_kind_stops_the_update_before_anything_is_written() {
 fn a_failed_move_of_the_old_skill_to_the_backup_keeps_it_and_running_again_finishes_the_update() {
     let sandbox = Sandbox::new();
     let up = pdf_with_an_update(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let skill_before = tree(repo.join("skills/pdf"));
 
     let assert = update_with_hook(
@@ -478,7 +478,7 @@ fn a_failed_move_of_the_old_skill_to_the_backup_keeps_it_and_running_again_finis
 fn a_folder_that_cannot_be_flushed_after_the_swap_keeps_the_old_skill() {
     let sandbox = Sandbox::new();
     let up = pdf_with_an_update(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let skill_before = tree(repo.join("skills/pdf"));
     let skills = repo.join("skills");
 
@@ -520,7 +520,7 @@ fn a_folder_that_cannot_be_flushed_after_the_swap_keeps_the_old_skill() {
 fn an_unwritable_backups_directory_stops_the_skill_before_anything_is_swapped() {
     let sandbox = Sandbox::new();
     pdf_with_an_update(&sandbox);
-    let before = tree(sandbox.skill_repo());
+    let before = tree(sandbox.canon());
     std::fs::create_dir_all(backups(&sandbox)).unwrap();
     chmod(backups(&sandbox), 0o555);
 
@@ -531,7 +531,7 @@ fn an_unwritable_backups_directory_stops_the_skill_before_anything_is_swapped() 
         backups(&sandbox).display()
     ));
 
-    assert_eq!(tree(sandbox.skill_repo()), before);
+    assert_eq!(tree(sandbox.canon()), before);
     assert!(backup_dirs(&sandbox).is_empty());
 }
 
@@ -593,7 +593,7 @@ fn pdf_with_repeated_lines_in(sandbox: &Sandbox, group: Option<&str>) -> Vec<Str
         None => "skills/pdf".to_owned(),
     };
     let local = text(&["c", "}", "- item", "}", "}"]);
-    write(sandbox.skill_repo().join(skill).join("reference.md"), local);
+    write(sandbox.canon().join(skill).join("reference.md"), local);
     up.write(
         "reference.md",
         text(&["c", "}", "c", "", "}", "}", "}", "}"]),
@@ -636,7 +636,7 @@ fn an_update_stopped_before_the_lock_does_not_merge_again() {
         let stopped = Sandbox::new();
         pdf_with_repeated_lines(&stopped);
         update_with_hook(&stopped, &["pdf"], "update:write:skills/pdf", chmod).code(4);
-        let tmp = stopped.skill_repo().join(".skiman/tmp");
+        let tmp = stopped.canon().join(".skiman/tmp");
         let leftovers: Vec<_> = std::fs::read_dir(&tmp)
             .unwrap()
             .map(|e| e.unwrap().path())
@@ -704,7 +704,7 @@ fn a_leftover_of_another_group_is_never_put_back() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     installed(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let stopped = |group: &str| {
         let old = repo.join(format!(".skiman/tmp/stopped-{group}/old/skills/{group}"));
         write(old.join("pdf/SKILL.md"), "the new one\n");

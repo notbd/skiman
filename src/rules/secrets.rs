@@ -140,7 +140,7 @@ static COMPILED: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 /// One detector match in one file.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Found {
-    /// Relative to the skill repo root.
+    /// Relative to the canon root.
     pub path: String,
     /// 1-based line of the start of the match.
     pub line: usize,

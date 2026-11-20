@@ -1,13 +1,13 @@
 //! Reading `skiman.lock` (spec Data formats). Not to be confused with the
-//! repo lock `.skiman/lock` (`repo_lock`).
+//! canon lock `.skiman/lock` (`canon_lock`).
 
 use std::collections::BTreeSet;
 
 use toml_edit::{DocumentMut, Item, Table, value};
 
+use crate::canon::Canon;
 use crate::failure::Failure;
 use crate::fsutil::read_text;
-use crate::repo::SkillRepo;
 
 #[derive(Debug, Clone, Default)]
 pub struct Lockfile {
@@ -16,7 +16,7 @@ pub struct Lockfile {
 
 impl Lockfile {
     /// Reads `skiman.lock`; a missing file has no entries.
-    pub fn load(repo: &SkillRepo) -> Result<Lockfile, Failure> {
+    pub fn load(repo: &Canon) -> Result<Lockfile, Failure> {
         let file = repo.lockfile();
         let Some(text) = read_text(&file)? else {
             return Ok(Lockfile::default());

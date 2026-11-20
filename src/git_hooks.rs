@@ -1,4 +1,4 @@
-//! The skill repo's git hooks (spec Hooks): pre-commit runs
+//! The canon's git hooks (spec Hooks): pre-commit runs
 //! `skiman check --staged` and fails closed; the post hooks run
 //! `skiman sync --hook` and always exit 0. `init` installs them.
 
@@ -29,7 +29,7 @@ pub struct Installed {
     pub foreign: Vec<PathBuf>,
     /// `core.hooksPath` points away from the repo's own hooks folder: nothing was written.
     pub hooks_path_elsewhere: Option<PathBuf>,
-    /// The skill repo is not in a git repo: nothing was written.
+    /// The canon is not in a git repo: nothing was written.
     pub not_a_git_repo: bool,
 }
 
@@ -74,10 +74,10 @@ pub fn install(repo_root: &Path, binary: &Path) -> Result<Installed, Failure> {
     Ok(installed)
 }
 
-/// Where the skill repo's git hooks stand, for `doctor`.
+/// Where the canon's git hooks stand, for `doctor`.
 #[derive(Debug)]
 pub enum Status {
-    /// The skill repo is not in a git repo.
+    /// The canon is not in a git repo.
     NotAGitRepo,
     /// `core.hooksPath` points to this folder instead of the repo's own.
     HooksPathElsewhere(PathBuf),
@@ -162,7 +162,7 @@ fn script(name: &str, binary: &Path) -> String {
     let binary = shell_quote(&binary.to_string_lossy());
     let body = if name == PRE_COMMIT {
         "if [ ! -x \"$skiman\" ]; then\n\
-         \techo \"skiman: $skiman does not exist, so the commit is rejected; install skiman, then run \\`skiman init <skill repo>\\` again\" >&2\n\
+         \techo \"skiman: $skiman does not exist, so the commit is rejected; install skiman, then run \\`skiman init <canon>\\` again\" >&2\n\
          \texit 1\n\
          fi\n\
          exec \"$skiman\" check --staged\n"
@@ -170,7 +170,7 @@ fn script(name: &str, binary: &Path) -> String {
         "if [ -x \"$skiman\" ]; then\n\
          \t\"$skiman\" sync --hook\n\
          else\n\
-         \techo \"skiman: $skiman does not exist, so the agent tools were not updated; install skiman, then run \\`skiman init <skill repo>\\` again\" >&2\n\
+         \techo \"skiman: $skiman does not exist, so the agent tools were not updated; install skiman, then run \\`skiman init <canon>\\` again\" >&2\n\
          fi\n\
          exit 0\n"
     };

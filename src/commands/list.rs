@@ -1,15 +1,19 @@
 //! `skiman list`: one row per skill folder under `skills/` with its kind,
 //! source, followed ref or pinned version, whether it has local
-//! modifications or unresolved conflicts, and whether it is enabled.
-//! Read-only; takes no lock and spawns no `git`.
+//! modifications or unresolved conflicts, and whether it is enabled; then
+//! one row per linked skill (kind `linked`, its folder's id and path as the
+//! source, and whether it is distributed), and one per linked folder that
+//! is not on this machine. Read-only; takes no lock and spawns no `git`.
 
 use crate::Exit;
+use crate::canon::Canon;
 use crate::failure::{Failure, finish};
+use crate::linked::{Linked, Shown};
 use crate::lockfile::Lockfile;
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::rules;
+use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree, tree_hash};
 
 const HEADER: [&str; 7] = [
@@ -28,7 +32,7 @@ pub fn run() -> Exit {
 
 fn list() -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let manifest = Manifest::load(&repo)?;
     let lockfile = Lockfile::load(&repo)?;
     let tree = WorkingTree::new(repo.root());
@@ -58,6 +62,41 @@ fn list() -> Result<Exit, Failure> {
         };
         let (conflicts, enabled) = (yes_no(conflicts), yes_no(enabled));
         rows.push([name, kind, source, version, modified, conflicts, enabled]);
+    }
+    let linked = Linked::read(paths.home(), &repo, &manifest);
+    let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
+    for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
+        let source = format!(
+            "{} ({})",
+            folder.id,
+            folder
+                .path
+                .as_ref()
+                .expect("a shown folder has a path")
+                .display()
+        );
+        let row = |name: String, state: String| {
+            let dash = || "-".to_owned();
+            [
+                name,
+                "linked".to_owned(),
+                source.clone(),
+                dash(),
+                dash(),
+                dash(),
+                state,
+            ]
+        };
+        match shown {
+            Shown::Missing => rows.push(row("-".to_owned(), "not on this machine".to_owned())),
+            Shown::Skills(skills) => rows.extend(skills.into_iter().map(|(name, lost)| {
+                let state = match lost {
+                    Some(holder) => format!("no: {holder}"),
+                    None => yes_no(true),
+                };
+                row(name, state)
+            })),
+        }
     }
     print_columns(&rows);
     Ok(Exit::Success)

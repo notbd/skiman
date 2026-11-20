@@ -7,9 +7,12 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
-use crate::fsutil::{absolute_lexical, broken_chain, realpath_as_far_as_exists, write_atomic};
+use crate::fsutil::{broken_chain, realpath_as_far_as_exists, write_atomic};
+use crate::linked::Linked;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::command;
@@ -22,8 +25,6 @@ use crate::project::state::{Evaluated, State, check_rules, classify};
 use crate::project::swap::{Expect, Outcome, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::staging::{PROJECT_PREFIX, Staging};
 use crate::sync::{self, Output};
@@ -37,7 +38,7 @@ pub fn add(path: &Path, id: Option<String>) -> Exit {
 
 fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let home = paths.home();
     let dir = cwd_absolute(path)?
         .canonicalize()
@@ -52,7 +53,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             dir.display()
         )));
     }
-    let _lock = RepoLock::wait(&paths, &repo)?;
+    let _lock = CanonLock::wait(&paths, &repo)?;
     let manifest = Manifest::load(&repo)?;
     if manifest.projects().iter().any(|entry| entry.id == id) {
         return Err(Failure::refused(format!(
@@ -61,10 +62,9 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
     }
     let file = repo.manifest_file();
     let text = manifest::with_project(&read_text(&file)?, &id, &root::written_form(home, &dir))
-        .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+        .map_err(Failure::refused_in(&file))?;
     // The same validation every command applies to a root, on the new text.
-    let candidate =
-        Manifest::parse(&text).map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+    let candidate = Manifest::parse(&text).map_err(Failure::refused_in(&file))?;
     if let Some(Err(problem)) = root::resolve(home, &repo, &candidate)
         .into_iter()
         .find(|r| match r {
@@ -96,7 +96,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
     out!("registered project root {id}: {}", dir.display());
     out!(
-        "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the skill repo is pushed; see what it holds with: {} --dry-run",
+        "its project files will be copied into {}/{MIRROR_DIR}/{id}/ and pushed wherever the canon is pushed; see what it holds with: {} --dry-run",
         repo.root().display(),
         command("adopt", std::slice::from_ref(&dir))
     );
@@ -108,25 +108,27 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
 /// What a command works on: the lock, the configuration and the usable roots.
 struct Context {
     paths: Paths,
-    repo: SkillRepo,
-    lock: RepoLock,
+    repo: Canon,
+    lock: CanonLock,
     manifest: Manifest,
     roots: Vec<Root>,
     /// [`never_entered`]: discovery never enters these, and [`Self::locate`]
     /// refuses a path inside them.
     skip: [PathBuf; 2],
+    /// The linked folders: items that overlap one are skipped.
+    linked: Linked,
 }
 
 impl Context {
-    /// Takes the lock and refuses (exit 4) while the skill repo is in the
+    /// Takes the lock and refuses (exit 4) while the canon is in the
     /// middle of a git operation.
     fn open() -> Result<Context, Failure> {
         let paths = Paths::from_env()?;
-        let repo = SkillRepo::from_config(&paths)?;
-        let lock = RepoLock::wait(&paths, &repo)?;
+        let repo = Canon::from_config(&paths)?;
+        let lock = CanonLock::wait(&paths, &repo)?;
         if let Some(operation) = operation_in_progress(repo.root()) {
             return Err(Failure::operational(format!(
-                "the skill repo {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
+                "the canon {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
             )));
         }
         let manifest = Manifest::load(&repo)?;
@@ -142,6 +144,7 @@ impl Context {
             }
         }
         let skip = never_entered(&paths, &repo);
+        let linked = Linked::read(paths.home(), &repo, &manifest);
         Ok(Context {
             paths,
             repo,
@@ -149,6 +152,7 @@ impl Context {
             manifest,
             roots,
             skip,
+            linked,
         })
     }
 
@@ -159,8 +163,8 @@ impl Context {
     /// The root a path given on the command line is in, and the path
     /// relative to it (`""` for the root itself). The parents are resolved
     /// as far as they exist; the last component is not, so a path that is an
-    /// alias link names the link, not what it points to. A path in the skill
-    /// repo or the state folder is refused: adopting a mirror would mirror
+    /// alias link names the link, not what it points to. A path in the canon
+    /// or the state folder is refused: adopting a mirror would mirror
     /// it again.
     fn locate(&self, path: &Path) -> Result<(&Root, String), Failure> {
         let absolute = cwd_absolute(path)?;
@@ -400,7 +404,7 @@ impl<'a> Plan<'a> {
 
     /// Drops every write whose new content (the `source`: "the project's
     /// version", "its mirror") cannot be read or breaks the safety rules.
-    fn drop_breaking(&mut self, repo: &SkillRepo, source: &str) {
+    fn drop_breaking(&mut self, repo: &Canon, source: &str) {
         let mut skipped = Vec::new();
         self.writes.retain(|p| {
             let disk = p.item.disk(p.root);
@@ -465,6 +469,44 @@ impl<'a> Plan<'a> {
     }
 }
 
+/// Refuses (exit 3) to change project items while a linked folder of
+/// `linked` cannot be read: its child links, and so what overlaps it, are
+/// unknown.
+fn refuse_while_unreadable(linked: &Linked, verb: &str) -> Result<(), Failure> {
+    match linked.unreadable() {
+        Some(folder) => Err(Failure {
+            exit: Exit::NeedsAttention,
+            message: format!(
+                "linked folder `{}` cannot be read, so which project items overlap it is unknown; nothing was {verb}, run this again once it can be read",
+                folder.id
+            ),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// The linked folders once the user has answered, from `skiman.toml` read
+/// again: the lock stops other skiman commands, not a re-pointed path or a
+/// hand edit. Refuses as [`refuse_while_unreadable`] does.
+fn linked_after_answer(ctx: &Context, verb: &str) -> Result<Linked, Failure> {
+    let linked = Linked::load(ctx.paths.home(), &ctx.repo)?;
+    refuse_while_unreadable(&linked, verb)?;
+    Ok(linked)
+}
+
+/// Reports the planned write to `disk` as skipped when it overlaps a folder
+/// of `linked`, and returns the exit that adds: refused for a path named
+/// exactly, as in the plan.
+fn skip_overlapping(linked: &Linked, plan: &Plan, disk: &Path) -> Option<Exit> {
+    let why = linked.item_overlap(disk)?;
+    err!("skip {}: {why}", disk.display());
+    Some(if plan.named.contains(disk) {
+        Exit::Refused
+    } else {
+        Exit::Success
+    })
+}
+
 /// Prints the outcome of one replace and returns the exit it adds; the
 /// new content is in place exactly when the first value is `true`.
 fn report_outcome(outcome: std::io::Result<Outcome>, verb: Verb, disk: &Path) -> (bool, Exit) {
@@ -514,6 +556,7 @@ pub fn adopt(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
+    refuse_while_unreadable(&ctx.linked, "adopted")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let mut plan = Plan::default();
@@ -525,7 +568,16 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                 vec![item.clone()]
             }
             None => {
-                let found = discover(target.root, &ctx.skip);
+                let found = discover(target.root, &ctx.skip, &ctx.linked);
+                for (item, why) in found
+                    .skipped
+                    .iter()
+                    .filter(|(i, _)| under(&i.rel, &target.rel))
+                {
+                    let disk = item.disk(target.root);
+                    plan.skip(&disk, format!("skip {}: {why}", disk.display()));
+                    seen.insert((item.root.clone(), item.rel.clone()));
+                }
                 for e in found.errors {
                     err!("warning: {e}");
                 }
@@ -555,6 +607,10 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
+            if let Some(why) = ctx.linked.item_overlap(&disk) {
+                plan.skip(&disk, format!("skip {}: {why}", disk.display()));
+                continue;
+            }
             let eval = ctx.classify(&synced, target.root, &item)?;
             let what = match (&eval.state, exact) {
                 (State::New, _) => "adopt",
@@ -608,12 +664,17 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             own.combine(ctx.sync())
         });
     }
+    let linked = linked_after_answer(&ctx, "adopted")?;
     let mut backups = ctx.backups();
     let mut exit = own;
     let mut written = Vec::new();
     let mut failed = Vec::new();
     let (swap, saved) = swap_parent(&ctx.repo);
     for p in &plan.writes {
+        if let Some(refused) = skip_overlapping(&linked, &plan, &p.item.disk(p.root)) {
+            exit = exit.combine(refused);
+            continue;
+        }
         let content = p
             .new
             .as_ref()
@@ -643,7 +704,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     }
     for (path, rule) in ignored(ctx.repo.root(), &written) {
         err!(
-            "warning: git ignores {path} in the skill repo ({rule}), so it never gets history; change that rule"
+            "warning: git ignores {path} in the canon ({rule}), so it never gets history; change that rule"
         );
     }
     ctx.finish(&mut synced, &backups, exit, &failed)
@@ -658,6 +719,7 @@ pub fn restore(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
+    refuse_while_unreadable(&ctx.linked, "restored")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let tree = WorkingTree::new(ctx.repo.root());
@@ -688,6 +750,10 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             }
             let exact = target.exact.is_some();
             let disk = item.disk(target.root);
+            if let Some(why) = ctx.linked.item_overlap(&disk) {
+                plan.skip(&disk, format!("skip {}: {why}", disk.display()));
+                continue;
+            }
             let eval = ctx.classify(&synced, target.root, &item)?;
             let what = match (&eval.state, exact) {
                 (State::NotOnMachine, _) => "write",
@@ -739,11 +805,16 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     if !plan.confirm(Verb::Restore, yes, dry_run)? {
         return Ok(own);
     }
+    let linked = linked_after_answer(&ctx, "restored")?;
     let mut backups = ctx.backups();
     let mut exit = own;
     let mut failed = Vec::new();
     for p in &plan.writes {
         let disk = p.item.disk(p.root);
+        if let Some(refused) = skip_overlapping(&linked, &plan, &disk) {
+            exit = exit.combine(refused);
+            continue;
+        }
         // Its tmp leftovers go where the anchor's items go in the backup.
         let saved = Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.anchor);
         let anchor = p.item.anchor_dir(p.root);
@@ -788,7 +859,6 @@ struct Configured {
     id: String,
     /// The `path` expanded lexically, and its realpath when it exists.
     paths: Vec<PathBuf>,
-    skill_dirs: Vec<String>,
 }
 
 /// What eject does under one path.
@@ -818,7 +888,6 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
             Configured {
                 id: entry.id,
                 paths,
-                skill_dirs: entry.skill_dirs,
             }
         })
         .collect();
@@ -842,7 +911,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
                 path.display()
             )));
         };
-        let items: Vec<Item> = read_mirror_of(&tree, &root.id, &root.skill_dirs)
+        let items: Vec<Item> = read_mirror_of(&tree, &root.id)
             .map_err(io_failure)?
             .items
             .into_iter()
@@ -951,8 +1020,7 @@ fn run_eject(given: Vec<PathBuf>, yes: bool) -> Result<Exit, Failure> {
         let file = ctx.repo.manifest_file();
         let mut text = read_text(&file)?;
         for id in &unregister {
-            text = manifest::without_project(&text, id)
-                .map_err(|e| Failure::refused(format!("{}: {e}", file.display())))?;
+            text = manifest::without_project(&text, id).map_err(Failure::refused_in(&file))?;
             synced.remove_root(id);
             remove_if_empty(&projects_dir.join(id));
         }
@@ -1012,18 +1080,13 @@ fn remove_empty_parents(path: &Path, stop: &Path) {
 // ---------------------------------------------------------------- paths
 
 fn io_failure(e: std::io::Error) -> Failure {
-    Failure::operational(format!("cannot read the skill repo: {e}"))
+    Failure::operational(format!("cannot read the canon: {e}"))
 }
 
 fn cwd_absolute(path: &Path) -> Result<PathBuf, Failure> {
     let cwd = std::env::current_dir()
         .map_err(|e| Failure::operational(format!("cannot read the current folder: {e}")))?;
-    let home = Paths::from_env()?.home().to_path_buf();
-    let path = match path.to_str().and_then(|p| p.strip_prefix("~/")) {
-        Some(rest) => home.join(rest),
-        None => path.to_path_buf(),
-    };
-    Ok(absolute_lexical(&cwd, &path))
+    Ok(root::given(Paths::from_env()?.home(), &cwd, path))
 }
 
 /// `path` with its parent folder resolved (as far as it exists) and its last

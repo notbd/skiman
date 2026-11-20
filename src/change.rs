@@ -1,4 +1,4 @@
-//! One write command's change to the skill repo: every piece as it should
+//! One write command's change to the canon: every piece as it should
 //! be, in the order the command writes them (ADR 0005). A piece the repo
 //! already holds as wanted is kept, so a command stopped part-way, killed
 //! included, finishes when it is run again: nothing records how far it got,
@@ -18,16 +18,16 @@ use std::io;
 use std::path::Path;
 
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::snapshot::SnapshotFile;
 use crate::staging::{Staging, Swap};
 use crate::test_hook;
 use crate::tree::{self, Overlay, WorkingTree};
 
-/// What one piece of the skill repo should hold.
+/// What one piece of the canon should hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Want {
     /// A folder holding exactly these files.
@@ -40,7 +40,7 @@ pub enum Want {
     From(String),
 }
 
-/// What the skill repo holds where a piece goes.
+/// What the canon holds where a piece goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Held {
     /// Nothing there; for [`Want::From`], the entry is still at its old path.
@@ -53,7 +53,7 @@ pub enum Held {
     Other(Vec<u8>),
 }
 
-/// The pieces of one command's write, by path relative to the skill repo, in order.
+/// The pieces of one command's write, by path relative to the canon, in order.
 pub struct Change {
     pub pieces: Vec<(String, Want)>,
     /// The command whose test hook names each write (`<command>:write:<path>`).
@@ -63,7 +63,7 @@ pub struct Change {
 }
 
 impl Change {
-    /// The skill repo as it will be, for the rules: each folder piece holds
+    /// The canon as it will be, for the rules: each folder piece holds
     /// exactly its files, each file piece its bytes, an absent one nothing.
     /// A renamed entry is not shown; `mv` checks its own.
     pub fn overlay<'a>(&self, tree: &'a WorkingTree) -> Overlay<'a> {
@@ -90,12 +90,12 @@ impl Change {
             .replacing(replaced)
     }
 
-    /// Whether the skill repo at `root` holds every piece as wanted already.
+    /// Whether the canon at `root` holds every piece as wanted already.
     pub fn in_place(&self, root: &Path) -> Result<bool, Failure> {
         Ok(self.held(root)?.iter().all(|h| *h == Held::Same))
     }
 
-    /// What the skill repo at `root` holds where each piece goes.
+    /// What the canon at `root` holds where each piece goes.
     pub fn held(&self, root: &Path) -> Result<Vec<Held>, Failure> {
         self.pieces
             .iter()
@@ -111,12 +111,12 @@ impl Change {
         })
     }
 
-    /// [`Change::write`] over what the skill repo holds now (read under the
-    /// repo lock), printing each line; whether anything went to the backup.
+    /// [`Change::write`] over what the canon holds now (read under the
+    /// canon lock), printing each line; whether anything went to the backup.
     pub fn apply(
         &self,
-        repo: &SkillRepo,
-        lock: &RepoLock,
+        repo: &Canon,
+        lock: &CanonLock,
         backups: &mut Backups,
     ) -> Result<bool, Failure> {
         let held = self.held(repo.root())?;
@@ -126,7 +126,7 @@ impl Change {
         Ok(self.backs_up(&held))
     }
 
-    /// Writes, in order, each piece that `held` (read under the repo lock)
+    /// Writes, in order, each piece that `held` (read under the canon lock)
     /// does not show as wanted, staged in a folder of its own below
     /// `.skiman/tmp/` (tmp leftovers go to `backups` first); refuses, before
     /// anything is written, a piece that is [`Held::WrongType`]. A piece that
@@ -137,8 +137,8 @@ impl Change {
     pub fn write(
         &self,
         held: &[Held],
-        repo: &SkillRepo,
-        lock: &RepoLock,
+        repo: &Canon,
+        lock: &CanonLock,
         backups: &mut Backups,
     ) -> Result<Vec<String>, Failure> {
         // A piece of the wrong kind stops the write before anything is written.

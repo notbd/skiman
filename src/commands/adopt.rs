@@ -1,7 +1,7 @@
 //! `skiman adopt <name> --from <tool id> [--group <group>]`: bring a foreign
 //! skill in as an own skill, in a group folder when one is given. Reads the entry's resolved content (path safety applies, `.git/`
 //! is not skill content), rewrites the `name` line when needed, locates and
-//! reads the entry again under the repo lock (refusing when the copy
+//! reads the entry again under the canon lock (refusing when the copy
 //! changed), checks the whole copy as new content, stages it under
 //! `.skiman/tmp/`, renames it to `skills/[<group>/]<name>`, moves the original entry
 //! (a link as a link) to `backups/<timestamp>/<tool id>/<name>`, then syncs,
@@ -15,16 +15,16 @@ use std::path::{Path, PathBuf};
 
 use crate::Exit;
 use crate::backup::{self, Backups};
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{self, Change, Want};
 use crate::commands::{confirm, has_terminal};
 use crate::failure::{Failure, finish};
 use crate::layout::skill_path;
-use crate::manifest::Manifest;
+use crate::linked::{Linked, State};
 use crate::names::{self, Taken};
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::snapshot::{Snapshot, SnapshotFile};
@@ -42,24 +42,23 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
         return Err(Failure::usage("missing flag without a terminal: --yes"));
     }
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let tool = TOOLS
         .iter()
         .find(|tool| tool.id == from)
         .expect("clap accepts only known tool ids");
     let entry = tool.tool_dir(paths.home()).join(name);
-    check_name(&repo, name, &entry, None)?;
+    check_name(&paths, &repo, name, &entry, None)?;
     if let Some(group) = group {
-        names::check_group(group, name, &repo.layout()?)?;
+        names::check_group(&paths, &repo, group, name)?;
     }
-    let manifest = Manifest::load(&repo)?;
-    let (entry, files) = read(&paths, &repo, &manifest, tool, name)?;
+    let (entry, files) = read(&paths, &repo, tool, name)?;
     let change = Change {
         pieces: vec![(skill_path(group, name), Want::Folder(files.clone()))],
         command: "adopt",
         save_files: false,
     };
-    check_name(&repo, name, &entry, Some(&change))?;
+    check_name(&paths, &repo, name, &entry, Some(&change))?;
     if !yes {
         out!("skill {name} from {}:", entry.display());
         for file in &files {
@@ -71,13 +70,15 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
     }
 
     test_hook::at("adopt", "confirmed");
-    let lock = RepoLock::wait(&paths, &repo)?;
-    check_name(&repo, name, &entry, Some(&change))?;
+    let lock = CanonLock::wait(&paths, &repo)?;
+    check_name(&paths, &repo, name, &entry, Some(&change))?;
+    if let Some(group) = group {
+        names::check_group(&paths, &repo, group, name)?;
+    }
     // The entry may have moved, come under another manager or changed while
     // adopt waited. The copies compare as written (`name` line rewritten,
     // `.git/` left out), so only a change to what would be adopted refuses.
-    let manifest = Manifest::load(&repo)?;
-    if read(&paths, &repo, &manifest, tool, name)? != (entry.clone(), files) {
+    if read(&paths, &repo, tool, name)? != (entry.clone(), files) {
         return Err(Failure::refused(format!(
             "{} changed after adopt read it; nothing was changed, run adopt again",
             entry.display()
@@ -103,11 +104,12 @@ fn adopt(name: &str, from: &str, yes: bool, group: Option<&str>) -> Result<Exit,
 }
 
 /// Refuses (exit 1) a name that fails the name rules, is reserved or is
-/// taken in the skill repo, telling the user to rename or move the entry.
+/// taken in the canon, telling the user to rename or move the entry.
 /// With the `change` adopt writes, a `skills/<name>` that already holds the
 /// copy does not take the name.
 fn check_name(
-    repo: &SkillRepo,
+    paths: &Paths,
+    repo: &Canon,
     name: &str,
     entry: &Path,
     change: Option<&Change>,
@@ -115,7 +117,7 @@ fn check_name(
     names::check_new_name(name)
         .and_then(|()| match change {
             None => Ok(()),
-            Some(c) => names::check_not_taken(repo, name, |taken| {
+            Some(c) => names::check_not_taken(paths, repo, name, |taken| {
                 Ok(taken == Taken::Folder && c.in_place(repo.root())?)
             }),
         })
@@ -133,10 +135,12 @@ fn check_name(
 /// Refuses (exit 1) anything but a foreign skill, or, once `skills/<name>`
 /// is in place (an adopt stopped part-way), what a move of the entry to the
 /// backup left when it was cut short, which is read from its complete copy.
+/// Nothing is copied out of a linked folder (spec "Nothing is moved out of
+/// a linked folder"): refuses an entry that sits in one or resolves into
+/// one, and any entry while a linked folder cannot be read.
 fn read(
     paths: &Paths,
-    repo: &SkillRepo,
-    manifest: &Manifest,
+    repo: &Canon,
     tool: &AgentTool,
     name: &str,
 ) -> Result<(PathBuf, Vec<SnapshotFile>), Failure> {
@@ -154,12 +158,46 @@ fn read(
         false => String::new(),
     };
     let missing = || Failure::refused(format!("{} has no entry {name}{done}", tool_dir.display()));
+    let linked = Linked::load(paths.home(), repo)?;
+    if let Some(folder) = linked.unreadable() {
+        return Err(Failure::refused(format!(
+            "linked folder `{}` cannot be read now, so skiman cannot tell whether {} leads into it; nothing was changed, run `skiman sync` to see why",
+            folder.id,
+            tool_dir.join(name).display()
+        )));
+    }
     let real_dir = tool_dir.canonicalize().map_err(|_| missing())?;
     let entry = real_dir.join(name);
     let meta = std::fs::symlink_metadata(&entry).map_err(|_| missing())?;
-    let ownership = Ownership::new(paths, repo, manifest, None);
+    // Where the entry sits: moving it to the backup would move it out of the folder.
+    if let Some(folder) = linked.reaches_into(&entry) {
+        return Err(Failure::refused(format!(
+            "{} lies in linked folder `{}`, which skiman never moves anything out of; nothing was changed",
+            entry.display(),
+            folder.id
+        )));
+    }
+    let ownership = Ownership::new(paths, repo, None);
     let refused = match ownership.classify(&real_dir, entry.file_name().expect("named"), &meta) {
         Entry::Foreign => {
+            if let Some(folder) = entry
+                .canonicalize()
+                .ok()
+                .and_then(|r| linked.reaches_into(&r))
+            {
+                // As sync says it: only a folder that was read is distributed.
+                let hint = match folder.state {
+                    State::Read(_) => {
+                        "; skiman distributes the folder's skills already, so delete the link once nothing needs it"
+                    }
+                    _ => "",
+                };
+                return Err(Failure::refused(format!(
+                    "{} resolves into linked folder `{}`, whose content skiman never copies into the canon{hint}",
+                    entry.display(),
+                    folder.id
+                )));
+            }
             let files = read_copy(&entry, name)?;
             return Ok((entry, files));
         }
@@ -208,7 +246,7 @@ fn read_copy(entry: &Path, name: &str) -> Result<Vec<SnapshotFile>, Failure> {
 }
 
 /// The whole copy is new content.
-fn validate(repo: &SkillRepo, name: &str, change: &Change) -> Result<(), Failure> {
+fn validate(repo: &Canon, name: &str, change: &Change) -> Result<(), Failure> {
     let working_tree = WorkingTree::new(repo.root());
     let scope = Scope {
         skills: BTreeSet::from([name.to_owned()]),

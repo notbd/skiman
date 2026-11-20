@@ -7,11 +7,10 @@ use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
 use crate::backup::noted_copy;
+use crate::canon::Canon;
 use crate::fsutil::absolute_lexical;
-use crate::manifest::Manifest;
+use crate::linked::LINKED_DIR;
 use crate::paths::Paths;
-use crate::project::root::configured_skill_dirs;
-use crate::repo::SkillRepo;
 use crate::tools::{ManagedElsewhere, PLUGIN_MARKER, TOOLS};
 
 /// What a tool-directory entry is, decided in the spec's order: ownership first.
@@ -32,15 +31,19 @@ pub enum Entry {
     Moved(PathBuf),
 }
 
-/// Classifies tool-directory entries for one skill repo.
+/// Classifies tool-directory entries for one canon.
 #[derive(Debug, Clone)]
 pub struct Ownership {
     skills_dir: PathBuf,
-    managing_skills_dir: PathBuf,
+    manual_dir: PathBuf,
+    retired_manual_dir: PathBuf,
     shared_body: PathBuf,
-    /// Realpath of the skill repo `init` just switched away from: links under
-    /// it are owned for that one sync.
-    previous_repo: Option<PathBuf>,
+    /// `<canon>/linked`: links to `<id>/<name>` or `<id>` in it are owned.
+    linked_dir: PathBuf,
+    /// Realpath of the canon `init` just switched away from: links under
+    /// it are owned for that one sync, those under its `linked/` only in
+    /// the two shapes of a linked skill's link.
+    previous_canon: Option<PathBuf>,
     /// Managed-elsewhere paths, as realpath of the parent plus the file name.
     managed_paths: Vec<PathBuf>,
     /// Realpaths of the directories whose content is managed elsewhere.
@@ -50,14 +53,7 @@ pub struct Ownership {
 }
 
 impl Ownership {
-    /// `manifest` is the `skiman.toml` the caller acts on (for import, the one
-    /// it is about to write); its project roots' `skill_dirs` are managed elsewhere.
-    pub fn new(
-        paths: &Paths,
-        repo: &SkillRepo,
-        manifest: &Manifest,
-        previous_repo: Option<PathBuf>,
-    ) -> Ownership {
+    pub fn new(paths: &Paths, repo: &Canon, previous_canon: Option<PathBuf>) -> Ownership {
         let home = paths.home();
         let mut managed_paths = Vec::new();
         let mut managed_under = Vec::new();
@@ -78,14 +74,13 @@ impl Ownership {
                 }
             }
         }
-        // Skills under a project root's `skill_dirs` reach the tools through
-        // links another manager keeps (project-scope.md "Configuration").
-        managed_under.extend(configured_skill_dirs(home, repo, manifest));
         Ownership {
             skills_dir: repo.skills_dir(),
-            managing_skills_dir: repo.managing_skills_dir(),
+            manual_dir: repo.manual_dir(),
+            retired_manual_dir: repo.retired_manual_dir(),
             shared_body: repo.shared_body(),
-            previous_repo,
+            linked_dir: repo.linked_dir(),
+            previous_canon,
             managed_paths,
             managed_under,
             backups: paths.state_dir().join("backups"),
@@ -134,13 +129,14 @@ impl Ownership {
 
     /// The normalised target of the instruction location `location` (the
     /// realpath of its parent joined with the file name) when skiman owns it:
-    /// a symlink to the shared body, or under the previous skill repo.
+    /// a symlink to the shared body, or under the previous canon outside
+    /// its `linked/`.
     pub fn owned_instruction(&self, location: &Path, meta: &Metadata) -> Option<PathBuf> {
         if !meta.is_symlink() {
             return None;
         }
         let target = link_target(location.parent()?, location)?;
-        (target == self.shared_body || self.is_under_previous_repo(&target)).then_some(target)
+        (target == self.shared_body || self.is_under_previous_canon(&target)).then_some(target)
     }
 
     /// A link to `skills/<name>`, or to `skills/<x>/<name>` (`<x>` one or
@@ -158,15 +154,29 @@ impl Ownership {
                     .take_while(|d| *d != self.skills_dir)
                     .all(|d| std::fs::symlink_metadata(d.join("SKILL.md")).is_err())
         };
-        (target.file_name() == Some(name) && target.parent().is_some_and(in_skills))
-            || *target == self.managing_skills_dir
-            || self.is_under_previous_repo(target)
+        // A linked skill: `linked/<id>/<name>`, or `linked/<id>` for a
+        // folder that is one skill (ADR 0010), in this canon or the previous one.
+        let previous_linked = self.previous_canon.as_ref().map(|p| p.join(LINKED_DIR));
+        let in_linked = |dir: &Path| {
+            [Some(&self.linked_dir), previous_linked.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|linked| dir == linked || dir.parent() == Some(linked.as_path()))
+        };
+        (target.file_name() == Some(name)
+            && target
+                .parent()
+                .is_some_and(|d| in_skills(d) || in_linked(d)))
+            || *target == self.manual_dir
+            || *target == self.retired_manual_dir
+            || self.is_under_previous_canon(target)
     }
 
-    fn is_under_previous_repo(&self, target: &Path) -> bool {
-        self.previous_repo
-            .as_ref()
-            .is_some_and(|previous| target.starts_with(previous))
+    /// Under the previous canon, outside its `linked/`.
+    fn is_under_previous_canon(&self, target: &Path) -> bool {
+        self.previous_canon.as_ref().is_some_and(|previous| {
+            target.starts_with(previous) && !target.starts_with(previous.join(LINKED_DIR))
+        })
     }
 }
 
@@ -176,4 +186,58 @@ impl Ownership {
 pub fn link_target(real_dir: &Path, entry: &Path) -> Option<PathBuf> {
     let target = std::fs::read_link(entry).ok()?;
     Some(absolute_lexical(real_dir, &target))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    /// A canon and a tool directory holding a link `name` to `target`
+    /// (relative to the canon): what the link is.
+    fn classify(name: &str, target: &str) -> Entry {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let (home, canon) = (root.join("home"), root.join("canon"));
+        let tool_dir = home.join(".claude/skills");
+        std::fs::create_dir_all(&tool_dir).unwrap();
+        std::fs::create_dir_all(&canon).unwrap();
+        symlink(canon.join(target), tool_dir.join(name)).unwrap();
+        let repo = Canon::at(&canon).unwrap();
+        let ownership = Ownership::new(&Paths::under(&home), &repo, None);
+        let meta = std::fs::symlink_metadata(tool_dir.join(name)).unwrap();
+        ownership.classify(&tool_dir, OsStr::new(name), &meta)
+    }
+
+    fn owned(entry: &Entry) -> bool {
+        matches!(entry, Entry::Owned(_))
+    }
+
+    /// Both shapes of a linked skill's link are skiman's whether or not
+    /// `linked/<id>` exists, so a deleted registration's links are still found.
+    #[test]
+    fn a_link_to_a_linked_skill_is_owned_in_both_shapes() {
+        assert!(owned(&classify("pdf", "linked/company/pdf")));
+        assert!(owned(&classify("solo", "linked/solo")));
+    }
+
+    #[test]
+    fn a_link_under_a_temporary_name_of_a_linked_skill_is_owned() {
+        assert!(owned(&classify(".pdf.skiman-tmp-42", "linked/company/pdf")));
+        assert!(owned(&classify(".solo.skiman-tmp-42-1", "linked/solo")));
+    }
+
+    #[test]
+    fn no_other_target_under_linked_is_owned() {
+        for (name, target) in [
+            ("pdf", "linked/company/docx"),
+            ("solo", "linked/other"),
+            ("pdf", "linked/company/sub/pdf"),
+            ("linked", "linked"),
+            ("company", "linked/company/company/x"),
+        ] {
+            assert!(!owned(&classify(name, target)), "{name} -> {target}");
+        }
+    }
 }

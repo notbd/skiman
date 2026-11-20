@@ -1,4 +1,4 @@
-//! The content of the distributed `managing-skills` skill.
+//! The content of the distributed `skiman-manual` skill.
 
 use saphyr::LoadableYamlNode;
 
@@ -8,22 +8,17 @@ fn materialised(sandbox: &Sandbox) -> String {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
-    std::fs::read_to_string(
-        sandbox
-            .skill_repo()
-            .join(".skiman/managing-skills/SKILL.md"),
-    )
-    .unwrap()
+    std::fs::read_to_string(sandbox.canon().join(".skiman/skiman-manual/SKILL.md")).unwrap()
 }
 
 #[test]
-fn materialised_managing_skills_passes_every_skill_format_rule() {
+fn materialised_skiman_manual_passes_every_skill_format_rule() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let folder = sandbox.skill_repo().join(".skiman/managing-skills");
+    let folder = sandbox.canon().join(".skiman/skiman-manual");
 
     // Frontmatter starts on line 1 and is valid YAML without duplicate keys.
     let rest = content
@@ -36,7 +31,9 @@ fn materialised_managing_skills_passes_every_skill_format_rule() {
     };
     let name = yaml["name"].as_str().expect("name");
     let description = yaml["description"].as_str().expect("description");
-    assert_eq!(name, "managing-skills", "name equals the folder name");
+    assert_eq!(name, "skiman-manual", "name equals the folder name");
+    assert!(description.starts_with("skiman's manual "), "{description}");
+    assert!(content.is_ascii(), "the manual is plain ASCII English");
     let len = description.chars().count();
     assert!((1..=1024).contains(&len), "description is {len} characters");
 
@@ -54,30 +51,27 @@ fn materialised_managing_skills_passes_every_skill_format_rule() {
 }
 
 #[test]
-fn managing_skills_matches_its_snapshot_with_the_skill_repo_path_filled_in() {
+fn skiman_manual_matches_its_snapshot_with_the_canon_path_filled_in() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let repo = sandbox.skill_repo().display().to_string();
-    assert!(content.contains(&format!("The skill repo is `{repo}`.")));
+    let repo = sandbox.canon().display().to_string();
+    assert!(content.contains(&format!("The canon is `{repo}`.")));
 
     snapbox::assert_data_eq!(
-        content.replace(&repo, "<SKILL_REPO>"),
-        snapbox::file!["snapshots/managing-skills.md"].raw()
+        content.replace(&repo, "<CANON>"),
+        snapbox::file!["snapshots/skiman-manual.md"].raw()
     );
 }
 
 /// Every everyday operation the ticket lists, with the text that tells an
 /// agent how to do it the canonical way.
 #[test]
-fn managing_skills_covers_every_everyday_operation() {
+fn skiman_manual_covers_every_everyday_operation() {
     let sandbox = Sandbox::new();
     let content = materialised(&sandbox);
-    let repo = sandbox.skill_repo().display().to_string();
+    let repo = sandbox.canon().display().to_string();
     let required = [
-        (
-            "find the skill repo",
-            format!("The skill repo is `{repo}`."),
-        ),
+        ("find the canon", format!("The canon is `{repo}`.")),
         ("create", "skiman new <name> -d".to_owned()),
         (
             "write the body",
@@ -96,7 +90,7 @@ fn managing_skills_covers_every_everyday_operation() {
             "wait for approval",
             "wait for the user's approval".to_owned(),
         ),
-        ("edit in the skill repo", format!("{repo}/skills/<name>/")),
+        ("edit in the canon", format!("{repo}/skills/<name>/")),
         ("update", "skiman update".to_owned()),
         ("resolve conflicts", "<<<<<<< local (skiman)".to_owned()),
         ("remove", "skiman remove <name> --yes".to_owned()),
@@ -118,10 +112,35 @@ fn managing_skills_covers_every_everyday_operation() {
         ("no edits of copies", "never edit what is there".to_owned()),
         ("no prompts", "never prompts".to_owned()),
         ("exit 2", "Exit code 2".to_owned()),
+        // Linked skills (spec #37, user story 15).
+        (
+            "linked skills are outside",
+            "A linked skill's folder is outside the canon".to_owned(),
+        ),
+        (
+            "edit in the linked folder",
+            "edit it in its linked folder".to_owned(),
+        ),
+        ("where that folder is", "`skiman list` shows".to_owned()),
+        ("approval through linked/", format!("{repo}/linked/<id>/")),
+        ("approval through linked/", "approval".to_owned()),
+        (
+            "search does not reach",
+            "does not reach linked skills".to_owned(),
+        ),
+        ("register", "skiman linked add <path>".to_owned()),
+        ("unregister", "skiman linked remove <id>".to_owned()),
+        ("summary", "metadata.summary".to_owned()),
+        (
+            "refusals",
+            "refuse a name that is only a linked skill".to_owned(),
+        ),
     ];
+    // Line breaks fall anywhere in the prose, so compare with single spaces.
+    let flat = content.split_whitespace().collect::<Vec<_>>().join(" ");
     let missing: Vec<_> = required
         .iter()
-        .filter(|(_, text)| !content.contains(text.as_str()))
+        .filter(|(_, text)| !flat.contains(text.as_str()))
         .collect();
     assert!(missing.is_empty(), "missing: {missing:#?}");
 }

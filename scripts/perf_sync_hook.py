@@ -3,7 +3,7 @@
 "Performance"; Phase 1 experiment 6). Not a CI gate.
 
 Builds a release binary, sets up a scratch HOME with all three agent tools
-installed and a skill repo holding 100 own skills (link mode), runs one sync
+installed and a canon holding 100 own skills (link mode), runs one sync
 to distribute them, then times 10 runs of `skiman sync --hook`, process start
 included, and prints the median. Target: under 100 ms. Exits 1 when the
 median misses the target or a run does not behave as a no-change run.
@@ -49,7 +49,7 @@ def main() -> int:
             "GIT_CONFIG_NOSYSTEM": "1",
             "LC_ALL": "C",
         }
-        repo = root / "skill-repo"
+        repo = root / "canon"
 
         def skiman(*args: str) -> subprocess.CompletedProcess:
             return subprocess.run(
@@ -72,7 +72,7 @@ def main() -> int:
             sys.stderr.write(setup.stderr.decode())
             return 1
         for rel in TOOL_DIRS:
-            # 100 skills plus managing-skills.
+            # 100 skills plus skiman-manual.
             assert len(list((home / rel).iterdir())) == SKILLS + 1, rel
 
         # The first exec of a freshly built binary includes a one-time macOS

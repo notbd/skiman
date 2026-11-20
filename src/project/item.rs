@@ -1,5 +1,5 @@
 //! Project items and the mirror tree (project-scope.md "Mirror layout"):
-//! `<root>/<rel>` on disk pairs with `projects/<id>/<rel>` in the skill repo,
+//! `<root>/<rel>` on disk pairs with `projects/<id>/<rel>` in the canon,
 //! so the mirror tree is the only record of what is managed.
 
 use std::path::PathBuf;
@@ -9,7 +9,7 @@ use super::root::Root;
 use super::synced::Synced;
 use crate::tree::{self, Tree};
 
-/// The folder of the skill repo that holds every mirror.
+/// The folder of the canon that holds every mirror.
 pub const MIRROR_DIR: &str = "projects";
 
 /// One project item: its root, its root-relative path, kind and anchor.
@@ -25,7 +25,7 @@ pub struct Item {
 impl Item {
     /// The item at `rel` when `rel` has an item shape.
     pub fn at(root: &Root, rel: &str, is_dir: bool) -> Option<Item> {
-        shape(rel, is_dir, &root.skill_dirs).map(|(kind, anchor)| Item {
+        shape(rel, is_dir).map(|(kind, anchor)| Item {
             root: root.id.clone(),
             rel: rel.to_owned(),
             kind,
@@ -61,16 +61,16 @@ pub struct Mirror {
     pub strays: Vec<String>,
 }
 
-/// Reads the mirror of `root` from `tree` (the skill repo or a view of it).
+/// Reads the mirror of `root` from `tree` (the canon or a view of it).
 /// Skill folders are not entered; ignored names ([`tree::IGNORED_NAMES`]) are
 /// skipped.
 pub fn read_mirror(tree: &dyn Tree, root: &Root) -> std::io::Result<Mirror> {
-    read_mirror_of(tree, &root.id, &root.skill_dirs)
+    read_mirror_of(tree, &root.id)
 }
 
-/// [`read_mirror`] by id and configured skill folders, for the rules (which
-/// read the configuration from the tree, not from a resolved root).
-pub fn read_mirror_of(tree: &dyn Tree, id: &str, skill_dirs: &[String]) -> std::io::Result<Mirror> {
+/// [`read_mirror`] by id, for the rules (which read the configuration from
+/// the tree, not from a resolved root).
+pub fn read_mirror_of(tree: &dyn Tree, id: &str) -> std::io::Result<Mirror> {
     let base = format!("{MIRROR_DIR}/{id}");
     let mut mirror = Mirror::default();
     let mut skills: Vec<String> = Vec::new();
@@ -80,8 +80,7 @@ pub fn read_mirror_of(tree: &dyn Tree, id: &str, skill_dirs: &[String]) -> std::
             continue;
         }
         let is_dir = entry.kind == tree::Kind::Dir;
-        let found = shape(rel, is_dir, skill_dirs)
-            .or_else(|| (!is_dir).then(|| shape(rel, true, skill_dirs)).flatten());
+        let found = shape(rel, is_dir).or_else(|| (!is_dir).then(|| shape(rel, true)).flatten());
         match found {
             Some((kind, anchor)) => {
                 if kind == Kind::Skill {

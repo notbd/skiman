@@ -3,7 +3,7 @@
 //! filter, hook or attribute of the upstream can run.
 //!
 //! A third-party upstream's `.gitignore`, `.gitattributes` and `.gitmodules`
-//! configure the upstream's git; in the skill repo they would configure its
+//! configure the upstream's git; in the canon they would configure its
 //! git instead (hide skill files from commits, filter them). Reading such an
 //! upstream ([`Snapshot::read`], [`Snapshot::read_local_upstream`]) leaves
 //! them out of the files and lists them in [`Snapshot::git_files`].
@@ -32,7 +32,7 @@ pub struct SnapshotFile {
 
 /// The files of one folder of an upstream commit, sorted by path bytes.
 /// Ignored names ([`tree::IGNORED_NAMES`]) are left out (never copied into the
-/// skill repo).
+/// canon).
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub files: Vec<SnapshotFile>,

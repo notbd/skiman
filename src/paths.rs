@@ -43,6 +43,16 @@ impl Paths {
         })
     }
 
+    /// Paths under `home` with the XDG defaults, for unit tests.
+    #[cfg(test)]
+    pub fn under(home: &Path) -> Paths {
+        Paths {
+            home: home.to_path_buf(),
+            config_home: home.join(".config"),
+            state_home: home.join(".local/state"),
+        }
+    }
+
     pub fn home(&self) -> &Path {
         &self.home
     }

@@ -8,22 +8,22 @@ use snapbox::str;
 
 use crate::support::{Sandbox, hex, init, read, skill_md, tree_hash};
 
-/// Writes `contents` at `rel` in the skill repo, creating folders, as a user editing by hand.
+/// Writes `contents` at `rel` in the canon, creating folders, as a user editing by hand.
 fn write(sandbox: &Sandbox, rel: &str, contents: impl AsRef<[u8]>) -> PathBuf {
-    let path = sandbox.skill_repo().join(rel);
+    let path = sandbox.canon().join(rel);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, contents).unwrap();
     path
 }
 
 fn append(sandbox: &Sandbox, rel: &str, text: &str) {
-    let path = sandbox.skill_repo().join(rel);
+    let path = sandbox.canon().join(rel);
     let mut old = std::fs::read_to_string(&path).unwrap_or_default();
     old.push_str(text);
     std::fs::write(path, old).unwrap();
 }
 
-/// A skill repo holding `skills/<name>/SKILL.md` with `skill_md`.
+/// A canon holding `skills/<name>/SKILL.md` with `skill_md`.
 fn repo_with_skill(name: &str, skill_md: &str) -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -50,8 +50,8 @@ fn third_party(sandbox: &Sandbox, name: &str) {
             "\n[skills.{name}.source]\nurl = \"https://github.com/acme/skills.git\"\npath = \"{name}\"\n"
         ),
     );
-    let hash = tree_hash(&sandbox.skill_repo().join("upstream").join(name));
-    let lock = sandbox.skill_repo().join("skiman.lock");
+    let hash = tree_hash(&sandbox.canon().join("upstream").join(name));
+    let lock = sandbox.canon().join("skiman.lock");
     if !lock.exists() {
         std::fs::write(&lock, "version = 1\n").unwrap();
     }
@@ -70,7 +70,7 @@ fn check(sandbox: &Sandbox) -> snapbox::cmd::OutputAssert {
 }
 
 #[test]
-fn a_clean_skill_repo_passes_check_with_no_output() {
+fn a_clean_canon_passes_check_with_no_output() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     sandbox
@@ -125,7 +125,7 @@ warning: skills/pdf: skill-info: [skills.pdf] in skiman.toml has no `summary`, `
 "#]]);
 
     // Neither the pre-commit hook's check nor the hooks' sync report it.
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(&repo, ["add", "--all"]);
     sandbox
         .skiman()
@@ -161,7 +161,7 @@ skiman.toml:7: toml-value: `installed` in [skills.pdf] must be a date without a 
 
 "#]]);
 
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = read(&manifest).replace("installed = \"2026-01-31\"", "installed = 2026-01-31");
     std::fs::write(&manifest, text).unwrap();
     let out = check(&sandbox).code(1).get_output().stdout.clone();
@@ -271,17 +271,17 @@ fn skill_folders_with_reserved_invalid_or_too_long_names_are_reported() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let long = "a".repeat(65);
-    for name in ["managing-skills", ".hidden", "Bad_Name", long.as_str()] {
+    for name in ["skiman-manual", ".hidden", "Bad_Name", long.as_str()] {
         write(&sandbox, &format!("skills/{name}/SKILL.md"), skill_md(name));
     }
     // Finder litter next to the skills is ignored.
     write(&sandbox, "skills/.DS_Store", "x");
 
     check(&sandbox).code(1).stdout_eq(str![[r#"
-skills/.hidden: skill-folder: `.hidden` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)
+skills/.hidden: skill-folder: `.hidden` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)
 skills/Bad_Name: skill-folder: `Bad_Name` is not a valid skill name: use 1 to 64 lowercase letters, digits and single hyphens between them
 skills/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: skill-folder: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` is not a valid skill name: use 1 to 64 lowercase letters, digits and single hyphens between them
-skills/managing-skills: skill-folder: `managing-skills` is a reserved skill name (reserved: managing-skills, synced, and any name starting with `.`)
+skills/skiman-manual: skill-folder: `skiman-manual` is a reserved skill name (reserved: skiman-manual, synced, and any name starting with `.`)
 
 "#]]);
 }
@@ -312,7 +312,7 @@ skills/pdf/SKILL.md:3: description-length: `description` must be 1 to 1024 chara
 #[test]
 fn symlinks_inside_skills_are_reported() {
     let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::os::unix::fs::symlink("SKILL.md", repo.join("skills/pdf/alias.md")).unwrap();
     std::fs::create_dir_all(repo.join("elsewhere")).unwrap();
     std::fs::write(repo.join("elsewhere/SKILL.md"), skill_md("docx")).unwrap();
@@ -334,7 +334,7 @@ fn sparse(path: &Path, size: u64) {
 #[test]
 fn a_file_over_10_mib_is_reported() {
     let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sparse(&repo.join("skills/pdf/assets/limit.bin"), 10 * 1024 * 1024);
     sparse(
         &repo.join("skills/pdf/assets/big.bin"),
@@ -367,7 +367,7 @@ skills/pdf: file-count: 1001 files; a skill may hold at most 1000
 #[test]
 fn more_than_50_mib_in_a_skill_is_reported() {
     let sandbox = repo_with_skill("pdf", &skill_md("pdf"));
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for i in 0..6 {
         sparse(
             &repo.join(format!("skills/pdf/assets/{i}.bin")),
@@ -429,7 +429,7 @@ fn unknown_keys_in_skiman_toml_are_reported_with_their_line() {
 skiman.toml:7: unknown-key: unknown key `branch` in [skills.pdf.source] (allowed: url, path, ref, ref_kind, upstream_name)
 skiman.toml:10: toml-value: `enabled` in [skills.pdf] must be true or false
 skiman.toml:11: unknown-key: unknown key `pinned` in [skills.pdf] (allowed: enabled, summary, origin, installed, source)
-skiman.toml:13: unknown-key: unknown key `colors` in skiman.toml (allowed: tools, skills, secrets, projects)
+skiman.toml:13: unknown-key: unknown key `colors` in skiman.toml (allowed: tools, skills, secrets, projects, linked)
 
 "#]]);
 }
@@ -439,7 +439,7 @@ fn a_source_table_without_url_or_with_a_bad_ref_kind_is_reported() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = std::fs::read_to_string(&manifest).unwrap().replace(
         "url = \"https://github.com/acme/skills.git\"\n",
         "ref_kind = \"sha\"\n",
@@ -470,7 +470,7 @@ fn a_lockfile_that_breaks_the_version_1_format_is_reported() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    let lock = sandbox.skill_repo().join("skiman.lock");
+    let lock = sandbox.canon().join("skiman.lock");
     let text = std::fs::read_to_string(&lock)
         .unwrap()
         .replace("version = 1", "version = 2")
@@ -490,7 +490,7 @@ fn the_tree_hash_follows_the_spec_ignoring_finder_files_and_empty_folders() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    let upstream = sandbox.skill_repo().join("upstream/pdf");
+    let upstream = sandbox.canon().join("upstream/pdf");
 
     // Worked example: the hashed text written out by hand.
     let skill_md = skill_md("pdf");
@@ -537,7 +537,7 @@ fn renaming_a_third_party_skill_everywhere_by_hand_passes() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::rename(repo.join("skills/pdf"), repo.join("skills/forms")).unwrap();
     std::fs::rename(repo.join("upstream/pdf"), repo.join("upstream/forms")).unwrap();
     write(&sandbox, "skills/forms/SKILL.md", skill_md("forms"));
@@ -556,7 +556,7 @@ fn an_incomplete_hand_rename_is_reported_piece_by_piece() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::rename(repo.join("skills/pdf"), repo.join("skills/forms")).unwrap();
     write(&sandbox, "skills/forms/SKILL.md", skill_md("forms"));
     let text = std::fs::read_to_string(repo.join("skiman.toml"))
@@ -578,7 +578,7 @@ fn converting_to_own_names_each_piece_still_left() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let manifest_before = std::fs::read_to_string(repo.join("skiman.toml")).unwrap();
     let own_manifest = manifest_before
         .split("\n[skills.pdf.source]")
@@ -620,7 +620,7 @@ fn a_hand_deleted_third_party_skill_folder_leaves_records_that_need_attention() 
     let sandbox = Sandbox::new();
     init(&sandbox);
     third_party(&sandbox, "pdf");
-    std::fs::remove_dir_all(sandbox.skill_repo().join("skills/pdf")).unwrap();
+    std::fs::remove_dir_all(sandbox.canon().join("skills/pdf")).unwrap();
 
     check(&sandbox).code(3).stdout_eq(str![[r#"
 skiman.lock:3: leftover-record: leftover lock entry for pdf, but skills/pdf does not exist; run `skiman remove pdf --yes` (after a hand rename, rename this too)
@@ -634,7 +634,7 @@ upstream/pdf: leftover-record: leftover upstream snapshot, but skills/pdf does n
 fn leftover_records_and_rule_violations_together_exit_3() {
     let sandbox = repo_with_skill("docx", &skill_md("pdf"));
     third_party(&sandbox, "pdf");
-    std::fs::remove_dir_all(sandbox.skill_repo().join("skills/pdf")).unwrap();
+    std::fs::remove_dir_all(sandbox.canon().join("skills/pdf")).unwrap();
 
     check(&sandbox).code(3);
 }
@@ -665,7 +665,7 @@ created [..]/skills/pdf
 warning: skills/docx/SKILL.md:1: frontmatter: the frontmatter must start on line 1 with `---`
 
 "#]]);
-    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/pdf/SKILL.md").is_file());
 }
 
 #[test]
@@ -682,4 +682,55 @@ fn a_skiman_toml_that_does_not_parse_gives_no_skill_info_warning() {
     let output = check(&sandbox).code(1);
     let stderr = String::from_utf8(output.get_output().stderr.clone()).unwrap();
     assert!(!stderr.contains("skill-info"), "{stderr}");
+}
+
+/// `skills/big/SKILL.md` whose body, without its surrounding blank lines, is `bytes` long.
+fn write_skill_body(sandbox: &Sandbox, bytes: usize) {
+    write(
+        sandbox,
+        "skills/big/SKILL.md",
+        format!(
+            "---\nname: big\ndescription: d\n---\n\n\n{}\n\n",
+            "x".repeat(bytes)
+        ),
+    );
+}
+
+/// The `skill-body-size` lines `check` prints; asserts exit 0.
+fn body_size_warnings(sandbox: &Sandbox) -> Vec<String> {
+    let output = check(sandbox).code(0);
+    String::from_utf8(output.get_output().stderr.clone())
+        .unwrap()
+        .lines()
+        .filter(|line| line.contains("skill-body-size"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn a_skill_body_over_antigravitys_limit_is_a_warning_while_antigravity_is_enabled() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+
+    // Measured with agy 1.5.12: it keeps 24000 bytes of the body, counted
+    // without the frontmatter and without surrounding whitespace.
+    write_skill_body(&sandbox, 23999);
+    assert_eq!(body_size_warnings(&sandbox), Vec::<String>::new());
+    write_skill_body(&sandbox, 24000);
+    assert_eq!(body_size_warnings(&sandbox), Vec::<String>::new());
+
+    write_skill_body(&sandbox, 24001);
+    assert_eq!(
+        body_size_warnings(&sandbox),
+        [
+            "warning: skills/big/SKILL.md: skill-body-size: the body is 24001 bytes (without the frontmatter and surrounding whitespace); antigravity cuts it after 24000 bytes without a message"
+        ]
+    );
+
+    write(
+        &sandbox,
+        "skiman.toml",
+        "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
+    );
+    assert_eq!(body_size_warnings(&sandbox), Vec::<String>::new());
 }

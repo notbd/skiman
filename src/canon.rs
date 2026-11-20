@@ -1,4 +1,4 @@
-//! The skill repo on disk: its layout (spec Data formats, "Skill repo layout")
+//! The canon on disk: its layout (spec Data formats, "Canon layout")
 //! and how commands find it through the user config.
 
 use std::path::{Path, PathBuf};
@@ -9,31 +9,28 @@ use crate::layout::Layout;
 use crate::paths::Paths;
 use crate::tree::WorkingTree;
 
-/// A skill repo, addressed by its realpath (ownership compares link targets
+/// A canon, addressed by its realpath (ownership compares link targets
 /// against the realpath, spec Ownership).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillRepo {
+pub struct Canon {
     root: PathBuf,
 }
 
-impl SkillRepo {
-    /// The skill repo at `path`, which must exist.
-    pub fn at(path: &Path) -> Result<SkillRepo, Failure> {
+impl Canon {
+    /// The canon at `path`, which must exist.
+    pub fn at(path: &Path) -> Result<Canon, Failure> {
         let root = path.canonicalize().map_err(|e| {
-            Failure::operational(format!(
-                "skill repo {} is not reachable: {e}",
-                path.display()
-            ))
+            Failure::operational(format!("canon {} is not reachable: {e}", path.display()))
         })?;
-        Ok(SkillRepo { root })
+        Ok(Canon { root })
     }
 
-    /// The skill repo the user config points to.
-    pub fn from_config(paths: &Paths) -> Result<SkillRepo, Failure> {
-        SkillRepo::at(&UserConfig::load(paths)?.repo)
+    /// The canon the user config points to.
+    pub fn from_config(paths: &Paths) -> Result<Canon, Failure> {
+        Canon::at(&UserConfig::load(paths)?.repo)
     }
 
-    /// Realpath of the skill repo.
+    /// Realpath of the canon.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -56,7 +53,7 @@ impl SkillRepo {
     }
 
     /// Removes the group folders of the skill folder `skill` (relative to
-    /// the skill repo) that nothing is left in, innermost first, printing a
+    /// the canon) that nothing is left in, innermost first, printing a
     /// line for each; a skill in no group has none.
     pub fn remove_empty_group(&self, skill: &str) {
         let groups = Path::new(skill)
@@ -77,6 +74,11 @@ impl SkillRepo {
         self.root.join("upstream").join(name)
     }
 
+    /// `linked/`: a link to each linked folder (`crate::linked`).
+    pub fn linked_dir(&self) -> PathBuf {
+        self.root.join(crate::linked::LINKED_DIR)
+    }
+
     /// `instructions/shared.md`: the shared body.
     pub fn shared_body(&self) -> PathBuf {
         self.root.join("instructions/shared.md")
@@ -95,8 +97,8 @@ impl SkillRepo {
         self.root.join(".skiman")
     }
 
-    /// `.skiman/lock`: the repo lock file.
-    pub fn repo_lock_file(&self) -> PathBuf {
+    /// `.skiman/lock`: the canon lock file.
+    pub fn canon_lock_file(&self) -> PathBuf {
         self.local_dir().join("lock")
     }
 
@@ -110,8 +112,14 @@ impl SkillRepo {
         self.local_dir().join("import")
     }
 
-    /// `.skiman/managing-skills`: the materialised `managing-skills` skill.
-    pub fn managing_skills_dir(&self) -> PathBuf {
+    /// `.skiman/skiman-manual`: the materialised manual.
+    pub fn manual_dir(&self) -> PathBuf {
+        self.local_dir().join(crate::skiman_manual::NAME)
+    }
+
+    /// `.skiman/managing-skills`: where releases before the manual's rename
+    /// materialised it. Sync removes it; links to it stay skiman's.
+    pub fn retired_manual_dir(&self) -> PathBuf {
         self.local_dir().join("managing-skills")
     }
 }

@@ -1,6 +1,6 @@
-//! Running `skiman import <folder>` on a skill repo that already holds what
+//! Running `skiman import <folder>` on a canon that already holds what
 //! the import writes (an earlier run finished, or stopped during the
-//! takeover): nothing is fetched or written to the skill repo, and only the
+//! takeover): nothing is fetched or written to the canon, and only the
 //! originals still in place move. A shared body that differs is refused,
 //! with a way on for an import that ran before and one for an import that
 //! never did.
@@ -14,17 +14,17 @@ use crate::support::{
     write,
 };
 
-/// The preview line when the skill repo already holds the import.
-const HOLDS: &str = "  the skill repo already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is\n";
+/// The preview line when the canon already holds the import.
+const HOLDS: &str = "  the canon already holds everything this import writes: nothing is written to it, and its skiman.toml stays as it is\n";
 
 const TOOLS: &str = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
 
-/// The skill repo and the home folder without the git cache (fetching may
+/// The canon and the home folder without the git cache (fetching may
 /// fill it), backups included.
 fn world(sandbox: &Sandbox) -> Vec<BTreeMap<PathBuf, String>> {
     let mut home = tree(sandbox.home());
     home.retain(|path, _| !path.starts_with(".local/state/skiman/cache"));
-    vec![tree(sandbox.skill_repo()), home]
+    vec![tree(sandbox.canon()), home]
 }
 
 /// Runs the import, which must exit with `code`; returns its stdout.
@@ -58,8 +58,8 @@ fn assert_shared_body_refused(sandbox: &Sandbox, folder: &Path) {
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     for text in [
         "already holds everything this import writes except instructions/shared.md",
-        "If this import has run on this skill repo before",
-        "If it has never run on this skill repo",
+        "If this import has run on this canon before",
+        "If it has never run on this canon",
         "If you cannot tell which, do the first.",
     ] {
         assert!(stderr.contains(text), "{text:?} not in {stderr}");
@@ -95,8 +95,7 @@ fn an_import_run_again_after_it_finished_fetches_nothing_and_writes_nothing() {
 }
 
 #[test]
-fn a_blank_or_missing_shared_body_in_the_skill_repo_is_the_same_as_an_empty_one_in_the_import_folder()
- {
+fn a_blank_or_missing_shared_body_in_the_canon_is_the_same_as_an_empty_one_in_the_import_folder() {
     let sandbox = Sandbox::new();
     let Setup {
         folder,
@@ -106,7 +105,7 @@ fn a_blank_or_missing_shared_body_in_the_skill_repo_is_the_same_as_an_empty_one_
     follow_main(&folder, &commit);
     write(folder.join("instructions/shared.md"), "");
     run(&sandbox, &folder, 0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let snapshot = tree(repo.join("upstream/pdf"));
     upstream.write("skills/pdf/reference.md", "# Reference v2\n");
     upstream.commit("v2");
@@ -137,16 +136,13 @@ fn project_roots_and_enabled_set_after_an_import_are_kept_when_it_runs_again() {
         .arg(sandbox.home().join("proj"))
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let manifest = read(repo.join("skiman.toml"));
     let backups = backup_dirs(&sandbox);
 
     let stdout = run(&sandbox, &folder, 0);
     assert!(stdout.contains(HOLDS), "{stdout}");
-    assert!(
-        !stdout.contains("differs from the skill repo's"),
-        "{stdout}"
-    );
+    assert!(!stdout.contains("differs from the canon's"), "{stdout}");
     assert_eq!(read(repo.join("skiman.toml")), manifest);
     assert_eq!(backup_dirs(&sandbox), backups);
 
@@ -159,18 +155,15 @@ fn project_roots_and_enabled_set_after_an_import_are_kept_when_it_runs_again() {
         ),
     );
     let stdout = run(&sandbox, &folder, 0);
-    assert!(
-        !stdout.contains("differs from the skill repo's"),
-        "{stdout}"
-    );
+    assert!(!stdout.contains("differs from the canon's"), "{stdout}");
 
-    // A skill turned off in the skill repo stays off, and the preview says so.
+    // A skill turned off in the canon stays off, and the preview says so.
     let manifest = format!("{manifest}\n[skills.notes]\nenabled = false\n");
     write(repo.join("skiman.toml"), &manifest);
     let stdout = run(&sandbox, &folder, 0);
     assert!(
         stdout.contains(
-            "  the import folder's skiman.toml differs from the skill repo's in [skills.notes] enabled; the skill repo's are kept\n"
+            "  the import folder's skiman.toml differs from the canon's in [skills.notes] enabled; the canon's are kept\n"
         ),
         "{stdout}"
     );
@@ -189,7 +182,7 @@ fn a_shared_body_changed_after_an_import_refuses_running_it_again() {
     let Setup { folder, .. } = setup(&sandbox);
     run(&sandbox, &folder, 0);
     write(
-        sandbox.skill_repo().join("instructions/shared.md"),
+        sandbox.canon().join("instructions/shared.md"),
         "# Shared\n\nEdited later.\n",
     );
     assert_shared_body_refused(&sandbox, &folder);
@@ -202,7 +195,7 @@ fn a_shared_body_changed_after_an_import_refuses_running_it_again() {
     write(folder.join("instructions/shared.md"), "# Shared\n");
     write(folder.join("skiman.toml"), TOOLS);
     run(&sandbox, &folder, 0);
-    let shared = sandbox.skill_repo().join("instructions/shared.md");
+    let shared = sandbox.canon().join("instructions/shared.md");
     assert_eq!(read(&shared), "# Shared\n");
     write(&shared, "# Shared\n\nEdited later.\n");
     assert_shared_body_refused(&sandbox, &folder);
@@ -211,15 +204,15 @@ fn a_shared_body_changed_after_an_import_refuses_running_it_again() {
 /// Which copy of the two shared bodies is made the same as the other.
 #[derive(Clone, Copy, Debug)]
 enum Keep {
-    /// The skill repo's is copied over the import folder's.
+    /// The canon's is copied over the import folder's.
     Repo,
-    /// The import folder's is copied over the skill repo's.
+    /// The import folder's is copied over the canon's.
     Folder,
 }
 
 /// Copies one shared body over the other as `keep` says; returns the one kept.
 fn copy_shared_body(sandbox: &Sandbox, folder: &Path, keep: Keep) -> String {
-    let ours = sandbox.skill_repo().join("instructions/shared.md");
+    let ours = sandbox.canon().join("instructions/shared.md");
     let theirs = folder.join("instructions/shared.md");
     let (from, to) = match keep {
         Keep::Repo => (ours, theirs),
@@ -241,7 +234,7 @@ fn assert_either_copy_finishes(start: impl Fn(&Sandbox) -> PathBuf) {
 
         let stdout = run(&sandbox, &folder, 0);
         assert!(stdout.contains(HOLDS), "{keep:?}: {stdout}");
-        let shared = sandbox.skill_repo().join("instructions/shared.md");
+        let shared = sandbox.canon().join("instructions/shared.md");
         assert_eq!(read(&shared), kept, "{keep:?}");
         crate::support::assert_symlink(sandbox.instruction_file(Tool::Codex), &shared, &shared);
         assert!(
@@ -272,7 +265,7 @@ fn after_adopt_an_import_holding_the_same_skill_writes_the_import_folders_shared
  {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("instructions/shared.md"), "");
     sandbox
         .skiman()
@@ -294,7 +287,7 @@ fn after_adopt_an_import_holding_the_same_skill_writes_the_import_folders_shared
     );
 }
 
-/// A skill repo where `skiman new mine` made the only skill and whose shared
+/// A canon where `skiman new mine` made the only skill and whose shared
 /// body holds something, and an import folder holding the same skill, a
 /// shared body of its own and other tools.
 fn never_imported(sandbox: &Sandbox) -> PathBuf {
@@ -309,7 +302,7 @@ fn never_imported(sandbox: &Sandbox) -> PathBuf {
     let copied = sandbox
         .std_command("cp")
         .arg("-R")
-        .arg(sandbox.skill_repo().join("skills/mine"))
+        .arg(sandbox.canon().join("skills/mine"))
         .arg(folder.join("skills/mine"))
         .status()
         .unwrap();
@@ -326,12 +319,12 @@ fn never_imported(sandbox: &Sandbox) -> PathBuf {
 }
 
 #[test]
-fn an_import_that_never_ran_imports_everything_once_the_skill_repos_shared_body_is_emptied() {
+fn an_import_that_never_ran_imports_everything_once_the_canons_shared_body_is_emptied() {
     for empty in ["", "\n"] {
         let sandbox = Sandbox::new();
         let folder = never_imported(&sandbox);
         assert_shared_body_refused(&sandbox, &folder);
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         write(repo.join("instructions/shared.md"), empty);
 
         run(&sandbox, &folder, 0);
@@ -351,12 +344,12 @@ fn an_import_that_never_ran_imports_everything_once_the_skill_repos_shared_body_
         );
     }
 
-    // Copying instead keeps the skill repo's skiman.toml and names the tools.
+    // Copying instead keeps the canon's skiman.toml and names the tools.
     let sandbox = Sandbox::new();
     let folder = never_imported(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     copy_shared_body(&sandbox, &folder, Keep::Folder);
-    // The skill repo apart from the command's own staging folder.
+    // The canon apart from the command's own staging folder.
     let content = || {
         let mut content = tree(&repo);
         content.retain(|path, _| !path.starts_with(".skiman/tmp"));
@@ -367,7 +360,7 @@ fn an_import_that_never_ran_imports_everything_once_the_skill_repos_shared_body_
     assert!(stdout.contains(HOLDS), "{stdout}");
     assert!(
         stdout.contains(
-            "  the import folder's skiman.toml differs from the skill repo's in [tools] enabled; the skill repo's are kept\n"
+            "  the import folder's skiman.toml differs from the canon's in [tools] enabled; the canon's are kept\n"
         ),
         "{stdout}"
     );
@@ -411,8 +404,8 @@ fn assert_pdf_records_refused(sandbox: &Sandbox, folder: &Path) {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     for text in [
-        "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
-        "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
+        "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the canon, or put pdf in the import folder as a third-party skill\n",
+        "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put pdf in the import folder as a third-party skill\n",
     ] {
         assert!(stderr.contains(text), "{text:?} not in {stderr}");
     }
@@ -420,8 +413,7 @@ fn assert_pdf_records_refused(sandbox: &Sandbox, folder: &Path) {
 }
 
 #[test]
-fn a_skill_repo_whose_third_party_records_the_import_folder_no_longer_declares_refuses_the_import()
-{
+fn a_canon_whose_third_party_records_the_import_folder_no_longer_declares_refuses_the_import() {
     // Stopped before the last skill; the folder moved the source to notes.
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
@@ -454,7 +446,7 @@ fn a_snapshot_or_lock_entry_deleted_after_an_import_is_written_again_when_it_run
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
     run(&sandbox, &folder, 0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let snapshot = tree(repo.join("upstream/pdf"));
     let lock = read(repo.join("skiman.lock"));
 
@@ -478,7 +470,7 @@ fn a_skill_removed_after_an_import_comes_back_with_the_folders_shared_body_and_t
         .args(["remove", "pdf", "--yes"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(
         repo.join("instructions/shared.md"),
         "Edited after the import.\n",
@@ -521,7 +513,7 @@ fn a_ref_changed_by_update_after_an_import_is_kept_when_it_runs_again() {
         .args(["update", "pdf", "--ref", "main"])
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let manifest = read(repo.join("skiman.toml"));
     assert!(manifest.contains("ref = \"main\""), "{manifest}");
 
@@ -529,7 +521,7 @@ fn a_ref_changed_by_update_after_an_import_is_kept_when_it_runs_again() {
     assert!(stdout.contains(HOLDS), "{stdout}");
     assert!(
         stdout.contains(
-            "  the import folder's skiman.toml differs from the skill repo's in [skills.pdf.source] ref; the skill repo's are kept\n"
+            "  the import folder's skiman.toml differs from the canon's in [skills.pdf.source] ref; the canon's are kept\n"
         ),
         "{stdout}"
     );
@@ -567,7 +559,7 @@ fn a_source_url_or_path_changed_in_the_import_folder_after_an_import_makes_it_a_
         write(&manifest, read(&manifest).replace(from, to));
         let stdout = run(&sandbox, &folder, 0);
         assert!(!stdout.contains(HOLDS), "{to}: {stdout}");
-        let repo = sandbox.skill_repo();
+        let repo = sandbox.canon();
         assert_eq!(
             read(repo.join("upstream/pdf/reference.md")),
             "# Moved\n",

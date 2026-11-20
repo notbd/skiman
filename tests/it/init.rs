@@ -1,4 +1,4 @@
-//! `skiman init <path>`: create or reuse a skill repo, write the user config, first sync.
+//! `skiman init <path>`: create or reuse a canon, write the user config, first sync.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -8,11 +8,11 @@ use snapbox::str;
 use crate::support::{Sandbox, Tool, ToolSetup, read};
 
 #[test]
-fn init_on_a_missing_path_creates_the_skill_repo_layout_and_the_user_config() {
+fn init_on_a_missing_path_creates_the_canon_layout_and_the_user_config() {
     let sandbox = Sandbox::builder()
         .tool(Tool::Antigravity, ToolSetup::Absent)
         .build();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -67,7 +67,7 @@ fn init_records_the_binary_as_found_on_path_without_resolving_symlinks() {
         .command("skiman")
         .env("PATH", path)
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
 
@@ -81,7 +81,7 @@ fn init_records_the_binary_as_found_on_path_without_resolving_symlinks() {
 #[test]
 fn init_on_an_empty_folder_creates_the_layout_there() {
     let sandbox = Sandbox::new();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir(&repo).unwrap();
 
     sandbox
@@ -101,11 +101,8 @@ fn init_on_an_empty_folder_creates_the_layout_there() {
 fn init_on_a_clone_of_an_empty_repo_creates_the_layout_and_keeps_its_git_folder() {
     let sandbox = Sandbox::new();
     sandbox.git(sandbox.root(), ["init", "--quiet", "--bare", "origin.git"]);
-    sandbox.git(
-        sandbox.root(),
-        ["clone", "--quiet", "origin.git", "skill-repo"],
-    );
-    let repo = sandbox.skill_repo();
+    sandbox.git(sandbox.root(), ["clone", "--quiet", "origin.git", "canon"]);
+    let repo = sandbox.canon();
     let git_config = read(repo.join(".git/config"));
     let head = read(repo.join(".git/HEAD"));
 
@@ -116,12 +113,12 @@ fn init_on_a_clone_of_an_empty_repo_creates_the_layout_and_keeps_its_git_folder(
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
-created skill repo [..]/skill-repo
+created canon [..]/canon
 ...
 "#]]);
 
     assert!(repo.join("skills").is_dir());
-    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n/linked/\n");
     assert_eq!(read(repo.join(".git/config")), git_config);
     assert_eq!(read(repo.join(".git/HEAD")), head);
 }
@@ -131,7 +128,7 @@ fn init_on_a_folder_with_skiman_toml_reuses_it_and_leaves_tools_untouched() {
     let sandbox = Sandbox::builder()
         .tool(Tool::Codex, ToolSetup::Absent)
         .build();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir_all(repo.join("skills")).unwrap();
     let manifest = "# my tools\n[tools]\nenabled = [ \"codex\",\"claude-code\" ]  # both\n";
     std::fs::write(repo.join("skiman.toml"), manifest).unwrap();
@@ -150,7 +147,7 @@ fn init_on_a_folder_with_skiman_toml_reuses_it_and_leaves_tools_untouched() {
 #[test]
 fn init_on_a_non_empty_folder_without_skiman_toml_is_refused_and_changes_nothing() {
     let sandbox = Sandbox::new();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir(&repo).unwrap();
     std::fs::write(repo.join("notes.txt"), "mine").unwrap();
 
@@ -162,7 +159,7 @@ fn init_on_a_non_empty_folder_without_skiman_toml_is_refused_and_changes_nothing
         .code(1)
         .stdout_eq("")
         .stderr_eq(str![[r#"
-error: [..]/skill-repo is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing skill repo
+error: [..]/canon is not empty and holds no skiman.toml; choose an empty or missing folder, a folder that holds only `.git` (a fresh `git init` or a clone of an empty repo), or an existing canon
 
 "#]]);
 
@@ -185,7 +182,7 @@ fn init_without_a_terminal_requires_session_hooks_and_writes_nothing() {
     sandbox
         .skiman()
         .arg("init")
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(2)
         .stdout_eq("")
@@ -194,7 +191,7 @@ error: missing flag without a terminal: --session-hooks <ids|none>
 
 "#]]);
 
-    assert!(!sandbox.skill_repo().exists());
+    assert!(!sandbox.canon().exists());
     assert!(!sandbox.config_home().join("skiman").exists());
 }
 
@@ -204,20 +201,24 @@ fn init_refuses_an_unknown_session_hooks_value_as_a_usage_error() {
 
     sandbox
         .skiman()
-        .args(["init", "--session-hooks", "antigravity"])
-        .arg(sandbox.skill_repo())
+        .args(["init", "--session-hooks", "claude-code,vscode"])
+        .arg(sandbox.canon())
         .assert()
-        .code(2);
+        .code(2)
+        .stderr_eq(str![[r#"
+error: invalid value 'claude-code,vscode' for '--session-hooks <ids|none>': `vscode` is not an agent tool with session-start hooks (use `none` or a comma-separated list of: claude-code, codex, antigravity)
+...
+"#]]);
 
-    assert!(!sandbox.skill_repo().exists());
+    assert!(!sandbox.canon().exists());
 }
 
-/// Spec Skill repo layout: `init` writes the `.gitignore` entry for
+/// Spec Canon layout: `init` writes the `.gitignore` entry for
 /// `.skiman/`, also in a reused repo that lacks it; nothing else changes.
 #[test]
 fn init_on_a_reused_repo_adds_the_skiman_gitignore_entry_once() {
     let sandbox = Sandbox::new();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir_all(&repo).unwrap();
     let manifest = "[tools]\nenabled = []\n";
     std::fs::write(repo.join("skiman.toml"), manifest).unwrap();
@@ -233,10 +234,14 @@ fn init_on_a_reused_repo_adds_the_skiman_gitignore_entry_once() {
     };
 
     init().stdout_eq(str![[r#"
-added .skiman/ to [..]/skill-repo/.gitignore
+added .skiman/ to [..]/canon/.gitignore
+added /linked/ to [..]/canon/.gitignore
 ...
 "#]]);
-    assert_eq!(read(repo.join(".gitignore")), "target\n.skiman/\n");
+    assert_eq!(
+        read(repo.join(".gitignore")),
+        "target\n.skiman/\n/linked/\n"
+    );
     assert_eq!(read(repo.join("skiman.toml")), manifest);
     assert_eq!(
         sandbox.git(&repo, ["status", "--porcelain", "--untracked-files=all"]),
@@ -244,17 +249,20 @@ added .skiman/ to [..]/skill-repo/.gitignore
     );
 
     let out = init().get_output().stdout.clone();
-    assert!(!String::from_utf8_lossy(&out).contains("added .skiman/"));
-    assert_eq!(read(repo.join(".gitignore")), "target\n.skiman/\n");
+    assert!(!String::from_utf8_lossy(&out).contains("added"));
+    assert_eq!(
+        read(repo.join(".gitignore")),
+        "target\n.skiman/\n/linked/\n"
+    );
 
     std::fs::remove_file(repo.join(".gitignore")).unwrap();
     init();
-    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n");
+    assert_eq!(read(repo.join(".gitignore")), ".skiman/\n/linked/\n");
 }
 
-/// A skill repo `init` reuses: `skiman.toml` in a git repo, no `.gitignore`.
+/// A canon `init` reuses: `skiman.toml` in a git repo, no `.gitignore`.
 fn reused_repo(sandbox: &Sandbox) -> PathBuf {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     std::fs::create_dir_all(&repo).unwrap();
     std::fs::write(repo.join("skiman.toml"), "[tools]\nenabled = []\n").unwrap();
     sandbox.git(&repo, ["init", "--quiet"]);
@@ -265,7 +273,7 @@ fn init_reused(sandbox: &Sandbox) -> snapbox::cmd::OutputAssert {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
 }
 
@@ -281,7 +289,7 @@ fn init_swaps_in_a_new_gitignore_that_keeps_its_mode_and_leaves_a_hard_link_with
 
     init_reused(&sandbox).code(0);
 
-    assert_eq!(read(&gitignore), "target\n.skiman/\n");
+    assert_eq!(read(&gitignore), "target\n.skiman/\n/linked/\n");
     assert_eq!(
         read(&hard_link),
         "target\n",
@@ -328,7 +336,7 @@ fn init_refuses_a_gitignore_that_links_to_a_missing_file_and_does_not_create_tha
         dotfiles.join("gitignore")
     );
     assert.code(1).stdout_eq("").stderr_eq(str![[r#"
-error: [..]/skill-repo/.gitignore is a link to a missing file; create that file or remove the link, then run `skiman init` again
+error: [..]/canon/.gitignore is a link to a missing file; create that file or remove the link, then run `skiman init` again
 
 "#]]);
 }

@@ -33,7 +33,7 @@ pub struct Placed {
 }
 
 impl Placed {
-    /// The skill folder, relative to the skill repo.
+    /// The skill folder, relative to the canon.
     pub fn path(&self) -> String {
         skill_path(self.group.as_deref(), &self.name)
     }
@@ -98,7 +98,7 @@ impl Layout {
         self.skills.iter().find(|placed| placed.name == name)
     }
 
-    /// The skill folder of `name` relative to the skill repo; `skills/<name>`
+    /// The skill folder of `name` relative to the canon; `skills/<name>`
     /// when there is none.
     pub fn path(&self, name: &str) -> String {
         self.find(name)

@@ -352,12 +352,12 @@ fn a_kill_while_skiman_toml_is_replaced_leaves_the_old_one_and_running_again_kee
         .arg(sandbox.home().join("proj"))
         .assert()
         .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let manifest = read(repo.join("skiman.toml"));
 
     import_killed_at(&sandbox, &folder, "write:skiman.toml");
     assert_eq!(read(repo.join("skiman.toml")), manifest);
-    // A session start in between finds a skill repo it can read.
+    // A session start in between finds a canon it can read.
     sandbox
         .skiman()
         .args(["sync", "--hook"])
@@ -409,7 +409,7 @@ fn a_file_written_where_sync_is_about_to_link_is_kept_and_the_same_command_moves
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let shared = sandbox.skill_repo().join("instructions/shared.md");
+    let shared = sandbox.canon().join("instructions/shared.md");
     crate::support::assert_symlink(&claude_md, &shared, &shared);
     assert!(
         backup_dirs(&sandbox).iter().any(|dir| {
@@ -425,7 +425,7 @@ fn a_file_written_where_sync_is_about_to_link_is_kept_and_the_same_command_moves
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_skill_repo_holds_unless_the_ref_changed()
+fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_canon_holds_unless_the_ref_changed()
  {
     let sandbox = Sandbox::new();
     let Setup {
@@ -447,12 +447,12 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
         stdout.contains(&format!(
-            "(third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (as the skill repo holds it))"
+            "(third-party, from https://github.com/acme/skills.git (skills/pdf) at {commit} (as the canon holds it))"
         )),
         "{stdout}"
     );
     assert!(!stdout.contains("to the backup, then write"), "{stdout}");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert_eq!(
         read(repo.join("upstream/pdf/reference.md")),
         "# Reference\n"
@@ -483,7 +483,7 @@ fn a_branch_that_moved_after_a_kill_before_the_last_skill_keeps_the_commit_the_s
     let output = import(&sandbox, &folder);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(
         stdout.contains(&format!(
             "  move {} to the backup, then write the import's\n",
@@ -525,10 +525,10 @@ fn a_branch_that_moved_after_a_kill_before_the_snapshot_keeps_the_locked_commit(
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains(&format!("at {commit} (as the skill repo holds it)")),
+        stdout.contains(&format!("at {commit} (as the canon holds it)")),
         "{stdout}"
     );
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert_eq!(
         read(repo.join("upstream/pdf/reference.md")),
         "# Reference\n"
@@ -537,7 +537,7 @@ fn a_branch_that_moved_after_a_kill_before_the_snapshot_keeps_the_locked_commit(
     sandbox.skiman().arg("check").assert().code(0);
 }
 
-/// The commit the skill repo holds is kept only for the `ref` its lock
+/// The commit the canon holds is kept only for the `ref` its lock
 /// entry was read at: an import folder whose `ref` changed, run again after
 /// a kill that wrote the new `ref` to `skiman.toml` but not yet the lock
 /// entry, fetches the new `ref`.
@@ -562,7 +562,7 @@ fn a_lock_entry_read_at_another_ref_is_fetched_again() {
     write(&manifest, read(&manifest).replace("\"main\"", "\"stable\""));
     write(folder.join("skills/memo/SKILL.md"), skill_md("memo"));
     import_killed_at(&sandbox, &folder, "write:skiman.lock");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(read(repo.join("skiman.toml")).contains("ref = \"stable\""));
 
     let output = import(&sandbox, &folder);
@@ -575,14 +575,14 @@ fn a_lock_entry_read_at_another_ref_is_fetched_again() {
     );
 }
 
-/// The skill repo, the home folder (tool directories, instruction files,
+/// The canon, the home folder (tool directories, instruction files,
 /// machine state without the git cache) and the import folder, to prove a
 /// command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<BTreeMap<PathBuf, String>> {
     let mut home = tree(sandbox.home());
     home.retain(|path, _| !path.starts_with(".local/state/skiman/cache"));
     vec![
-        tree(sandbox.skill_repo()),
+        tree(sandbox.canon()),
         home,
         tree(sandbox.root().join("import")),
     ]
@@ -612,7 +612,7 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
  {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     // upstream/pdf, skiman.lock, skiman.toml and shared.md are written;
     // skills/notes is next.
     import_killed_at(&sandbox, &folder, "write:skills/notes");
@@ -629,8 +629,8 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
-            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's\n",
+            "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
         ],
     );
     assert!(!stderr.contains("upstream/pdf"), "{stderr}");
@@ -667,7 +667,7 @@ fn repo_content_changed_by_hand_before_the_last_skill_is_written_is_replaced_and
 fn during_the_takeover_hand_edits_to_skiman_toml_are_kept_and_a_changed_skill_refuses_the_run() {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     import_killed_at(&sandbox, &folder, "moved:claude-code/notes");
 
     write(repo.join("skills/mine/SKILL.md"), skill_md("mine"));
@@ -680,8 +680,8 @@ fn during_the_takeover_hand_edits_to_skiman_toml_are_kept_and_a_changed_skill_re
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
-            "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's\n",
+            "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
         ],
     );
     std::fs::remove_dir_all(repo.join("skills/mine")).unwrap();
@@ -711,7 +711,7 @@ fn during_the_takeover_hand_edits_to_skiman_toml_are_kept_and_a_changed_skill_re
 fn during_the_takeover_a_snapshot_changed_by_hand_is_fetched_again_and_kept_in_a_backup() {
     let sandbox = Sandbox::new();
     let Setup { folder, .. } = setup(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     import_killed_at(&sandbox, &folder, "moved:claude-code/notes");
     let snapshot = tree(repo.join("upstream/pdf"));
     write(repo.join("upstream/pdf/extra.md"), "hand edit\n");
@@ -732,11 +732,11 @@ fn during_the_takeover_a_snapshot_changed_by_hand_is_fetched_again_and_kept_in_a
     );
 }
 
-/// The skills already in the skill repo (none here), its shared body empty
+/// The skills already in the canon (none here), its shared body empty
 /// as `init` leaves it, and an import folder of instructions only with tools
 /// of its own.
 fn instructions_only(sandbox: &Sandbox) {
-    write(sandbox.skill_repo().join("instructions/shared.md"), "");
+    write(sandbox.canon().join("instructions/shared.md"), "");
     let folder = sandbox.root().join("import");
     std::fs::remove_dir_all(folder.join("skills")).unwrap();
     std::fs::create_dir_all(folder.join("skills")).unwrap();
@@ -746,11 +746,11 @@ fn instructions_only(sandbox: &Sandbox) {
     );
 }
 
-/// `notes` adopted into the skill repo, its shared body empty as `init`
+/// `notes` adopted into the canon, its shared body empty as `init`
 /// leaves it, and an import folder holding the same `notes` with tools of
 /// its own.
 fn adopted(sandbox: &Sandbox) {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("instructions/shared.md"), "");
     sandbox
         .skiman()
@@ -771,7 +771,7 @@ fn adopted(sandbox: &Sandbox) {
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn with_the_skills_already_in_the_skill_repo_a_kill_before_skiman_toml_then_the_same_command_ends_like_an_uninterrupted_import()
+fn with_the_skills_already_in_the_canon_a_kill_before_skiman_toml_then_the_same_command_ends_like_an_uninterrupted_import()
  {
     let point = ["write:skiman.toml".to_owned()];
     assert_each_kill_ends_like_an_uninterrupted_import(instructions_only, &point, &[false]);
@@ -815,8 +815,8 @@ fn originals_backed_up_before_the_kill_are_still_in_their_backup_after_the_same_
     );
     crate::support::assert_symlink(
         claude.join("notes"),
-        sandbox.skill_repo().join("skills/notes"),
-        sandbox.skill_repo().join("skills/notes"),
+        sandbox.canon().join("skills/notes"),
+        sandbox.canon().join("skills/notes"),
     );
 }
 
@@ -838,8 +838,8 @@ fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_t
         &sandbox,
         &other,
         &[
-            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the skill repo, or put pdf in the import folder as a third-party skill\n",
-            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the skill repo's skiman.lock, or put pdf in the import folder as a third-party skill\n",
+            "  upstream/pdf is the snapshot of no third-party skill in the import folder: remove it from the canon, or put pdf in the import folder as a third-party skill\n",
+            "  skiman.lock has an entry for pdf, which is no third-party skill in the import folder: remove the entry from the canon's skiman.lock, or put pdf in the import folder as a third-party skill\n",
         ],
     );
 }
@@ -849,8 +849,8 @@ fn after_a_kill_importing_another_folder_is_refused_naming_what_the_repo_holds_t
     not(debug_assertions),
     ignore = "needs the test hook, which only debug builds have"
 )]
-fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_out_until_it_is_removed()
- {
+fn after_a_kill_a_skill_added_to_the_canon_refuses_the_run_with_both_ways_out_until_it_is_removed()
+{
     // Before the last skill is written, and once the repo holds all of them.
     for point in ["write:skills/notes", "moved:claude-code/notes"] {
         let sandbox = Sandbox::new();
@@ -861,13 +861,13 @@ fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_o
             .args(["new", "mine", "-d", "Mine"])
             .output()
             .unwrap();
-        assert!(sandbox.skill_repo().join("skills/mine").is_dir());
+        assert!(sandbox.canon().join("skills/mine").is_dir());
 
         assert_run_refused(
             &sandbox,
             &folder,
             &[
-                "  skills/mine is not in the import folder: remove it from the skill repo, or put it in the import folder\n",
+                "  skills/mine is not in the import folder: remove it from the canon, or put it in the import folder\n",
             ],
         );
         sandbox
@@ -875,7 +875,7 @@ fn after_a_kill_a_skill_added_to_the_skill_repo_refuses_the_run_with_both_ways_o
             .args(["remove", "mine", "--yes"])
             .assert()
             .code(3);
-        assert!(!sandbox.skill_repo().join("skills/mine").exists());
+        assert!(!sandbox.canon().join("skills/mine").exists());
         let output = import(&sandbox, &folder);
         assert_eq!(
             output.status.code(),
@@ -905,7 +905,7 @@ fn after_a_kill_a_skill_changed_through_its_link_refuses_the_run_with_both_ways_
         &sandbox,
         &folder,
         &[
-            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the skill repo's to keep it, or change the skill repo's back to the import folder's\n",
+            "  skills/notes differs from the import folder's skills/notes: replace the import folder's with the canon's to keep it, or change the canon's back to the import folder's\n",
         ],
     );
     write(&linked, &notes);

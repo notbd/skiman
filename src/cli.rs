@@ -19,9 +19,9 @@ pub struct Cli {
 /// One variant per command; each command's logic lives in `commands::<name>`.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Create or reuse a skill repo and distribute it
+    /// Create or reuse a canon and distribute it
     Init {
-        /// Folder of the skill repo: missing, empty, or holding skiman.toml
+        /// Folder of the canon: missing, empty, or holding skiman.toml
         path: PathBuf,
         /// Agent tools whose session-start hooks to install (comma-separated ids), or `none`
         #[arg(long, value_name = "ids|none", value_parser = parse_session_hooks)]
@@ -52,7 +52,7 @@ pub enum Command {
         /// Move the skill to this branch, tag or full 40-hex commit (single skill only)
         #[arg(long = "ref", value_name = "REF")]
         git_ref: Option<String>,
-        /// Show the new versions, changed files and conflicts without changing the skill repo or
+        /// Show the new versions, changed files and conflicts without changing the canon or
         /// the tool directories (exit 0 even with conflicts)
         #[arg(long)]
         dry_run: bool,
@@ -80,7 +80,7 @@ pub enum Command {
         #[arg(long)]
         no_group: bool,
     },
-    /// Bring a foreign skill from an agent tool's tool directory into the skill repo
+    /// Bring a foreign skill from an agent tool's tool directory into the canon
     Adopt {
         /// Name of the entry in the tool directory, which becomes the skill's name
         name: String,
@@ -96,7 +96,7 @@ pub enum Command {
     },
     /// Import a prepared folder
     Import {
-        /// The import folder: skills/, instructions/shared.md and skiman.toml [default: <skill repo>/.skiman/import/]
+        /// The import folder: skills/, instructions/shared.md and skiman.toml [default: <canon>/.skiman/import/]
         #[arg(conflicts_with = "guide")]
         folder: Option<PathBuf>,
         /// Import without asking for confirmation
@@ -106,13 +106,13 @@ pub enum Command {
         #[arg(long)]
         guide: bool,
     },
-    /// Make every tool directory match the skill repo
+    /// Make every tool directory match the canon
     Sync {
         /// Run from a git or session-start hook: print only new findings, always exit 0
         #[arg(long)]
         hook: bool,
     },
-    /// Report every rule violation in the skill repo's working tree
+    /// Report every rule violation in the canon's working tree
     Check {
         /// Check the staged snapshot (the git index) instead of the working tree
         #[arg(long)]
@@ -121,14 +121,39 @@ pub enum Command {
     /// Show every skill: kind, source, version, local modifications, conflicts, enabled
     List,
     /// Show every skill on this machine as Markdown: by group with summary, source and
-    /// install day, then the skills other managers keep
+    /// install day, each linked folder, then the skills other managers keep
     Overview,
-    /// Diagnose the setup: skill repo, hooks, agent tools, entries skiman does not own, leftovers
+    /// Diagnose the setup: canon, hooks, agent tools, entries skiman does not own, linked
+    /// folders, project roots and items, leftovers
     Doctor,
     /// Manage project instruction files and project skills under registered project roots
     Project {
         #[command(subcommand)]
         command: ProjectCommand,
+    },
+    /// Register folders of skills kept outside the canon, which skiman distributes and never writes
+    Linked {
+        #[command(subcommand)]
+        command: LinkedCommand,
+    },
+}
+
+/// `skiman linked <command>`; the logic lives in `commands::linked`.
+#[derive(Debug, Subcommand)]
+pub enum LinkedCommand {
+    /// Register a folder of skills (or one skill folder) and distribute its skills
+    Add {
+        /// The folder: one skill folder, or a folder whose child folders are skills
+        path: PathBuf,
+        /// Linked folder id, the name of `linked/<id>` in the canon [default: the folder name,
+        /// or its parent's name for a folder called `skills`]
+        #[arg(long)]
+        id: Option<String>,
+    },
+    /// Stop distributing a linked folder: its table and every link it had go; its content stays
+    Remove {
+        /// The linked folder id
+        id: String,
     },
 }
 
@@ -225,7 +250,7 @@ fn parse_session_hooks(value: &str) -> Result<String, String> {
     }
     let hookable: Vec<&str> = TOOLS
         .iter()
-        .filter(|tool| tool.session_hook_file.is_some())
+        .filter(|tool| tool.session_hook.is_some())
         .map(|tool| tool.id)
         .collect();
     for id in value.split(',') {
@@ -319,6 +344,10 @@ where
                 yes,
             } => commands::project::restore(paths, dry_run, yes),
             ProjectCommand::Eject { paths, yes } => commands::project::eject(paths, yes),
+        },
+        Command::Linked { command } => match command {
+            LinkedCommand::Add { path, id } => commands::linked::add(&path, id),
+            LinkedCommand::Remove { id } => commands::linked::remove(&id),
         },
     }
 }

@@ -1,22 +1,25 @@
 //! `skiman check [--staged]`: report every rule violation in the working tree
-//! of the skill repo, or in its staged snapshot, on stdout, and warnings on
+//! of the canon, or in its staged snapshot, on stdout, and warnings on
 //! stderr; on the working tree, also each skill that lacks a summary, a group
-//! folder or an origin (a warning). When the staged snapshot breaks a rule
-//! that the working tree passes, a hint says so and prints a line that
-//! stages the working tree.
+//! folder or an origin, and what is wrong with linked skills (warnings). When
+//! the staged snapshot breaks a rule that the working tree passes, a hint
+//! says so and prints a line that stages the working tree.
 //! Read-only; takes no lock.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::Exit;
+use crate::canon::Canon;
 use crate::failure::{Failure, finish};
 use crate::git_hooks::shell_quote;
+use crate::linked::{self, LINKED_DIR, Linked, gitignore};
+use crate::manifest::Manifest;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::rules;
 use crate::staged::{self, StagedTree};
-use crate::tree::{Tree, WorkingTree};
+use crate::sync;
+use crate::tree::{Kind, Tree, WorkingTree};
 
 pub fn run(staged: bool) -> Exit {
     finish(check(staged))
@@ -24,10 +27,10 @@ pub fn run(staged: bool) -> Exit {
 
 fn check(staged: bool) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     if staged && let Some(other) = hook_of_another_repo(&repo) {
         out!(
-            "skiman: {} is not the skill repo ({}), so its skiman pre-commit hook checks nothing",
+            "skiman: {} is not the canon ({}), so its skiman pre-commit hook checks nothing",
             other.display(),
             repo.root().display()
         );
@@ -44,7 +47,10 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         Box::new(WorkingTree::new(repo.root()))
     };
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let report = rules::check_repo(tree.as_ref()).map_err(io)?;
+    let mut report = rules::check_canon(tree.as_ref()).map_err(io)?;
+    let tracked = linked_in_index(tree.as_ref(), staged, repo.root());
+    report.violations.extend(tracked.iter().cloned());
+    report.violations.sort();
     for violation in &report.violations {
         out!("{violation}");
     }
@@ -60,9 +66,17 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         for gap in rules::missing_info(tree.as_ref()).map_err(io)? {
             err!("warning: {gap}");
         }
+        for warning in linked_warnings(&paths, &repo)? {
+            err!("warning: {warning}");
+        }
+        if let Some(warning) = linked_not_ignored(&repo) {
+            err!("warning: {warning}");
+        }
     }
+    // Staging the working tree cannot take a path out of the index.
     if staged
         && !report.violations.is_empty()
+        && tracked.is_empty()
         && let Some(hint) = stage_hint(repo.root())
     {
         out!("\n{hint}");
@@ -72,6 +86,86 @@ fn check(staged: bool) -> Result<Exit, Failure> {
         out!("\n{hint}");
     }
     Ok(rules::exit_of(&report.violations))
+}
+
+/// What the linked skills on this machine warrant a warning for; nothing
+/// when `skiman.toml` does not parse (that is a violation already).
+fn linked_warnings(paths: &Paths, repo: &Canon) -> Result<Vec<String>, Failure> {
+    let Ok(manifest) = Manifest::load(repo) else {
+        return Ok(Vec::new());
+    };
+    let linked = Linked::read(paths.home(), repo, &manifest);
+    let kept = sync::kept_names(paths, repo, &manifest, &linked);
+    Ok(linked::check::warnings(
+        repo.root(),
+        &linked,
+        &manifest,
+        &repo.layout()?,
+        &kept,
+    ))
+}
+
+/// While `[linked]` tables exist in a canon that is a git repo: that git
+/// does not ignore `linked/`, and where to add the line, or that git
+/// cannot tell, and why.
+fn linked_not_ignored(repo: &Canon) -> Option<String> {
+    if Manifest::load(repo).ok()?.linked().is_empty() {
+        return None;
+    }
+    match gitignore::check_ignore(repo.root()) {
+        gitignore::Ignored::No => {}
+        gitignore::Ignored::Failed(why) => {
+            return Some(format!(
+                "git cannot tell whether `linked/` is ignored ({why}), so the links in it could be committed"
+            ));
+        }
+        gitignore::Ignored::Yes | gitignore::Ignored::NotARepo => return None,
+    }
+    let path = repo.root().join(".gitignore");
+    let fix = match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_symlink() => format!(
+            "{} is a link, and git does not read a `.gitignore` that is a link: replace it with a file that holds the line `{}`",
+            path.display(),
+            gitignore::LINE
+        ),
+        _ => format!("add the line `{}` to {}", gitignore::LINE, path.display()),
+    };
+    Some(format!(
+        "git does not ignore `linked/`, so the links in it could be committed; {fix}"
+    ))
+}
+
+/// `linked` and every path under it in the git index: the staged snapshot
+/// when `staged`, else the repo's own index, never the folder on disk (it
+/// holds links to content outside git). A canon that is not a git repo has
+/// no index entries.
+fn linked_in_index(tree: &dyn Tree, staged: bool, root: &Path) -> Vec<rules::Violation> {
+    let paths = if staged {
+        match tree.kind(LINKED_DIR) {
+            Ok(Some(Kind::Dir)) => tree
+                .walk(LINKED_DIR)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.kind != Kind::Dir)
+                .map(|e| e.path)
+                .collect(),
+            Ok(Some(_)) => vec![LINKED_DIR.to_owned()],
+            _ => Vec::new(),
+        }
+    } else {
+        staged::paths_in_real_index(root, LINKED_DIR)
+    };
+    paths
+        .into_iter()
+        .map(|path| {
+            rules::Violation::new(
+                path,
+                None,
+                rules::rule::LINKED_TRACKED,
+                "nothing under `linked/` may be in the git index; run `git rm -r --cached linked`",
+            )
+        })
+        .collect()
 }
 
 /// After violations in the staged snapshot, when the working tree passes
@@ -109,9 +203,9 @@ fn hint_text(root: &Path, paths: &str) -> String {
 }
 
 /// Run from a git hook (`git commit` sets `GIT_INDEX_FILE`) of a repository
-/// that is not the skill repo, e.g. a previous skill repo that still has
+/// that is not the canon, e.g. a previous canon that still has
 /// skiman's hooks: that repository's top level.
-fn hook_of_another_repo(repo: &SkillRepo) -> Option<PathBuf> {
+fn hook_of_another_repo(repo: &Canon) -> Option<PathBuf> {
     std::env::var_os("GIT_INDEX_FILE")?;
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
@@ -135,7 +229,7 @@ mod tests {
 
     #[test]
     fn the_printed_line_gives_git_a_root_with_spaces_and_quotes_unchanged() {
-        let root = Path::new("/tmp/skill repo/it's \"mine\"");
+        let root = Path::new("/tmp/my canon/it's \"mine\"");
         let hint = hint_text(root, "skiman.toml skills");
         let line = hint
             .lines()

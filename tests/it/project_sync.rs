@@ -1,7 +1,7 @@
 //! The project part of `skiman sync [--hook]`: one test per row of the
 //! state table in `docs/project-scope.md` ("Sync: the state table"), plus the
-//! pause while the skill repo is mid-operation, hook mode, and tool-directory
-//! links into a `skill_dirs` folder.
+//! pause while the canon is mid-operation, hook mode, and tool-directory
+//! links into a folder a retired `skill_dirs` key named.
 
 use std::path::{Path, PathBuf};
 
@@ -41,7 +41,7 @@ fn adopt_all(sandbox: &Sandbox) {
 
 /// The mirror of `rel` under root `work`.
 fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
-    sandbox.skill_repo().join("projects/work").join(rel)
+    sandbox.canon().join("projects/work").join(rel)
 }
 
 fn synced_file(sandbox: &Sandbox) -> PathBuf {
@@ -138,7 +138,7 @@ fn a_project_edit_is_copied_into_the_mirror_with_the_old_mirror_in_a_backup() {
         "the replaced mirror is in the backup"
     );
     assert_eq!(
-        tree(sandbox.skill_repo().join(".skiman/swap")).len(),
+        tree(sandbox.canon().join(".skiman/swap")).len(),
         0,
         "no swap folder is left behind"
     );
@@ -161,7 +161,7 @@ fn a_mirror_staging_that_cannot_be_opened_is_reported_once() {
     adopt_all(&sandbox);
     write(dir.join("proj/AGENTS.md"), "v2\n");
     write(dir.join("other/AGENTS.md"), "other v2\n");
-    let swap = sandbox.skill_repo().join(".skiman/swap");
+    let swap = sandbox.canon().join(".skiman/swap");
     std::fs::create_dir_all(&swap).unwrap();
     std::fs::set_permissions(&swap, std::fs::Permissions::from_mode(0o000)).unwrap();
 
@@ -183,7 +183,7 @@ fn a_mirror_tmp_leftover_that_cannot_be_moved_does_not_stop_sync() {
     let sandbox = Sandbox::new();
     let dir = adopted_file(&sandbox);
     write(dir.join("proj/AGENTS.md"), "v2\n");
-    let leftover = sandbox.skill_repo().join(".skiman/swap/20200101T000000Z");
+    let leftover = sandbox.canon().join(".skiman/swap/20200101T000000Z");
     write(leftover.join("old/projects/work/proj/AGENTS.md"), "older\n");
     // A folder moves to another parent only with write access to it.
     let mode = |m| std::fs::set_permissions(&leftover, std::fs::Permissions::from_mode(m)).unwrap();
@@ -635,7 +635,7 @@ fn a_mirror_skill_holding_a_symlink_is_invalid_and_the_project_left_alone() {
     assert_eq!(stdout_of(&out), "", "an invalid mirror is not replaced");
     let stderr = stderr_of(&out);
     assert!(
-        stderr.contains("fix projects/work/proj/.claude/skills/x in the skill repo"),
+        stderr.contains("fix projects/work/proj/.claude/skills/x in the canon"),
         "{stderr}"
     );
     assert_eq!(read(skill.join("SKILL.md")), "edited in the project\n");
@@ -658,7 +658,7 @@ fn a_mirror_file_that_is_a_symlink_is_invalid() {
 
     assert_eq!(out.status.code(), Some(3));
     assert!(
-        stderr_of(&out).contains("fix projects/work/proj/AGENTS.md in the skill repo"),
+        stderr_of(&out).contains("fix projects/work/proj/AGENTS.md in the canon"),
         "{}",
         stderr_of(&out)
     );
@@ -700,14 +700,14 @@ fn a_root_folder_missing_on_this_machine_gets_one_warning() {
 
 // ------------------------------------------------------------ row 1
 
-/// Puts the skill repo into a git state with `enter`, edits the adopted
+/// Puts the canon into a git state with `enter`, edits the adopted
 /// project file, and asserts sync pauses the project part without writing
 /// the mirror. (The edit comes second: `enter` may run git, whose hooks sync.)
 #[track_caller]
 fn assert_paused(enter: impl FnOnce(&Sandbox, &Path), phrase: &str) {
     let sandbox = Sandbox::new();
     let dir = adopted_file(&sandbox);
-    enter(&sandbox, &sandbox.skill_repo().join(".git"));
+    enter(&sandbox, &sandbox.canon().join(".git"));
     write(dir.join("proj/AGENTS.md"), "v2\n");
 
     let out = sync(&sandbox);
@@ -718,7 +718,7 @@ fn assert_paused(enter: impl FnOnce(&Sandbox, &Path), phrase: &str) {
     assert_eq!(
         stderr,
         format!(
-            "warning: the skill repo {phrase}, so project items are not synced; finish that, then run `skiman sync`\n"
+            "warning: the canon {phrase}, so project items are not synced; finish that, then run `skiman sync`\n"
         )
     );
     assert_sides(&sandbox, &dir, "proj/AGENTS.md", Some("v2\n"), Some("v1\n"));
@@ -726,7 +726,7 @@ fn assert_paused(enter: impl FnOnce(&Sandbox, &Path), phrase: &str) {
 }
 
 #[test]
-fn project_sync_pauses_while_the_skill_repo_is_mid_merge() {
+fn project_sync_pauses_while_the_canon_is_mid_merge() {
     assert_paused(
         |_, git_dir| write(git_dir.join("MERGE_HEAD"), "0".repeat(40)),
         "is in the middle of a merge",
@@ -734,7 +734,7 @@ fn project_sync_pauses_while_the_skill_repo_is_mid_merge() {
 }
 
 #[test]
-fn project_sync_pauses_while_the_skill_repo_is_mid_rebase() {
+fn project_sync_pauses_while_the_canon_is_mid_rebase() {
     assert_paused(
         |_, git_dir| std::fs::create_dir(git_dir.join("rebase-merge")).unwrap(),
         "is in the middle of a rebase",
@@ -742,10 +742,10 @@ fn project_sync_pauses_while_the_skill_repo_is_mid_rebase() {
 }
 
 #[test]
-fn project_sync_pauses_while_the_skill_repo_has_a_detached_head() {
+fn project_sync_pauses_while_the_canon_has_a_detached_head() {
     assert_paused(
         |sandbox, _| {
-            let repo = sandbox.skill_repo();
+            let repo = sandbox.canon();
             sandbox.git(&repo, ["add", "-A"]);
             sandbox.git(
                 &repo,
@@ -821,49 +821,36 @@ fn sync_hook_mirrors_a_project_edit_without_printing() {
     assert_eq!(read(mirror(&sandbox, "proj/AGENTS.md")), "v2\n");
 }
 
-// ------------------------------------------------------------ skill_dirs and ownership
+// ------------------------------------------------------------ retired skill_dirs
 
+/// A link into a folder a retired `skill_dirs` key named is foreign like any
+/// other (ADR 0013); sync no longer reads the key.
 #[test]
-fn a_tool_directory_link_into_a_skill_dirs_folder_is_not_reported_as_foreign() {
+fn a_tool_directory_link_into_a_former_skill_dirs_folder_is_foreign() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = root(&sandbox);
     register(&sandbox, &dir);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
-    let text = read(&manifest);
-    std::fs::write(
-        &manifest,
-        text.replace(
-            "[projects.work]\n",
-            "[projects.work]\nskill_dirs = [\"core/skills\"]\n",
-        ),
-    )
-    .unwrap();
-    assert!(
-        read(&manifest).contains("skill_dirs"),
-        "{}",
-        read(&manifest)
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = read(&manifest).replace(
+        "[projects.work]\n",
+        "[projects.work]\nskill_dirs = [\"core/skills\"]\n",
     );
+    assert!(text.contains("skill_dirs"), "{text}");
+    std::fs::write(&manifest, text).unwrap();
     write(dir.join("core/skills/x/SKILL.md"), skill_md("x"));
-    // The control: the same kind of link to a skill outside `skill_dirs`.
-    write(dir.join("loose/y/SKILL.md"), skill_md("y"));
     let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
     std::os::unix::fs::symlink(dir.join("core/skills/x"), tool_dir.join("x")).unwrap();
-    std::os::unix::fs::symlink(dir.join("loose/y"), tool_dir.join("y")).unwrap();
 
     let out = sync(&sandbox);
 
     let stderr = stderr_of(&out);
     assert!(
-        !stderr.contains(&tool_dir.join("x").display().to_string()),
-        "{stderr}"
-    );
-    assert!(
         stderr.contains(&format!(
             "foreign skill {} is not managed by skiman",
-            tool_dir.join("y").display()
+            tool_dir.join("x").display()
         )),
-        "the control link is foreign: {stderr}"
+        "{stderr}"
     );
     assert_eq!(out.status.code(), Some(0), "{stderr}");
     assert_eq!(
@@ -943,7 +930,7 @@ fn a_mirror_skill_without_skill_md_is_invalid() {
 
     assert_eq!(out.status.code(), Some(3));
     assert!(
-        stderr_of(&out).contains("fix projects/work/proj/.claude/skills/x in the skill repo"),
+        stderr_of(&out).contains("fix projects/work/proj/.claude/skills/x in the canon"),
         "{}",
         stderr_of(&out)
     );
@@ -951,39 +938,46 @@ fn a_mirror_skill_without_skill_md_is_invalid() {
     assert!(!exists(skill.join("other.md")));
 }
 
+/// The state a canon has after its retired `skill_dirs` key is removed
+/// (ADR 0013): a mirror skill and a synced hash at a path with no item shape.
 #[test]
 fn a_mirror_path_that_lost_its_item_shape_is_skipped_and_its_synced_hash_dropped() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let dir = root(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "a\n");
     register(&sandbox, &dir);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
-    let with_dirs = read(&manifest).replace(
-        "[projects.work]\n",
-        "[projects.work]\nskill_dirs = [\"core/skills\"]\n",
-    );
-    std::fs::write(&manifest, &with_dirs).unwrap();
-    write(dir.join("core/skills/x/SKILL.md"), skill_md("x"));
     adopt_all(&sandbox);
-    assert!(read(synced_file(&sandbox)).contains("core/skills/x"));
-    // The `skill_dirs` entry is removed by hand.
-    std::fs::write(
-        &manifest,
-        with_dirs.replace("skill_dirs = [\"core/skills\"]\n", ""),
-    )
-    .unwrap();
+    write(mirror(&sandbox, "core/skills/x/SKILL.md"), skill_md("x"));
     write(dir.join("core/skills/x/SKILL.md"), "edited\n");
+    let recorded = read(synced_file(&sandbox));
+    assert!(recorded.contains("\"proj/AGENTS.md\""), "{recorded}");
+    let planted = recorded.replace(
+        "[work.items]\n",
+        &format!(
+            "[work.items]\n\"core/skills/x\" = \"skill sha256:{}\"\n",
+            "0".repeat(64)
+        ),
+    );
+    assert!(planted.contains("core/skills/x"), "{recorded}");
+    std::fs::write(synced_file(&sandbox), planted).unwrap();
 
     let out = sync(&sandbox);
 
     assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
     assert_eq!(stdout_of(&out), "");
     assert_eq!(stderr_of(&out), "", "`check` reports the path, not sync");
-    assert!(!read(synced_file(&sandbox)).contains("core/skills/x"));
+    let synced = read(synced_file(&sandbox));
+    assert!(!synced.contains("core/skills/x"), "{synced}");
+    assert!(
+        synced.contains("\"proj/AGENTS.md\""),
+        "the root's record stays: {synced}"
+    );
     assert_eq!(
         read(mirror(&sandbox, "core/skills/x/SKILL.md")),
         skill_md("x")
     );
+    assert_eq!(read(dir.join("core/skills/x/SKILL.md")), "edited\n");
 }
 
 #[test]
@@ -998,7 +992,7 @@ fn synced_hashes_recorded_for_another_root_path_are_not_trusted() {
     // The root moved, and `path` was changed (say, on another machine).
     let new = sandbox.home().join("work2");
     std::fs::rename(&old, &new).unwrap();
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = read(&manifest).replace("path = \"~/work\"", "path = \"~/work2\"");
     std::fs::write(&manifest, text).unwrap();
     write(new.join("b/AGENTS.md"), "b edited\n");

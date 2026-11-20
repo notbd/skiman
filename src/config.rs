@@ -1,5 +1,5 @@
 //! The user config (`${XDG_CONFIG_HOME:-$HOME/.config}/skiman/config.toml`):
-//! where the skill repo is and which binary the hooks call. Only `init` writes it.
+//! where the canon is and which binary the hooks call. Only `init` writes it.
 
 use std::path::PathBuf;
 
@@ -9,7 +9,7 @@ use crate::paths::Paths;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserConfig {
-    /// Absolute path of the skill repo, as given to `init`.
+    /// Absolute path of the canon, as given to `init`.
     pub repo: PathBuf,
     /// Absolute path skiman was invoked through at `init`, not canonicalised.
     pub binary: PathBuf,

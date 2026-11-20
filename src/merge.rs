@@ -1,6 +1,6 @@
 //! The three-way merge of `update` (spec Merge semantics) in a temporary
 //! bare git repository in the system's temporary folder (`update` merges
-//! before it takes the repo lock, so not under `.skiman/tmp/`, whose
+//! before it takes the canon lock, so not under `.skiman/tmp/`, whose
 //! content another command would move away), run in the MERGE profile
 //! (`git::merge_command`): no hooks, filters, external merge drivers, user
 //! config or user attributes.

@@ -5,10 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::canon::Canon;
 use crate::fsutil::{absolute_lexical, realpath_as_far_as_exists};
 use crate::manifest::{Manifest, ProjectEntry};
 use crate::names;
-use crate::repo::SkillRepo;
 use crate::tools::TOOLS;
 
 /// A project root that passed validation.
@@ -20,7 +20,6 @@ pub struct Root {
     /// Realpath of the folder.
     pub dir: PathBuf,
     pub exclude: Vec<String>,
-    pub skill_dirs: Vec<String>,
 }
 
 /// A root that failed validation, and why.
@@ -31,6 +30,12 @@ pub struct Problem {
     /// The folder simply is not on this machine (the configuration may be
     /// right for another one).
     pub absent: bool,
+}
+
+/// Whether `path` has the form `skiman.toml` requires of a project root's
+/// or a linked folder's `path`: absolute or starting with `~/`.
+pub fn is_path_form(path: &str) -> bool {
+    path.starts_with('/') || path.starts_with("~/")
 }
 
 /// `written` (absolute or `~/...`) as an absolute path, lexically normalised;
@@ -46,6 +51,17 @@ pub fn expand(home: &Path, written: &str) -> Option<PathBuf> {
         return None;
     };
     Some(absolute_lexical(Path::new("/"), &path))
+}
+
+/// A path given on the command line, made absolute: a literal leading `~/`
+/// (quoted, so the shell left it) is below `home`, a relative path below
+/// `cwd`.
+pub fn given(home: &Path, cwd: &Path, path: &Path) -> PathBuf {
+    let path = match path.to_str().and_then(|p| p.strip_prefix("~/")) {
+        Some(rest) => home.join(rest),
+        None => path.to_path_buf(),
+    };
+    absolute_lexical(cwd, &path)
 }
 
 /// `path` written the way `skiman project add` stores it: `~/...` under
@@ -66,7 +82,7 @@ pub fn written_form(home: &Path, path: &Path) -> String {
 
 /// Every configured root, validated: `Ok` for the usable ones, `Err` with the
 /// reason for the others, in file order.
-pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result<Root, Problem>> {
+pub fn resolve(home: &Path, repo: &Canon, manifest: &Manifest) -> Vec<Result<Root, Problem>> {
     let entries = manifest.projects();
     let candidates: Vec<Result<Root, Problem>> = entries
         .iter()
@@ -116,15 +132,7 @@ pub fn resolve(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Result
         .collect()
 }
 
-/// The usable roots of [`resolve`].
-pub fn usable(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<Root> {
-    resolve(home, repo, manifest)
-        .into_iter()
-        .filter_map(Result::ok)
-        .collect()
-}
-
-fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root, Problem> {
+fn check_one(home: &Path, repo: &Canon, entry: &ProjectEntry) -> Result<Root, Problem> {
     let problem = |message: String| Problem {
         id: entry.id.clone(),
         message,
@@ -155,11 +163,6 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         }
     };
     validate_dir(home, repo, &dir).map_err(problem)?;
-    for dir in &entry.skill_dirs {
-        if let Some(why) = invalid_skill_dir(dir, &entry.skill_dirs) {
-            return Err(problem(format!("`skill_dirs` entry \"{dir}\" {why}")));
-        }
-    }
     for exclude in &entry.exclude {
         if let Some(why) = invalid_exclude(exclude) {
             return Err(problem(format!("`exclude` entry \"{exclude}\" {why}")));
@@ -170,30 +173,7 @@ fn check_one(home: &Path, repo: &SkillRepo, entry: &ProjectEntry) -> Result<Root
         written: written.to_owned(),
         dir,
         exclude: entry.exclude.clone(),
-        skill_dirs: entry.skill_dirs.clone(),
     })
-}
-
-/// Why the `skill_dirs` entry `dir` cannot be used, given every entry of
-/// its root; `None` when it can. Shared by `skiman check` and every command.
-pub fn invalid_skill_dir(dir: &str, all: &[String]) -> Option<&'static str> {
-    if dir.starts_with('/') || dir.starts_with('~') {
-        Some("must be relative to the root")
-    } else if dir
-        .split('/')
-        .any(|p| p.is_empty() || p == "." || p == "..")
-    {
-        Some("must be a plain relative path without empty, `.` or `..` parts")
-    } else if crate::project::pattern::contains_skill_dir_pattern(dir) {
-        Some("holds a tool's own project skill folder, which is found without it")
-    } else if all
-        .iter()
-        .any(|other| other != dir && dir.starts_with(&format!("{other}/")))
-    {
-        Some("lies inside another `skill_dirs` entry")
-    } else {
-        None
-    }
 }
 
 /// Why the `exclude` entry `entry` can match nothing; `None` when it can.
@@ -208,7 +188,7 @@ pub fn invalid_exclude(entry: &str) -> Option<&'static str> {
 }
 
 /// The checks on a root folder's realpath that do not depend on other roots.
-pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), String> {
+pub fn validate_dir(home: &Path, repo: &Canon, dir: &Path) -> Result<(), String> {
     let home_real = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
     if home_real.starts_with(dir) {
         return Err(format!(
@@ -217,7 +197,7 @@ pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), Str
         ));
     }
     if dir.starts_with(repo.root()) {
-        return Err(format!("{} is inside the skill repo", dir.display()));
+        return Err(format!("{} is inside the canon", dir.display()));
     }
     for tool in TOOLS {
         let presence = tool.presence_dir(home);
@@ -232,16 +212,6 @@ pub fn validate_dir(home: &Path, repo: &SkillRepo, dir: &Path) -> Result<(), Str
         }
     }
     Ok(())
-}
-
-/// Realpaths of every usable root's `skill_dirs` folders: links into them
-/// from a tool directory are managed elsewhere, not foreign.
-pub fn configured_skill_dirs(home: &Path, repo: &SkillRepo, manifest: &Manifest) -> Vec<PathBuf> {
-    usable(home, repo, manifest)
-        .iter()
-        .flat_map(|root| root.skill_dirs.iter().map(|d| root.dir.join(d)))
-        .filter_map(|d| d.canonicalize().ok())
-        .collect()
 }
 
 /// The id `skiman project add` proposes for a folder: its name made into a

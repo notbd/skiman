@@ -12,7 +12,7 @@ fn init(sandbox: &Sandbox, session_hooks: &str) {
     sandbox
         .skiman()
         .args(["init", "--session-hooks", session_hooks])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
 }
@@ -61,8 +61,8 @@ fn assert_line(stdout: &str, line: &str) {
 #[test]
 fn doctor_reports_a_healthy_setup() {
     let sandbox = Sandbox::new();
-    init(&sandbox, "claude-code");
-    let repo = sandbox.skill_repo();
+    init(&sandbox, "claude-code,antigravity");
+    let repo = sandbox.canon();
     let home = sandbox.home();
     let home = home.display();
 
@@ -73,12 +73,13 @@ fn doctor_reports_a_healthy_setup() {
         .code(0)
         .stdout_eq(format!(
             "\
-skill repo: {repo}
+canon: {repo}
 recorded binary: {BINARY}
 git: version [..]
 git hooks: installed in {repo}/.git/hooks
 session-start hook for claude-code: installed in {home}/.claude/settings.json
-session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the skill repo's git hooks
+session-start hook for codex: not added: Codex runs only the hooks you have trusted with `/hooks`; run `skiman sync` before you start a Codex session, or rely on the canon's git hooks
+session-start hook for antigravity: installed in {home}/.gemini/config/hooks.json
 claude-code: installed; tool directory {home}/.claude/skills; instruction file {home}/.claude/CLAUDE.md
 codex: installed; tool directory {home}/.agents/skills; instruction file {home}/.codex/AGENTS.md
 antigravity: installed; tool directory {home}/.gemini/config/skills; instruction file {home}/.gemini/GEMINI.md
@@ -117,7 +118,7 @@ fn doctor_reports_each_problem_in_one_place() {
         .tool(Tool::Antigravity, ToolSetup::Absent)
         .build();
     init(&sandbox, "none");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let home = sandbox.home();
     add(&sandbox, "pdf");
     add(&sandbox, "gone");
@@ -176,7 +177,7 @@ fn doctor_reports_each_problem_in_one_place() {
     let out = doctor(&sandbox);
     let r = repo.display();
     for line in [
-        format!("skill repo: {r}"),
+        format!("canon: {r}"),
         format!(
             "recorded binary: {} no longer exists; the git hooks and session-start hooks call it, so run `skiman init {r}` again with the skiman you use now",
             gone_binary.display()
@@ -310,10 +311,10 @@ fn doctor_reports_a_missing_or_too_old_git() {
 }
 
 #[test]
-fn doctor_shows_tmp_content_as_in_use_while_the_repo_lock_is_held() {
+fn doctor_shows_tmp_content_as_in_use_while_the_canon_lock_is_held() {
     let sandbox = Sandbox::new();
     init(&sandbox, "none");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let staged = repo.join(".skiman/tmp/20261104T120000Z");
     write(staged.join("candidate/SKILL.md"), "x");
 
@@ -326,7 +327,7 @@ fn doctor_shows_tmp_content_as_in_use_while_the_repo_lock_is_held() {
     assert_line(
         &out,
         &format!(
-            "{} is in use: another skiman command holds the repo lock",
+            "{} is in use: another skiman command holds the canon lock",
             staged.display()
         ),
     );
@@ -350,7 +351,7 @@ fn doctor_lists_old_folders_an_update_left_in_tmp() {
     let sandbox = Sandbox::new();
     init(&sandbox, "none");
     add(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let staged = repo.join(".skiman/tmp/20261104T120000Z");
     for (from, to) in [
         ("skills/pdf", "old/skills/pdf"),
@@ -370,7 +371,7 @@ fn doctor_lists_old_folders_an_update_left_in_tmp() {
     );
 }
 
-/// Every file under the sandbox root: skill repo (with `.git` and
+/// Every file under the sandbox root: canon (with `.git` and
 /// `.skiman/tmp/`), tool directories, instruction files, config and state.
 fn world(sandbox: &Sandbox) -> std::collections::BTreeMap<PathBuf, String> {
     tree(sandbox.root())
@@ -381,7 +382,7 @@ fn list_diff_and_doctor_change_nothing() {
     let sandbox = Sandbox::new();
     init(&sandbox, "claude-code");
     add(&sandbox, "pdf");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("skills/pdf/notes.md"), "local\n");
     skill_folder(sandbox.tool_dir(Tool::Codex).join("csv"), "csv");
     write(
@@ -394,4 +395,59 @@ fn list_diff_and_doctor_change_nothing() {
         sandbox.skiman_confined().args(args).assert().code(0);
         assert_eq!(world(&sandbox), before, "skiman {args:?} changed a file");
     }
+}
+
+#[test]
+fn doctor_names_each_instruction_file_antigravity_loads_on_top_of_the_shared_body() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let gemini = sandbox.presence_dir(Tool::Antigravity);
+    write(gemini.join("AGENTS.md"), "# extra\n");
+    write(gemini.join("config/AGENTS.md"), "# extra\n");
+
+    let out = doctor(&sandbox);
+    for rel in ["AGENTS.md", "config/AGENTS.md"] {
+        assert_line(
+            &out,
+            &format!(
+                "{} exists, so antigravity also loads it on top of {}",
+                gemini.join(rel).display(),
+                gemini.join("GEMINI.md").display()
+            ),
+        );
+    }
+    assert!(
+        !out.contains("config/GEMINI.md"),
+        "a file that does not exist is not named:\n{out}"
+    );
+}
+
+#[test]
+fn doctor_reports_antigravitys_session_start_hook_missing_and_different() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let r = sandbox.canon();
+    let hooks = sandbox.home().join(".gemini/config/hooks.json");
+
+    assert_line(
+        &doctor(&sandbox),
+        &format!(
+            "session-start hook for antigravity: not installed in {}; add it with `skiman init {} --session-hooks antigravity`",
+            hooks.display(),
+            r.display()
+        ),
+    );
+
+    write(
+        &hooks,
+        r#"{"skiman": {"SessionStart": [{"type": "command", "command": "/old/skiman sync --hook"}]}}"#,
+    );
+    assert_line(
+        &doctor(&sandbox),
+        &format!(
+            "session-start hook for antigravity: {} holds a skiman hook that differs from what `skiman init` writes now; rewrite it with `skiman init {} --session-hooks antigravity`",
+            hooks.display(),
+            r.display()
+        ),
+    );
 }

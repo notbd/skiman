@@ -29,16 +29,16 @@ fn disk(sandbox: &Sandbox, rel: &str) -> PathBuf {
     root(sandbox).join(rel)
 }
 
-/// `projects/work/<rel>` in the skill repo.
+/// `projects/work/<rel>` in the canon.
 fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
-    sandbox.skill_repo().join("projects/work").join(rel)
+    sandbox.canon().join("projects/work").join(rel)
 }
 
 fn synced_file(sandbox: &Sandbox) -> PathBuf {
     sandbox.state_home().join("skiman/projects-synced.toml")
 }
 
-/// A skill repo with `~/work` registered; `files` are written under the
+/// A canon with `~/work` registered; `files` are written under the
 /// root first (`(rel, contents)`).
 fn with_root(files: &[(&str, &str)]) -> Sandbox {
     let sandbox = Sandbox::new();
@@ -700,9 +700,9 @@ removed [projects.work] from skiman.toml
 ...
 "#]]);
 
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
     assert!(!manifest.contains("projects"), "{manifest}");
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
     assert_eq!(
         read(backed_up(&sandbox, "repo/projects/work/a/AGENTS.md")),
         AGENTS
@@ -719,9 +719,9 @@ fn eject_of_a_root_whose_folder_is_gone_still_unregisters_it() {
 
     eject(&sandbox, &[root(&sandbox)]).assert().code(0);
 
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
     assert!(!manifest.contains("projects"), "{manifest}");
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
     assert_eq!(
         read(backed_up(&sandbox, "repo/projects/work/a/AGENTS.md")),
         AGENTS
@@ -850,8 +850,8 @@ fn restore_writes_the_mirror_version_it_checked_not_a_later_edit() {
 fn eject_never_moves_or_cleans_up_through_a_linked_mirror_folder() {
     let sandbox = adopted(&[("a/AGENTS.md", AGENTS)]);
     let outside = sandbox.root().join("outside");
-    std::fs::rename(sandbox.skill_repo().join("projects"), &outside).unwrap();
-    std::os::unix::fs::symlink(&outside, sandbox.skill_repo().join("projects")).unwrap();
+    std::fs::rename(sandbox.canon().join("projects"), &outside).unwrap();
+    std::os::unix::fs::symlink(&outside, sandbox.canon().join("projects")).unwrap();
 
     let assert = sandbox
         .skiman()
@@ -863,7 +863,7 @@ fn eject_never_moves_or_cleans_up_through_a_linked_mirror_folder() {
     assert!(stderr.contains("its mirror cannot be used"), "{stderr}");
     assert_eq!(read(outside.join("work/a/AGENTS.md")), AGENTS);
     assert!(
-        read(sandbox.skill_repo().join("skiman.toml")).contains("[projects.work]"),
+        read(sandbox.canon().join("skiman.toml")).contains("[projects.work]"),
         "the root stays registered"
     );
 }
@@ -881,7 +881,7 @@ fn eject_of_two_roots_finishes_the_first_when_the_second_has_a_linked_mirror() {
         .code(0);
     let elsewhere = sandbox.root().join("elsewhere");
     std::fs::create_dir_all(&elsewhere).unwrap();
-    std::os::unix::fs::symlink(&elsewhere, sandbox.skill_repo().join("projects/other")).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, sandbox.canon().join("projects/other")).unwrap();
 
     let assert = sandbox
         .skiman()
@@ -895,7 +895,7 @@ fn eject_of_two_roots_finishes_the_first_when_the_second_has_a_linked_mirror() {
         stderr.contains("[projects.other] is not removed"),
         "{stderr}"
     );
-    let manifest = read(sandbox.skill_repo().join("skiman.toml"));
+    let manifest = read(sandbox.canon().join("skiman.toml"));
     assert!(!manifest.contains("[projects.work]"), "{manifest}");
     assert!(manifest.contains("[projects.other]"), "{manifest}");
     assert!(!exists(synced_file(&sandbox)) || !read(synced_file(&sandbox)).contains("a/AGENTS.md"));
@@ -920,7 +920,7 @@ fn eject_keeps_a_root_whose_mirror_hides_items_behind_a_nested_link() {
         stderr.contains("is not forgotten: its mirror cannot be used"),
         "{stderr}"
     );
-    assert!(read(sandbox.skill_repo().join("skiman.toml")).contains("[projects.work]"));
+    assert!(read(sandbox.canon().join("skiman.toml")).contains("[projects.work]"));
     assert!(
         read(synced_file(&sandbox)).contains("a/AGENTS.md"),
         "the synced hash stays"

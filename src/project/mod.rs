@@ -1,6 +1,6 @@
 //! The project scope (`docs/project-scope.md`): project instruction files and
 //! project skills under user-registered project roots, kept as real files in
-//! the projects and mirrored into the skill repo under `projects/`.
+//! the projects and mirrored into the canon under `projects/`.
 //!
 //! The mirror follows the project: sync copies project changes into the
 //! mirror (`sync`); the project is written only by `skiman project restore`.
@@ -30,7 +30,7 @@ pub fn command(verb: &str, paths: &[PathBuf]) -> String {
     format!("skiman project {verb} {}", quoted.join(" "))
 }
 
-fn shell_quote(text: &str) -> String {
+pub fn shell_quote(text: &str) -> String {
     let plain = |b: u8| !b.is_ascii() || b.is_ascii_alphanumeric() || b"/._-~+,@%=".contains(&b);
     if !text.is_empty() && text.bytes().all(plain) {
         text.to_owned()

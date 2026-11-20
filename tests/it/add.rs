@@ -21,10 +21,10 @@ fn single_skill(sandbox: &Sandbox, repo: &str, skill_md: &str) -> Upstream {
     up
 }
 
-/// The whole skill repo (including `.git` and `.skiman`) and every tool
+/// The whole canon (including `.git` and `.skiman`) and every tool
 /// directory, to prove a command changed nothing.
 fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> {
-    let mut world = vec![tree(sandbox.skill_repo())];
+    let mut world = vec![tree(sandbox.canon())];
     world.extend(Tool::ALL.iter().map(|t| tree(sandbox.tool_dir(*t))));
     world
 }
@@ -32,7 +32,7 @@ fn world(sandbox: &Sandbox) -> Vec<std::collections::BTreeMap<PathBuf, String>> 
 fn has_commit(sandbox: &Sandbox) -> bool {
     sandbox
         .std_command("git")
-        .current_dir(sandbox.skill_repo())
+        .current_dir(sandbox.canon())
         .args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .status()
         .unwrap()
@@ -44,7 +44,7 @@ fn add_installs_a_single_skill_records_it_and_links_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let up = single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -56,10 +56,10 @@ skill pdf from https://github.com/acme/pdf.git at [..] (default branch main):
   SKILL.md
   reference.md
   scripts/fill.sh  [script, executable]
-created [..]/skill-repo/upstream/pdf
-created [..]/skill-repo/skills/pdf
-changed [..]/skill-repo/skiman.toml
-created [..]/skill-repo/skiman.lock
+created [..]/canon/upstream/pdf
+created [..]/canon/skills/pdf
+changed [..]/canon/skiman.toml
+created [..]/canon/skiman.lock
 linked [..]/home/.claude/skills/pdf
 linked [..]/home/.agents/skills/pdf
 linked [..]/home/.gemini/config/skills/pdf
@@ -105,7 +105,7 @@ fn a_hand_edited_skiman_toml_keeps_every_byte_outside_the_new_table() {
         .assert()
         .code(0);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let hand_edited = "# My skills\n[tools]\nenabled = [ \"claude-code\",\"codex\" ]   # trimmed by hand\n\n\
         [skills.notes]   # parked\nenabled = false\n\n\
         [[secrets.allow]]\npath = 'skills/notes/x.env'\nrule = \"aws-access-key\"\nfingerprint = \"sha256:00\"\n# trailing comment\n";
@@ -134,7 +134,7 @@ fn an_empty_skills_table_written_inline_is_replaced_by_the_new_table() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let tools = read(&manifest);
     std::fs::write(&manifest, format!("skills = {{}}\n{tools}")).unwrap();
 
@@ -169,7 +169,7 @@ fn skills_tables_written_inline_become_standard_tables_keeping_every_value() {
         .assert()
         .code(0);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let tools = "[tools]\nenabled = [\"claude-code\", \"codex\", \"antigravity\"]\n";
     let docx = "docx = { source = { url = \"https://github.com/acme/docx.git\", path = \"\" } }";
     std::fs::write(
@@ -294,7 +294,7 @@ fn with_a_terminal_add_installs_after_yes() {
     let (code, rest) = pty.wait();
     assert_eq!(code, 0, "{rest}");
 
-    let target = sandbox.skill_repo().join("skills/pdf");
+    let target = sandbox.canon().join("skills/pdf");
     assert_symlink(sandbox.tool_dir(Tool::Codex).join("pdf"), &target, &target);
 }
 
@@ -330,7 +330,7 @@ fn name_installs_under_another_name_rewriting_the_name_line_only_in_the_skill() 
     init(&sandbox);
     let skill_md = "---\ndescription: Fill PDF forms\nname: pdf   # upstream's own name\nlicense: MIT\n---\n\n# pdf\n";
     single_skill(&sandbox, "pdf", skill_md);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -343,8 +343,8 @@ skill pdf-forms (upstream name pdf) from https://github.com/acme/pdf.git at [..]
   reference.md
   scripts/fill.sh  [script, executable]
 the `name` line of skills/pdf-forms/SKILL.md is set to `pdf-forms` (a local modification; upstream/pdf-forms keeps the upstream text)
-created [..]/skill-repo/upstream/pdf-forms
-created [..]/skill-repo/skills/pdf-forms
+created [..]/canon/upstream/pdf-forms
+created [..]/canon/skills/pdf-forms
 ...
 "#]])
         .stderr_eq("");
@@ -376,7 +376,7 @@ fn an_upstream_without_a_name_line_gets_one_inserted_and_is_named_after_the_repo
     init(&sandbox);
     let skill_md = "---\ndescription: Take notes\n---\n\n# Notes\n";
     single_skill(&sandbox, "notes", skill_md);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
 
     sandbox
         .skiman()
@@ -450,11 +450,11 @@ error: SKILL.md in https://github.com/acme/nodesc.git has no `description` in it
 /// Plants a tmp leftover: a folder in `.skiman/tmp/` that no running command staged.
 fn plant_tmp_leftover(sandbox: &Sandbox) -> PathBuf {
     let leftover = sandbox
-        .skill_repo()
+        .canon()
         .join(".skiman/tmp/20250101T000000Z/old/skills/pdf");
     std::fs::create_dir_all(&leftover).unwrap();
     std::fs::write(leftover.join("SKILL.md"), "an edit worth keeping\n").unwrap();
-    sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z")
+    sandbox.canon().join(".skiman/tmp/20250101T000000Z")
 }
 
 #[test]
@@ -557,8 +557,8 @@ fn an_unwritable_backups_folder_stops_add_with_exit_4_and_keeps_the_tmp_leftover
         "{stderr}"
     );
     assert!(leftover.join("old/skills/pdf/SKILL.md").is_file());
-    assert!(!sandbox.skill_repo().join("skills/pdf").exists());
-    assert!(!sandbox.skill_repo().join("upstream/pdf").exists());
+    assert!(!sandbox.canon().join("skills/pdf").exists());
+    assert!(!sandbox.canon().join("upstream/pdf").exists());
 }
 
 /// What a move of `entry` into a backup on another filesystem leaves when it
@@ -566,7 +566,7 @@ fn an_unwritable_backups_folder_stops_add_with_exit_4_and_keeps_the_tmp_leftover
 /// that ties them. Returns the copy.
 fn plant_cut_short_move(sandbox: &Sandbox, entry: &Path) -> PathBuf {
     use std::os::unix::fs::MetadataExt;
-    let rel = entry.strip_prefix(sandbox.skill_repo()).unwrap();
+    let rel = entry.strip_prefix(sandbox.canon()).unwrap();
     let copy = backups(sandbox).join("20240101T000000Z/repo").join(rel);
     for at in [entry, copy.as_path()] {
         std::fs::create_dir_all(at).unwrap();
@@ -610,7 +610,7 @@ fn a_finished_cut_short_move_is_said_when_another_tmp_leftover_cannot_move() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let leftover = sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z");
+    let leftover = sandbox.canon().join(".skiman/tmp/20250101T000000Z");
     let (cut, kept) = (leftover.join("old/skills/x"), leftover.join("old/skills/y"));
     let copy = plant_cut_short_move(&sandbox, &cut);
     std::fs::create_dir_all(&kept).unwrap();
@@ -634,7 +634,7 @@ fn a_moved_tmp_leftover_is_said_when_a_later_one_cannot_move() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let tmp = sandbox.skill_repo().join(".skiman/tmp");
+    let tmp = sandbox.canon().join(".skiman/tmp");
     let (first, stuck) = (tmp.join("20250101T000000Z"), tmp.join("20250102T000000Z"));
     for leftover in [&first, &stuck] {
         std::fs::create_dir_all(leftover.join("old/skills/x")).unwrap();
@@ -673,7 +673,7 @@ fn a_finished_cut_short_move_is_said_when_its_note_cannot_be_deleted() {
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
     let cut = sandbox
-        .skill_repo()
+        .canon()
         .join(".skiman/tmp/20250101T000000Z/old/skills/x");
     let copy = plant_cut_short_move(&sandbox, &cut);
     let backups = backups(&sandbox);
@@ -700,7 +700,7 @@ fn a_finished_cut_short_move_is_said_when_the_next_one_cannot_be_finished() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let leftover = sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z");
+    let leftover = sandbox.canon().join(".skiman/tmp/20250101T000000Z");
     // One level deeper, so it is reached after `first` (`fsutil::entries`
     // goes level by level).
     let (first, stuck) = (
@@ -733,7 +733,7 @@ fn a_tmp_leftover_that_holds_nothing_is_dropped_without_a_backup_folder() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let leftover = sandbox.skill_repo().join(".skiman/tmp/20250101T000000Z");
+    let leftover = sandbox.canon().join(".skiman/tmp/20250101T000000Z");
     std::fs::create_dir_all(leftover.join("old/skills")).unwrap();
     std::fs::write(leftover.join(".gitignore"), "*\n").unwrap();
     let backups = backups(&sandbox);
@@ -747,7 +747,7 @@ fn a_tmp_leftover_that_holds_nothing_is_dropped_without_a_backup_folder() {
         String::from_utf8(assert.code(0).stderr_eq("").get_output().stdout.clone()).unwrap();
     assert!(!stdout.contains("moved tmp leftovers"), "{stdout}");
     assert!(!leftover.exists());
-    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/pdf/SKILL.md").is_file());
 }
 
 /// `date -u` for `secs` since the epoch, as `YYYYMMDDTHHMMSSZ`.
@@ -847,10 +847,10 @@ error: refusing to write content that breaks the rules:
 }
 
 #[test]
-fn a_violation_elsewhere_in_the_skill_repo_is_only_a_warning() {
+fn a_violation_elsewhere_in_the_canon_is_only_a_warning() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let broken = sandbox.skill_repo().join("skills/notes/SKILL.md");
+    let broken = sandbox.canon().join("skills/notes/SKILL.md");
     std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
     std::fs::write(&broken, "no frontmatter\n").unwrap();
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
@@ -865,7 +865,7 @@ warning: skills/notes/SKILL.md:1: frontmatter: the frontmatter must start on lin
 
 "#]]);
 
-    assert!(sandbox.skill_repo().join("skills/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("skills/pdf/SKILL.md").is_file());
 }
 
 #[test]
@@ -918,14 +918,14 @@ skill pdf from https://github.com/acme/pdf.git at [..] (default branch main):
 ...
 "#]]);
 
-    assert!(!sandbox.skill_repo().join("skills/pdf/vendor").exists());
+    assert!(!sandbox.canon().join("skills/pdf/vendor").exists());
 }
 
-/// `git add -A` and `git commit` in the skill repo, through its pre-commit
+/// `git add -A` and `git commit` in the canon, through its pre-commit
 /// hook; panics with git's output when either fails. Returns
 /// `git ls-files skills upstream`.
 fn commit_and_list(sandbox: &Sandbox) -> String {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(&repo, ["add", "-A"]);
     sandbox.git(&repo, ["commit", "--quiet", "-m", "add pdf"]);
     sandbox.git(&repo, ["ls-files", "skills", "upstream"])
@@ -1002,7 +1002,7 @@ fn add_ignores_the_git_environment_of_a_calling_git_process() {
         .assert()
         .code(0);
 
-    assert!(sandbox.skill_repo().join("upstream/pdf/SKILL.md").is_file());
+    assert!(sandbox.canon().join("upstream/pdf/SKILL.md").is_file());
 }
 
 #[test]
@@ -1049,7 +1049,7 @@ fn a_secret_in_the_upstream_is_refused_until_its_entry_is_added() {
     );
     assert_eq!(world(&sandbox), before);
 
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let mut text = read(&manifest);
     text.push('\n');
     text.push_str(&entry);
@@ -1061,7 +1061,7 @@ fn a_secret_in_the_upstream_is_refused_until_its_entry_is_added() {
         .code(0);
     assert!(
         sandbox
-            .skill_repo()
+            .canon()
             .join("upstream/pdf/tests/fixture.env")
             .is_file()
     );
@@ -1099,7 +1099,7 @@ fn add_over_an_own_skill_identical_to_the_upstream_is_refused() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     single_skill(&sandbox, "pdf", PDF_SKILL_MD);
-    let skill = sandbox.skill_repo().join("skills/pdf");
+    let skill = sandbox.canon().join("skills/pdf");
     std::fs::create_dir_all(skill.join("scripts")).unwrap();
     std::fs::write(skill.join("SKILL.md"), PDF_SKILL_MD).unwrap();
     std::fs::write(skill.join("reference.md"), "# Reference\n").unwrap();

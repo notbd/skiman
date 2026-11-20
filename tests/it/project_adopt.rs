@@ -3,7 +3,7 @@
 //! the exact-path rule (a folder never replaces; a named item may).
 //!
 //! Every test registers `~/work` as project root `work`, so a project item
-//! at `<root>/<rel>` has its mirror at `<skill repo>/projects/work/<rel>`.
+//! at `<root>/<rel>` has its mirror at `<canon>/projects/work/<rel>`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::PermissionsExt;
@@ -24,7 +24,7 @@ fn root(sandbox: &Sandbox) -> PathBuf {
 }
 
 /// `init`, then registers `~/work` with `project add`; `extra` lines
-/// (`exclude = …`, `skill_dirs = …`) are appended to its table.
+/// (`exclude = …`) are appended to its table.
 fn setup(extra: &str) -> Sandbox {
     let sandbox = Sandbox::new();
     init(&sandbox);
@@ -36,7 +36,7 @@ fn setup(extra: &str) -> Sandbox {
         .assert()
         .code(0);
     if !extra.is_empty() {
-        let manifest = sandbox.skill_repo().join("skiman.toml");
+        let manifest = sandbox.canon().join("skiman.toml");
         let mut text = read(&manifest);
         assert!(text.trim_end().ends_with("path = \"~/work\""), "{text}");
         text.push_str(extra);
@@ -55,7 +55,7 @@ fn skill(dir: impl AsRef<Path>) {
 
 /// The mirror of the root-relative `rel`.
 fn mirror(sandbox: &Sandbox, rel: &str) -> PathBuf {
-    sandbox.skill_repo().join("projects/work").join(rel)
+    sandbox.canon().join("projects/work").join(rel)
 }
 
 fn state_dir(sandbox: &Sandbox) -> PathBuf {
@@ -66,10 +66,10 @@ fn synced_file(sandbox: &Sandbox) -> PathBuf {
     state_dir(sandbox).join("projects-synced.toml")
 }
 
-/// The skill repo (without `.git`) and skiman's machine state, to prove a
+/// The canon (without `.git`) and skiman's machine state, to prove a
 /// command changed nothing.
 fn world(sandbox: &Sandbox) -> (BTreeMap<PathBuf, String>, BTreeMap<PathBuf, String>) {
-    let mut repo = tree(sandbox.skill_repo());
+    let mut repo = tree(sandbox.canon());
     repo.retain(|path, _| path.components().next().unwrap().as_os_str() != ".git");
     (repo, tree(state_dir(sandbox)))
 }
@@ -118,7 +118,7 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[test]
 fn discovery_finds_every_instruction_file_pattern_and_every_skill_dir() {
-    let sandbox = setup("skill_dirs = [\"core/skills\"]");
+    let sandbox = setup("");
     let root = root(&sandbox);
     for rel in [
         "AGENTS.md",
@@ -142,7 +142,6 @@ fn discovery_finds_every_instruction_file_pattern_and_every_skill_dir() {
         "c/.claude/skills/one",
         "c/.agents/skills/two",
         "c/.agent/skills/three",
-        "core/skills/four",
         // No tool loads skills from these.
         "c/.gemini/skills/five",
         "other/skills/six",
@@ -167,7 +166,6 @@ fn discovery_finds_every_instruction_file_pattern_and_every_skill_dir() {
             "c/.agent/skills/three",
             "c/.agents/skills/two",
             "c/.claude/skills/one",
-            "core/skills/four",
         ])
     );
 }
@@ -372,7 +370,7 @@ fn a_secret_blocks_the_item_with_the_allow_hint_and_the_pasted_entry_lets_it_in(
         entry.contains("path = \"projects/work/p/AGENTS.md\""),
         "{entry}"
     );
-    let manifest = sandbox.skill_repo().join("skiman.toml");
+    let manifest = sandbox.canon().join("skiman.toml");
     let text = format!("{}\n{entry}", read(&manifest));
     std::fs::write(&manifest, text).unwrap();
     adopt(&sandbox, [&file]).arg("--yes").assert().code(0);
@@ -430,7 +428,7 @@ fn git_conflict_markers_block_a_file_and_a_skill() {
         );
     }
     assert_eq!(stderr.matches("conflict marker").count(), 4, "{stderr}");
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
 }
 
 #[test]
@@ -481,7 +479,7 @@ fn adopt_copies_byte_identical_mirrors_and_leaves_the_project_untouched() {
         project_before,
         "the project is untouched"
     );
-    let mut mirrored = tree(sandbox.skill_repo().join("projects/work"));
+    let mut mirrored = tree(sandbox.canon().join("projects/work"));
     let mut project = project_before;
     // Folders that only lead to items are on both sides; compare the rest.
     mirrored.retain(|_, v| v != "dir");
@@ -571,10 +569,10 @@ fn without_a_terminal_adopt_needs_yes_and_writes_nothing() {
 }
 
 #[test]
-fn adopt_refuses_while_the_skill_repo_is_mid_merge_or_detached() {
+fn adopt_refuses_while_the_canon_is_mid_merge_or_detached() {
     let sandbox = setup("");
     three_items(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(
         &repo,
         [
@@ -704,7 +702,7 @@ fn a_staging_folder_that_cannot_be_made_fails_its_item_only() {
         write(root(&sandbox).join(rel), "project edit\n");
         write(mirror(&sandbox, rel), "mirror edit\n");
     }
-    let swap = sandbox.skill_repo().join(".skiman/swap");
+    let swap = sandbox.canon().join(".skiman/swap");
     // Once the first item is staged, no other staging folder can be made.
     let chmod = format!("chmod 555 '{}'", swap.display());
     let items = files.map(|(rel, _)| root(&sandbox).join(rel));
@@ -831,31 +829,14 @@ fn an_exact_path_wins_over_a_folder_named_before_it() {
 }
 
 #[test]
-fn a_root_with_an_unusable_skill_dirs_entry_is_skipped() {
-    let sandbox = setup("skill_dirs = [\"/\"]");
-    write(root(&sandbox).join("AGENTS.md"), "a\n");
-    let assert = sandbox
-        .skiman()
-        .args(["project", "adopt", "--yes"])
-        .assert()
-        .code(0);
-    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
-    assert!(
-        stderr.contains("`skill_dirs` entry \"/\" must be relative to the root"),
-        "{stderr}"
-    );
-    assert!(!exists(mirror(&sandbox, "AGENTS.md")));
-}
-
-#[test]
-fn a_root_that_holds_the_skill_repo_skips_it() {
+fn a_root_that_holds_the_canon_skips_it() {
     let sandbox = Sandbox::new();
     let holder = sandbox.home().join("dev");
-    let skill_repo = holder.join("skills");
+    let canon = holder.join("skills");
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(&skill_repo)
+        .arg(&canon)
         .assert()
         .code(0);
     write(holder.join("proj/AGENTS.md"), "p\n");
@@ -870,23 +851,23 @@ fn a_root_that_holds_the_skill_repo_skips_it() {
         .args(["project", "adopt", "--yes"])
         .assert()
         .code(0);
-    let mirrored = skill_repo.join("projects/dev");
+    let mirrored = canon.join("projects/dev");
     assert_eq!(read(mirrored.join("proj/AGENTS.md")), "p\n");
     assert!(
         !mirrored.join("skills").exists(),
-        "the skill repo is never discovered"
+        "the canon is never discovered"
     );
 }
 
 #[test]
-fn an_exact_path_inside_the_skill_repo_is_refused_and_nothing_is_mirrored_twice() {
+fn an_exact_path_inside_the_canon_is_refused_and_nothing_is_mirrored_twice() {
     let sandbox = Sandbox::new();
     let holder = sandbox.home().join("dev");
-    let skill_repo = holder.join("skills");
+    let canon = holder.join("skills");
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(&skill_repo)
+        .arg(&canon)
         .assert()
         .code(0);
     write(holder.join("proj/AGENTS.md"), "p\n");
@@ -901,9 +882,9 @@ fn an_exact_path_inside_the_skill_repo_is_refused_and_nothing_is_mirrored_twice(
         .args(["project", "adopt", "--yes"])
         .assert()
         .code(0);
-    let own_mirror = skill_repo.join("projects/dev/proj/AGENTS.md");
+    let own_mirror = canon.join("projects/dev/proj/AGENTS.md");
     let world = || {
-        let mut repo = tree(&skill_repo);
+        let mut repo = tree(&canon);
         repo.retain(|path, _| !path.starts_with(".git"));
         (repo, tree(state_dir(&sandbox)))
     };
@@ -924,18 +905,18 @@ fn an_exact_path_inside_the_skill_repo_is_refused_and_nothing_is_mirrored_twice(
             format!(
                 "error: {} is inside {}, which project commands never read or write; name the item's path in its project\n",
                 own_mirror.display(),
-                skill_repo.display()
+                canon.display()
             )
         );
         assert_eq!(world(), before);
     }
-    assert!(!exists(skill_repo.join("projects/dev/skills")));
+    assert!(!exists(canon.join("projects/dev/skills")));
 }
 
 #[test]
 fn the_warning_about_a_mirror_git_ignores_shows_a_non_ascii_path_as_it_is() {
     let sandbox = setup("");
-    let gitignore = sandbox.skill_repo().join(".gitignore");
+    let gitignore = sandbox.canon().join(".gitignore");
     let mut rules = read(&gitignore);
     rules.push_str("projects/work/美国/\n");
     std::fs::write(&gitignore, &rules).unwrap();
@@ -945,7 +926,7 @@ fn the_warning_about_a_mirror_git_ignores_shows_a_non_ascii_path_as_it_is() {
 
     assert!(
         stderr.contains(&format!(
-            "warning: git ignores projects/work/美国/AGENTS.md in the skill repo (.gitignore:{}:projects/work/美国/), so it never gets history; change that rule\n",
+            "warning: git ignores projects/work/美国/AGENTS.md in the canon (.gitignore:{}:projects/work/美国/), so it never gets history; change that rule\n",
             rules.lines().count()
         )),
         "{stderr}"

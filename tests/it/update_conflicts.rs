@@ -35,12 +35,12 @@ fn installed(sandbox: &Sandbox) -> Upstream {
 }
 
 fn skill(sandbox: &Sandbox) -> PathBuf {
-    sandbox.skill_repo().join("skills/pdf")
+    sandbox.canon().join("skills/pdf")
 }
 
-/// The whole skill repo (including `.git` and `.skiman`).
-fn skill_repo_tree(sandbox: &Sandbox) -> BTreeMap<PathBuf, String> {
-    tree(sandbox.skill_repo())
+/// The whole canon (including `.git` and `.skiman`).
+fn canon_tree(sandbox: &Sandbox) -> BTreeMap<PathBuf, String> {
+    tree(sandbox.canon())
 }
 
 fn text_conflict(local: &str, upstream: &str) -> String {
@@ -176,7 +176,7 @@ fn owned(files: &[(&str, &[u8])]) -> BTreeMap<String, Vec<u8>> {
 /// `skills/pdf` and `upstream/pdf`, and in the lock's snapshot hash.
 fn installed_with_a_gitignore(sandbox: &Sandbox) -> Upstream {
     let up = installed_with(sandbox, &[(".gitignore", b"*.log\n")]);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for dir in ["skills/pdf", "upstream/pdf"] {
         write(repo.join(dir).join(".gitignore"), "*.log\n");
     }
@@ -219,12 +219,7 @@ fn a_changed_upstream_gitignore_from_an_earlier_install_stays_with_a_deletion_re
             (".gitignore.skiman-upstream-deleted", b"")
         ])
     );
-    assert!(
-        !sandbox
-            .skill_repo()
-            .join("upstream/pdf/.gitignore")
-            .exists()
-    );
+    assert!(!sandbox.canon().join("upstream/pdf/.gitignore").exists());
     sandbox
         .skiman()
         .arg("check")
@@ -439,7 +434,7 @@ fn a_skill_with_unresolved_conflicts_is_refused_until_they_are_resolved() {
 
     up.write("forms.md", "new upstream file\n");
     up.commit("v3");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
     sandbox
         .skiman()
         .args(["update", "pdf"])
@@ -452,7 +447,7 @@ fn a_skill_with_unresolved_conflicts_is_refused_until_they_are_resolved() {
              \x20 skills/pdf/reference.md:5: unresolved-conflict: [..]\n\
              \x20 skills/pdf/reference.md:9: unresolved-conflict: [..]\n",
         );
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 
     // Resolving the text conflict alone is not enough.
     write(skill.join("reference.md"), lines(&[(5, "mine and theirs")]));
@@ -483,7 +478,7 @@ fn a_skill_with_unresolved_conflicts_is_refused_until_they_are_resolved() {
 fn a_hand_edited_snapshot_is_replaced_and_kept_in_the_backup() {
     let sandbox = Sandbox::new();
     let up = installed(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("upstream/pdf/reference.md"), "edited by hand\n");
     up.write("reference.md", lines(&[(5, "theirs")]));
     up.commit("v2");
@@ -516,7 +511,7 @@ fn a_hand_edited_snapshot_is_replaced_and_kept_in_the_backup() {
 fn a_hand_edited_snapshot_with_no_new_version_is_replaced_with_the_note() {
     let sandbox = Sandbox::new();
     installed(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("upstream/pdf/reference.md"), "edited by hand\n");
 
     let dry_run = sandbox
@@ -594,7 +589,7 @@ fn another_rule_violation_in_a_merged_file_refuses_a_conflicting_update() {
     );
     up.write("SKILL.md", skill_md(&"x".repeat(1025), "# their pdf\n"));
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
     sandbox
         .skiman()
         .args(["update", "pdf"])
@@ -605,7 +600,7 @@ fn another_rule_violation_in_a_merged_file_refuses_a_conflicting_update() {
             "error: skill pdf: refusing to write content that breaks the rules:\n\
              \x20 skills/pdf/SKILL.md:3: description-length: [..]\n",
         );
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 
     // A merged file without markers, next to a conflict in another file.
     let sandbox = Sandbox::new();
@@ -614,7 +609,7 @@ fn another_rule_violation_in_a_merged_file_refuses_a_conflicting_update() {
     up.write("reference.md", lines(&[(5, "theirs")]))
         .write("SKILL.md", "---\nname: pdf\n---\n");
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
     sandbox
         .skiman()
         .args(["update", "pdf"])
@@ -625,7 +620,7 @@ fn another_rule_violation_in_a_merged_file_refuses_a_conflicting_update() {
             "error: skill pdf: refusing to write content that breaks the rules:\n\
              \x20 skills/pdf/SKILL.md:[..]: required-field: [..]\n",
         );
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 }
 
 #[test]
@@ -634,7 +629,7 @@ fn an_update_that_leaves_no_skill_md_is_refused() {
     let up = installed(&sandbox);
     up.remove("SKILL.md");
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
     let links = || {
         let mut all = tree(sandbox.home());
         all.retain(|path, _| path.ends_with("skills/pdf"));
@@ -652,7 +647,7 @@ fn an_update_that_leaves_no_skill_md_is_refused() {
             "error: skill pdf: refusing to write content that breaks the rules:\n\
              \x20 skills/pdf: skill-md: no SKILL.md at the top of the skill folder\n",
         );
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
     assert_eq!(links(), links_before);
 
     // A SKILL.md I changed and upstream deleted stays, with a deletion record.
@@ -698,7 +693,7 @@ fn a_skill_md_i_deleted_and_upstream_changed_comes_back_only_as_a_record() {
         read(skill(&sandbox).join("SKILL.md.skiman-upstream")),
         theirs.as_bytes()
     );
-    let lock = String::from_utf8(read(sandbox.skill_repo().join("skiman.lock"))).unwrap();
+    let lock = String::from_utf8(read(sandbox.canon().join("skiman.lock"))).unwrap();
     assert!(lock.contains(&format!("commit = \"{commit}\"")), "{lock}");
 }
 
@@ -730,7 +725,7 @@ fn unsafe_upstream_content_appearing_on_update_is_refused() {
         up.write("reference.md", lines(&[(5, "theirs")]));
         change(&up);
         up.commit("v2");
-        let before = skill_repo_tree(&sandbox);
+        let before = canon_tree(&sandbox);
 
         let assert = sandbox
             .skiman()
@@ -744,7 +739,7 @@ fn unsafe_upstream_content_appearing_on_update_is_refused() {
             "{problem}: {stderr}"
         );
         assert!(!stderr.contains(&key));
-        assert_eq!(skill_repo_tree(&sandbox), before, "{problem}");
+        assert_eq!(canon_tree(&sandbox), before, "{problem}");
     }
 }
 
@@ -757,7 +752,7 @@ fn a_case_collision_in_a_conflicting_merge_result_is_refused() {
     up.write("reference.md", lines(&[(5, "theirs")]))
         .write("notes.md", "theirs\n");
     up.commit("v2");
-    let before = skill_repo_tree(&sandbox);
+    let before = canon_tree(&sandbox);
 
     sandbox
         .skiman()
@@ -766,7 +761,7 @@ fn a_case_collision_in_a_conflicting_merge_result_is_refused() {
         .code(1)
         .stdout_eq("")
         .stderr_eq("error: skill pdf: the merge result holds [..]Notes.md[..]notes.md[..]\n");
-    assert_eq!(skill_repo_tree(&sandbox), before);
+    assert_eq!(canon_tree(&sandbox), before);
 }
 
 #[test]

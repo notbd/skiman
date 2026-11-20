@@ -1,0 +1,1127 @@
+//! Path rules and the write guard (spec "Path rules"): which folders can be
+//! registered, which child links count, and that skiman never writes
+//! inside a registered folder by any road.
+
+use std::os::unix::fs::symlink;
+use std::path::Path;
+
+use super::{COMPANY, append_manifest, contents, folder, sync};
+use crate::support::{Sandbox, Tool, exists, init, read, skill_md, write};
+
+fn linked_add(sandbox: &Sandbox, path: &Path) -> (i32, String) {
+    let output = sandbox
+        .skiman()
+        .args(["linked", "add"])
+        .arg(path)
+        .output()
+        .unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// The canon's `skiman.toml` and `.gitignore`: a refused `linked add`
+/// leaves both as they were.
+fn records(sandbox: &Sandbox) -> (String, String) {
+    let repo = sandbox.canon();
+    (
+        read(repo.join("skiman.toml")),
+        read(repo.join(".gitignore")),
+    )
+}
+
+#[test]
+fn linked_add_refuses_a_path_that_overlaps_a_place_skiman_writes_or_home() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.canon();
+    let home = sandbox.home();
+    std::fs::create_dir_all(repo.join("skills/inner")).unwrap();
+    let before = records(&sandbox);
+    for (path, why) in [
+        (repo.join("skills/inner"), "lies in"),
+        (
+            sandbox.root().to_owned(),
+            "is your home folder or one of its parents",
+        ),
+        (home.clone(), "is your home folder or one of its parents"),
+        (sandbox.tool_dir(Tool::Codex), "lies in"),
+        (home.join(".agents"), "contains"),
+    ] {
+        std::fs::create_dir_all(&path).unwrap();
+        let (code, stderr) = linked_add(&sandbox, &path);
+        assert_eq!(code, 1, "{}: {stderr}", path.display());
+        assert!(stderr.contains(why), "{}: {stderr}", path.display());
+        assert_eq!(records(&sandbox), before);
+    }
+    let (code, stderr) = linked_add(&sandbox, &home.join("not-there"));
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("is not an existing folder"), "{stderr}");
+    std::fs::write(home.join("file"), "x").unwrap();
+    let (code, stderr) = linked_add(&sandbox, &home.join("file"));
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("is not a folder"), "{stderr}");
+    assert_eq!(records(&sandbox), before);
+}
+
+/// A link an older script left in a tool directory is no way to name a
+/// linked folder: the path goes through a place skiman writes. The error
+/// names the realpath to register instead.
+#[test]
+fn a_path_through_a_link_in_a_tool_directory_is_refused_with_no_record_left() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let old = sandbox.tool_dir(Tool::ClaudeCode).join("company");
+    symlink(&company, &old).unwrap();
+    let alias = sandbox.home().join("alias");
+    symlink(&old, &alias).unwrap();
+    let before = records(&sandbox);
+
+    for path in [&old, &alias] {
+        let (code, stderr) = linked_add(&sandbox, path);
+        assert_eq!(code, 1, "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "register its realpath {} instead",
+                company.display()
+            )),
+            "{stderr}"
+        );
+        assert_eq!(records(&sandbox), before);
+    }
+    assert_eq!(linked_add(&sandbox, &company).0, 0);
+}
+
+/// A link whose target goes through a file and `..` names nothing, as the
+/// system refuses to resolve it: `linked add` refuses it and records nothing.
+#[test]
+fn a_path_through_a_file_and_dot_dot_is_not_an_existing_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    folder(&sandbox, "target", &["alpha"]);
+    write(home.join("file"), "x");
+    symlink("file/../target", home.join("alias")).unwrap();
+    let before = records(&sandbox);
+
+    let (code, stderr) = linked_add(&sandbox, &home.join("alias"));
+
+    assert_eq!(code, 1, "{stderr}");
+    assert!(stderr.contains("is not an existing folder"), "{stderr}");
+    assert_eq!(records(&sandbox), before);
+    assert!(!exists(sandbox.canon().join("linked/alias")));
+}
+
+/// A path that reaches a registered folder only through a link on the way
+/// overlaps it all the same: `linked add` refuses it whichever id sorts
+/// first, and the registered folder keeps distributing its child link.
+#[test]
+fn linked_add_refuses_a_path_through_a_link_inside_a_registered_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let outside = sandbox.root().join("outside");
+    write(outside.join("SKILL.md"), skill_md("bridge"));
+    symlink(&outside, company.join("bridge")).unwrap();
+    let indirect = sandbox.home().join("indirect");
+    symlink(&company, &indirect).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    let before = records(&sandbox);
+
+    for id in ["aaa", "zzz"] {
+        let output = sandbox
+            .skiman()
+            .args(["linked", "add", "--id", id])
+            .arg(indirect.join("bridge"))
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{id}: {stderr}");
+        assert!(stderr.contains("overlaps linked folder"), "{id}: {stderr}");
+        assert_eq!(records(&sandbox), before, "{id}");
+    }
+    assert_eq!(
+        std::fs::read_link(sandbox.tool_dir(Tool::ClaudeCode).join("bridge")).unwrap(),
+        sandbox.canon().join("linked/company/bridge")
+    );
+}
+
+/// Of two registrations that overlap, the one whose id sorts first keeps
+/// working; a table that is not well formed is skipped too (exit 3).
+#[test]
+fn overlapping_and_malformed_registrations_break_the_rules() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    folder(&sandbox, "work/company", &["alpha", "beta"]);
+    append_manifest(
+        &sandbox,
+        "\n[linked.zinner]\npath = \"~/work/company/alpha\"\n\n[linked.company]\npath = \"~/work/company\"\n\n[linked.bad]\npath = \"work\"\n",
+    );
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        stderr.contains("linked folder `zinner` is skipped: ")
+            && stderr.contains("overlaps linked folder `company`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("linked folder `bad` is skipped: `path` in [linked.bad] must be"),
+        "{stderr}"
+    );
+    let linked = sandbox.canon().join("linked");
+    assert!(!exists(linked.join("zinner")) && !exists(linked.join("bad")));
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert_eq!(
+            std::fs::read_link(dir.join("alpha")).unwrap(),
+            linked.join("company/alpha")
+        );
+    }
+}
+
+/// A table that is not well formed (an unknown key, an invalid id) is
+/// skipped, in the words `check` uses, but its path keeps the protection:
+/// sync writes nothing through a tool directory that resolves into the
+/// folder and gives an older script's link into it no adopt hint (nor the
+/// hint for a folder skiman distributes), and adopt refuses that link.
+#[test]
+fn a_malformed_registration_still_protects_its_folder() {
+    for (id, table, why) in [
+        (
+            "company",
+            "[linked.company]\npath = \"~/work/company\"\nnote = \"x\"\n",
+            "unknown key `note` in [linked.company] (allowed: path)",
+        ),
+        (
+            "Company",
+            "[linked.Company]\npath = \"~/work/company\"\n",
+            "`Company` is not a valid linked folder id: use lowercase letters, digits and single hyphens",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let company = folder(&sandbox, "work/company", &["pdf"]);
+        append_manifest(&sandbox, &format!("\n{table}"));
+        let claude = sandbox.tool_dir(Tool::ClaudeCode);
+        symlink(company.join("pdf"), claude.join("old")).unwrap();
+        let codex = sandbox.tool_dir(Tool::Codex);
+        std::fs::remove_dir_all(&codex).unwrap();
+        std::fs::create_dir(company.join("agents-skills")).unwrap();
+        symlink(company.join("agents-skills"), &codex).unwrap();
+        let before = contents(&[&company]);
+
+        let (code, stderr) = sync(&sandbox);
+
+        assert_eq!(code, 3, "{stderr}");
+        let skipped = format!(
+            "warning: linked folder `{id}` is skipped: {why}; fix [linked.{id}] in skiman.toml"
+        );
+        assert!(stderr.contains(&skipped), "{skipped}\n{stderr}");
+        let line = format!(
+            "warning: {} resolves to {}, inside linked folder `{id}`",
+            codex.display(),
+            company.join("agents-skills").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert!(!stderr.contains("skiman adopt old"), "{stderr}");
+        // Nor that skiman distributes the folder: it is skipped.
+        let line = format!(
+            "warning: {} is a link into linked folder `{id}`\n",
+            claude.join("old").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+
+        let canon = crate::support::tree(sandbox.canon());
+        let (code, stderr) = run(
+            &sandbox,
+            &["adopt", "old", "--from", "claude-code", "--yes"],
+        );
+        assert_eq!(code, 1, "{stderr}");
+        let line = format!(
+            "{} resolves into linked folder `{id}`",
+            claude.join("old").display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        // Nor here: a skipped folder's skills are not distributed.
+        assert!(!stderr.contains("distributes"), "{stderr}");
+        assert_eq!(crate::support::tree(sandbox.canon()), canon);
+        assert_eq!(contents(&[&company]), before);
+    }
+}
+
+/// Child links that point at `~`, at a tool directory or at an entry of
+/// one break the path rules: each is reported and not distributed, and
+/// every tool directory syncs as usual. A child link to an independent
+/// folder elsewhere is a linked skill.
+#[test]
+fn child_links_into_home_or_a_tool_directory_are_not_distributed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(
+        sandbox.canon().join("skills/notes/SKILL.md"),
+        skill_md("notes"),
+    );
+    assert_eq!(sync(&sandbox).0, 0);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let independent = sandbox.root().join("independent/tool");
+    write(independent.join("SKILL.md"), skill_md("tool"));
+    let home = sandbox.home();
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    write(home.join("SKILL.md"), skill_md("home"));
+    for (name, target) in [
+        ("home", home.clone()),
+        ("skills", claude.clone()),
+        ("notes-again", claude.join("notes")),
+        ("tool", independent.clone()),
+    ] {
+        symlink(target, company.join(name)).unwrap();
+    }
+    append_manifest(&sandbox, COMPANY);
+    let before = contents(&[&company, &independent]);
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 0, "{stderr}");
+    for name in ["home", "skills", "notes-again"] {
+        let line = format!(
+            "warning: {} is a link that breaks the path rules",
+            company.join(name).display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+    }
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        for name in ["home", "skills", "notes-again"] {
+            assert!(!exists(dir.join(name)), "{name}");
+        }
+        for name in ["notes", "alpha", "tool"] {
+            assert!(dir.join(name).join("SKILL.md").is_file(), "{name}");
+        }
+    }
+    assert_eq!(contents(&[&company, &independent]), before);
+}
+
+/// A child link whose target, as written and normalised lexically, lies
+/// in a tool directory breaks the path rules even where its realpath does
+/// not: only that link is reported, and the rest of the folder distributes.
+#[test]
+fn a_child_link_whose_written_target_lies_in_a_tool_directory_is_not_distributed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    folder(&sandbox, "other/.claude/skills", &["demo"]);
+    std::fs::create_dir_all(home.join("other/deep")).unwrap();
+    symlink("other/deep", home.join("jump")).unwrap();
+    symlink(
+        home.join("jump/../.claude/skills/demo"),
+        company.join("demo"),
+    )
+    .unwrap();
+    append_manifest(&sandbox, COMPANY);
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 0, "{stderr}");
+    let line = format!(
+        "warning: {} is a link that breaks the path rules",
+        company.join("demo").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(
+        stderr.matches("breaks the path rules").count(),
+        1,
+        "{stderr}"
+    );
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert!(!exists(dir.join("demo")), "{}", dir.display());
+        assert!(dir.join("alpha/SKILL.md").is_file());
+    }
+}
+
+/// A tool directory turned into a link into a registered folder after the
+/// registration: sync writes nothing there (exit 3), the rest syncs, and
+/// the folder stays byte for byte as it was.
+#[test]
+fn a_tool_directory_that_resolves_into_a_linked_folder_is_skipped() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(
+        sandbox.canon().join("skills/notes/SKILL.md"),
+        skill_md("notes"),
+    );
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    let codex = sandbox.tool_dir(Tool::Codex);
+    std::fs::remove_dir_all(&codex).unwrap();
+    std::fs::create_dir(company.join("agents-skills")).unwrap();
+    symlink(company.join("agents-skills"), &codex).unwrap();
+    let before = contents(&[&company]);
+
+    let (code, stderr) = sync(&sandbox);
+
+    assert_eq!(code, 3, "{stderr}");
+    let line = format!(
+        "warning: {} resolves to {}, inside linked folder `company`",
+        codex.display(),
+        company.join("agents-skills").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(contents(&[&company]), before);
+    assert!(
+        sandbox
+            .tool_dir(Tool::ClaudeCode)
+            .join("notes/SKILL.md")
+            .is_file()
+    );
+}
+
+/// `sync`, running `run` right before it links the entry at `at`.
+fn sync_with_hook_at(sandbox: &Sandbox, at: &Path, run: &str) -> (i32, String) {
+    let output = sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", format!("sync:link:{}", at.display()))
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// A tool directory that is a link to a plain folder, re-pointed into a
+/// registered folder while sync links in it: every link lands in the
+/// folder sync checked, and the registered folder stays byte for byte.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_tool_directory_relinked_while_sync_links_is_written_where_it_was_checked() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    let plain = sandbox.home().join("plain");
+    std::fs::rename(&claude, &plain).unwrap();
+    symlink(&plain, &claude).unwrap();
+    for name in ["notes", "zebra"] {
+        write(
+            sandbox.canon().join("skills").join(name).join("SKILL.md"),
+            skill_md(name),
+        );
+    }
+    let before = contents(&[&company]);
+    let run = format!(
+        "rm '{0}' && ln -s '{1}' '{0}'",
+        claude.display(),
+        company.display()
+    );
+
+    let (code, stderr) = sync_with_hook_at(&sandbox, &claude.join("notes"), &run);
+
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(contents(&[&company]), before);
+    for name in ["alpha", "notes", "zebra"] {
+        assert!(plain.join(name).join("SKILL.md").is_file(), "{name}");
+    }
+}
+
+/// The instruction location's parent re-pointed into a registered folder
+/// after sync checked it: the closing instruction sync re-checks where it
+/// writes and refuses (exit 3); the registered folder stays byte for byte.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn an_instruction_location_relinked_during_sync_is_guarded_where_it_is_written() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    write(
+        sandbox.canon().join("skills/notes/SKILL.md"),
+        skill_md("notes"),
+    );
+    let codex = sandbox.presence_dir(Tool::Codex);
+    let before = contents(&[&company]);
+    let run = format!(
+        "mv '{0}' '{0}-old' && ln -s '{1}' '{0}'",
+        codex.display(),
+        company.display()
+    );
+    let at = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
+
+    let (code, stderr) = sync_with_hook_at(&sandbox, &at, &run);
+
+    assert_eq!(code, 3, "{stderr}");
+    let line = format!(
+        "resolves to {}, inside linked folder `company`",
+        company.join("AGENTS.md").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(contents(&[&company]), before);
+}
+
+/// A presence directory that holds skiman's instruction link and its
+/// session-start hook, turned into a link into a registered folder with
+/// its tool disabled: neither sync's cleanup nor `init --session-hooks
+/// none` writes there (exit 3), and the folder stays byte for byte.
+#[test]
+fn a_presence_directory_that_resolves_into_a_linked_folder_is_left_alone() {
+    let sandbox = Sandbox::new();
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "claude-code"])
+        .arg(sandbox.canon())
+        .assert()
+        .code(0);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    let claude = sandbox.presence_dir(Tool::ClaudeCode);
+    std::fs::rename(&claude, company.join("claude")).unwrap();
+    symlink(company.join("claude"), &claude).unwrap();
+    let manifest = sandbox.canon().join("skiman.toml");
+    std::fs::write(&manifest, read(&manifest).replace("\"claude-code\", ", "")).unwrap();
+    assert!(
+        std::fs::symlink_metadata(company.join("claude/CLAUDE.md"))
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(read(company.join("claude/settings.json")).contains("sync --hook"));
+    let before = contents(&[&company]);
+
+    let (code, stderr) = sync(&sandbox);
+    assert_eq!(code, 3, "{stderr}");
+    assert!(
+        stderr.contains("inside linked folder `company`"),
+        "{stderr}"
+    );
+    // The folder now holds a presence directory: the registration breaks
+    // the rules, and its protection holds all the same.
+    assert!(
+        stderr.contains("linked folder `company` is skipped: "),
+        "{stderr}"
+    );
+    assert_eq!(contents(&[&company]), before);
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.canon())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("its session-start hook entry is left as it is"),
+        "{stderr}"
+    );
+    assert_eq!(contents(&[&company]), before);
+}
+
+/// A canon `.gitignore` that is a link into a registered folder: `init`
+/// writes nothing through it (exit 3).
+#[test]
+fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    let gitignore = sandbox.canon().join(".gitignore");
+    std::fs::remove_file(&gitignore).unwrap();
+    std::fs::write(company.join("gitignore"), "target\n").unwrap();
+    symlink(company.join("gitignore"), &gitignore).unwrap();
+    let before = contents(&[&company]);
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.canon())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("inside linked folder `company`"),
+        "{stderr}"
+    );
+    assert_eq!(contents(&[&company]), before);
+}
+
+/// A new canon path through a link to a plain folder, re-pointed into a
+/// registered folder right after `init` checked it: the canon is made
+/// where it was checked, the user config is not pointed through the
+/// re-pointed link (it still names the current canon), and neither `init`
+/// nor the next `sync` writes into the registered folder.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn init_makes_the_canon_where_it_checked_the_path() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    std::fs::create_dir(company.join("next")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let plain = sandbox.home().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let through = sandbox.home().join("through");
+    symlink(&plain, &through).unwrap();
+    let config = sandbox.config_home().join("skiman");
+    let config_before = crate::support::tree(&config);
+    let before = contents(&[&company]);
+    let run = format!(
+        "rm '{0}' && ln -s '{1}' '{0}'",
+        through.display(),
+        company.display()
+    );
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(through.join("next"))
+        .env("SKIMAN_TEST_HOOK", "init:checked")
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    let named = format!(
+        "{} now leads to {}, not to {} where the canon is",
+        through.join("next").display(),
+        company.join("next").canonicalize().unwrap().display(),
+        plain.join("next").canonicalize().unwrap().display()
+    );
+    assert!(stderr.contains(&named), "{named}\n{stderr}");
+    assert_eq!(contents(&[&company]), before, "{stderr}");
+    assert!(plain.join("next/skiman.toml").is_file(), "{stderr}");
+    assert_eq!(crate::support::tree(&config), config_before);
+    let (_, stderr) = sync(&sandbox);
+    assert_eq!(contents(&[&company]), before, "{stderr}");
+}
+
+/// A settings file that is a link into a registered folder when `init`
+/// reads it and is pointed elsewhere before the write: the guard checks
+/// the file that is written, so nothing is written into the folder.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_settings_file_relinked_before_the_write_is_guarded_where_it_is_written() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    write(company.join("settings.json"), "{}\n");
+    let elsewhere = sandbox.root().join("elsewhere.json");
+    write(&elsewhere, "{}\n");
+    let settings = sandbox.presence_dir(Tool::ClaudeCode).join("settings.json");
+    symlink(company.join("settings.json"), &settings).unwrap();
+    let before = contents(&[&company]);
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "claude-code"])
+        .arg(sandbox.canon())
+        .env("SKIMAN_TEST_HOOK", "session-hooks:guard")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("ln -sfn '{}' '{}'", elsewhere.display(), settings.display()),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(
+        stderr.contains("inside linked folder `company`"),
+        "{stderr}"
+    );
+    assert_eq!(contents(&[&company]), before);
+}
+
+/// A settings file that does not exist yet, in a tool folder that is a
+/// link re-pointed into a registered folder after the guard passed: the
+/// file is made where the guard checked, and the registered folder's own
+/// settings file stays byte for byte.
+#[test]
+#[cfg_attr(
+    not(debug_assertions),
+    ignore = "needs the test hook, which only debug builds have"
+)]
+fn a_new_settings_file_is_made_where_the_guard_checked() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    write(company.join("settings.json"), "{\"marker\": true}\n");
+    let claude = sandbox.presence_dir(Tool::ClaudeCode);
+    let plain = sandbox.home().join("plain-claude");
+    std::fs::rename(&claude, &plain).unwrap();
+    let _ = std::fs::remove_file(plain.join("settings.json"));
+    symlink(&plain, &claude).unwrap();
+    let before = contents(&[&company]);
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "claude-code"])
+        .arg(sandbox.canon())
+        .env("SKIMAN_TEST_HOOK", "session-hooks:save")
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!(
+                "rm '{0}' && ln -s '{1}' '{0}'",
+                claude.display(),
+                company.display()
+            ),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(contents(&[&company]), before, "{stderr}");
+    assert!(
+        read(plain.join("settings.json")).contains("SessionStart"),
+        "{stderr}"
+    );
+}
+
+/// While `skiman.toml` cannot be parsed no registration is known, so
+/// `init` writes nothing through a `.gitignore` that is a link.
+#[test]
+fn init_writes_no_linked_gitignore_while_the_manifest_does_not_parse() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.canon();
+    let real = sandbox.root().join("dotfiles/gitignore");
+    write(&real, "target\n");
+    std::fs::remove_file(repo.join(".gitignore")).unwrap();
+    symlink(&real, repo.join(".gitignore")).unwrap();
+    std::fs::write(repo.join("skiman.toml"), "[tools\n").unwrap();
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&repo)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("`.skiman/` is not added to it"), "{stderr}");
+    assert_eq!(read(&real), "target\n");
+}
+
+/// `init` into a registered folder of the current canon, or into a folder
+/// inside one, refuses before writing anything (exit 1): the user config
+/// still names the current canon.
+#[test]
+fn init_refuses_a_folder_inside_a_linked_folder_of_the_current_canon() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &[]);
+    append_manifest(&sandbox, COMPANY);
+    assert_eq!(sync(&sandbox).0, 0);
+    let config = sandbox.config_home().join("skiman");
+    let before = (contents(&[&company]), crate::support::tree(&config));
+
+    for target in [company.clone(), company.join("new")] {
+        let output = sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(&target)
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains("lies inside, linked folder `company`")
+                && stderr.contains("skiman linked remove company"),
+            "{stderr}"
+        );
+        assert_eq!(
+            (contents(&[&company]), crate::support::tree(&config)),
+            before
+        );
+    }
+}
+
+/// `init` into the target of a valid child link of a registered folder
+/// refuses before creating anything: that target is protected like the
+/// registered path.
+#[test]
+fn init_refuses_the_target_of_a_child_link() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &[]);
+    let outside = sandbox.home().join("work/outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink("../outside", company.join("side")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let config = sandbox.config_home().join("skiman");
+    let before = (contents(&[&outside]), crate::support::tree(&config));
+    let nested = outside.join("new");
+
+    for (target, says) in [
+        (&outside, format!("{} is where a link", outside.display())),
+        (
+            &nested,
+            format!(
+                "{} lies inside {}, where a link",
+                nested.display(),
+                outside.display()
+            ),
+        ),
+    ] {
+        let output = sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(target)
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(1), "{stderr}");
+        assert!(
+            stderr.contains(&says) && stderr.contains("in linked folder `company`"),
+            "{says}\n{stderr}"
+        );
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+        assert_eq!(
+            (contents(&[&outside]), crate::support::tree(&config)),
+            before
+        );
+    }
+}
+
+/// While a registered folder cannot be read, its child links are unknown,
+/// so `init` refuses any new canon before creating anything; `init` of the
+/// current canon itself goes ahead.
+#[test]
+fn init_refuses_a_new_canon_while_a_linked_folder_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &[]);
+    let outside = sandbox.home().join("work/outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    symlink("../outside", company.join("side")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let config = sandbox.config_home().join("skiman");
+    let before = crate::support::tree(&config);
+    let init_at = |target: &Path| {
+        sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(target)
+            .output()
+            .unwrap()
+    };
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let refused = init_at(&outside);
+    let reused = init_at(&sandbox.canon());
+    chmod(0o755).unwrap();
+
+    let stderr = String::from_utf8(refused.stderr).unwrap();
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("linked folder `company` cannot be read now"),
+        "{stderr}"
+    );
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    assert_eq!(crate::support::tree(&config), before);
+    let stderr = String::from_utf8(reused.stderr).unwrap();
+    assert_ne!(reused.status.code(), Some(1), "{stderr}");
+    assert!(!stderr.contains("cannot be read now, so"), "{stderr}");
+}
+
+/// `init` reads the registrations under the lock: a folder registered
+/// while it waited for the lock is protected too.
+#[test]
+fn init_refuses_a_folder_registered_while_it_waited_for_the_lock() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let other = folder(&sandbox, "work/other", &[]);
+    let manifest = sandbox.canon().join("skiman.toml");
+    let register = format!(
+        "printf '\\n[linked.other]\\npath = \"%s\"\\n' '{}' >> '{}'",
+        other.display(),
+        manifest.display()
+    );
+
+    let output = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&other)
+        .env("SKIMAN_TEST_HOOK", "init:locking")
+        .env("SKIMAN_TEST_HOOK_RUN", register)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(read(&manifest).contains("[linked.other]"));
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(stderr.contains("linked folder `other`"), "{stderr}");
+    assert_eq!(std::fs::read_dir(&other).unwrap().count(), 0);
+}
+
+/// A new registration that would take the place of an existing one (its id
+/// sorts first and the folders overlap) is refused: the existing one keeps
+/// working and nothing is written.
+#[test]
+fn linked_add_refuses_a_folder_that_would_break_an_existing_registration() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha", "beta"]);
+    append_manifest(
+        &sandbox,
+        "\n[linked.zeta]\npath = \"~/work/company/beta\"\n",
+    );
+    assert_eq!(sync(&sandbox).0, 0);
+    let before = records(&sandbox);
+
+    let output = sandbox
+        .skiman()
+        .args(["linked", "add", "--id", "alpha"])
+        .arg(&company)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("it would break linked folder `zeta`"),
+        "{stderr}"
+    );
+    assert_eq!(records(&sandbox), before);
+    assert!(
+        sandbox
+            .tool_dir(Tool::ClaudeCode)
+            .join("zeta/SKILL.md")
+            .is_file()
+    );
+}
+
+/// Runs skiman with `args` and returns its exit code and stderr.
+fn run(sandbox: &Sandbox, args: &[&str]) -> (i32, String) {
+    let output = sandbox.skiman().args(args).output().unwrap();
+    (
+        output.status.code().unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    )
+}
+
+/// An older script's link under another name that resolves into a
+/// registered folder, or into the target of one of its child links: adopt
+/// would copy linked content into the canon, so it refuses and copies
+/// nothing.
+#[test]
+fn adopt_refuses_an_old_link_that_resolves_into_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    let ext = sandbox.root().join("ext/tool");
+    write(ext.join("SKILL.md"), skill_md("tool"));
+    symlink(&ext, company.join("tool")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    symlink(company.join("alpha"), claude.join("old-alpha")).unwrap();
+    symlink(&ext, claude.join("old-tool")).unwrap();
+    assert_eq!(sync(&sandbox).0, 0);
+    let canon = crate::support::tree(sandbox.canon());
+    let before = contents(&[&company, &ext, &claude]);
+
+    for name in ["old-alpha", "old-tool"] {
+        let (code, stderr) = run(&sandbox, &["adopt", name, "--from", "claude-code", "--yes"]);
+        assert_eq!(code, 1, "{stderr}");
+        let line = format!(
+            "{} resolves into linked folder `company`",
+            claude.join(name).display()
+        );
+        assert!(stderr.contains(&line), "{line}\n{stderr}");
+        assert_eq!(crate::support::tree(sandbox.canon()), canon);
+        assert_eq!(contents(&[&company, &ext, &claude]), before);
+    }
+}
+
+/// A tool directory aliased into a registered folder (which breaks the
+/// registration): an entry there sits inside the folder, so adopt refuses
+/// before it writes the canon and the folder's link stays where it is.
+#[test]
+fn adopt_refuses_an_entry_that_sits_inside_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = sandbox.home().join("work/company");
+    std::fs::create_dir_all(&company).unwrap();
+    let private = folder(&sandbox, "work/private", &["demo"]);
+    symlink("../private/demo", company.join("demo")).unwrap();
+    append_manifest(&sandbox, COMPANY);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&claude).unwrap();
+    symlink(&company, &claude).unwrap();
+    let canon = crate::support::tree(sandbox.canon());
+    let before = contents(&[&company, &private]);
+
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "demo", "--from", "claude-code", "--yes"],
+    );
+
+    assert_eq!(code, 1, "{stderr}");
+    let line = format!(
+        "{} lies in linked folder `company`",
+        company.join("demo").display()
+    );
+    assert!(stderr.contains(&line), "{line}\n{stderr}");
+    assert_eq!(crate::support::tree(sandbox.canon()), canon);
+    assert_eq!(contents(&[&company, &private]), before);
+    assert_eq!(
+        std::fs::read_link(company.join("demo")).unwrap(),
+        Path::new("../private/demo")
+    );
+}
+
+/// While a registered folder cannot be listed its child links are
+/// unknown, so adopt refuses any entry.
+#[test]
+fn adopt_refuses_while_a_linked_folder_cannot_be_read() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let company = folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    write(
+        sandbox.tool_dir(Tool::ClaudeCode).join("beta/SKILL.md"),
+        skill_md("beta"),
+    );
+    let canon = crate::support::tree(sandbox.canon());
+    let chmod = |mode| std::fs::set_permissions(&company, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "beta", "--from", "claude-code", "--yes"],
+    );
+    chmod(0o755).unwrap();
+
+    assert_eq!(code, 1, "{stderr}");
+    assert!(
+        stderr.contains("linked folder `company` cannot be read"),
+        "{stderr}"
+    );
+    assert_eq!(crate::support::tree(sandbox.canon()), canon);
+    let (code, stderr) = run(
+        &sandbox,
+        &["adopt", "beta", "--from", "claude-code", "--yes"],
+    );
+    assert_eq!(code, 0, "{stderr}");
+}
+
+/// HOME reached through a link, itself one (`/home -> /var/home`) or with
+/// a parent that is one (macOS `/var -> private/var` under `mktemp -d`):
+/// that link is no break of the path rules, for a registration or a child
+/// link written through it.
+#[test]
+fn a_home_reached_through_a_link_can_hold_a_linked_folder() {
+    for (link, to, home) in [
+        ("home-link", "home", "home-link"),
+        ("alias", ".", "alias/home"),
+    ] {
+        let sandbox = Sandbox::new();
+        init(&sandbox);
+        let root = sandbox.root();
+        symlink(root.join(to), root.join(link)).unwrap();
+        let home = root.join(home);
+        let company = folder(&sandbox, "work/company", &["alpha"]);
+        let independent = sandbox.root().join("independent/tool");
+        write(independent.join("SKILL.md"), skill_md("tool"));
+        symlink(home.join("../independent/tool"), company.join("tool")).unwrap();
+
+        let output = sandbox
+            .skiman()
+            .env("HOME", &home)
+            .args(["linked", "add", "~/work/company"])
+            .output()
+            .unwrap();
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{link}: {stderr}");
+        for tool in Tool::ALL {
+            let dir = sandbox.tool_dir(tool);
+            for name in ["alpha", "tool"] {
+                assert!(dir.join(name).join("SKILL.md").is_file(), "{link}: {name}");
+            }
+        }
+    }
+}
+
+/// A child link of `aaa` that goes through the link `hop` in another
+/// registered folder `zzz`: resolving it lists `zzz`, and reading `zzz`
+/// afterwards reuses that listing, so one sync lists `zzz` once. The child
+/// link is not distributed; `zzz`'s own skill is.
+#[test]
+fn a_folder_listed_to_resolve_another_folders_child_link_is_listed_once() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let aaa = folder(&sandbox, "work/aaa", &["alpha"]);
+    let zzz = folder(&sandbox, "work/zzz", &["beta"]);
+    let elsewhere = folder(&sandbox, "elsewhere", &["gamma"]);
+    symlink(&elsewhere, zzz.join("hop")).unwrap();
+    symlink(zzz.join("hop/gamma"), aaa.join("child")).unwrap();
+    append_manifest(
+        &sandbox,
+        "\n[linked.aaa]\npath = \"~/work/aaa\"\n\n[linked.zzz]\npath = \"~/work/zzz\"\n",
+    );
+    let count = sandbox.root().join("listed");
+    let hook = format!("linked:list:{}", zzz.canonicalize().unwrap().display());
+
+    let output = sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", hook)
+        .env(
+            "SKIMAN_TEST_HOOK_RUN",
+            format!("echo >> '{}'", count.display()),
+        )
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "{} is a link that breaks the path rules",
+            aaa.join("child").display()
+        )),
+        "{stderr}"
+    );
+    assert_eq!(read(&count).lines().count(), 1, "{stderr}");
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    assert_eq!(
+        std::fs::read_link(claude.join("beta")).unwrap(),
+        sandbox.canon().join("linked/zzz/beta")
+    );
+    assert!(!exists(claude.join("child")));
+    assert!(!exists(claude.join("gamma")));
+}

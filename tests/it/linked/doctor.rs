@@ -1,0 +1,222 @@
+//! `skiman doctor` on linked folders: one line per folder, and each
+//! problem sync would report (missing, breaking a rule, a collision,
+//! `linked/` or `linked/<id>` blocked), without changing anything.
+
+use super::{COMPANY, append_manifest, contents, folder};
+use crate::support::{Sandbox, init, skill_md, tree, write};
+
+fn doctor(sandbox: &Sandbox) -> String {
+    let output = sandbox.skiman().arg("doctor").output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn assert_line(stdout: &str, line: &str) {
+    assert!(
+        stdout.lines().any(|l| l == line),
+        "missing line:\n{line}\nin doctor output:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_reports_each_linked_folder_and_its_problems() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(sandbox.canon().join("skills/pdf/SKILL.md"), skill_md("pdf"));
+    let company = folder(&sandbox, "work/company", &["alpha", "pdf"]);
+    folder(&sandbox, "work/tools", &["beta"]);
+    let inside = sandbox.canon().join("skills");
+    append_manifest(
+        &sandbox,
+        &format!(
+            "\n[linked.company]\npath = \"~/work/company\"\n\n[linked.gone]\npath = \"~/work/gone\"\n\n[linked.inside]\npath = \"{}\"\n\n[linked.tools]\npath = \"~/work/tools\"\n",
+            inside.display()
+        ),
+    );
+    sandbox.skiman().arg("sync").output().unwrap();
+    let linked = sandbox.canon().join("linked");
+    std::fs::remove_file(linked.join("tools")).unwrap();
+    std::fs::create_dir(linked.join("tools")).unwrap();
+    let home = sandbox.home();
+    let before = (tree(sandbox.canon()), tree(&home), contents(&[&company]));
+
+    let stdout = doctor(&sandbox);
+
+    assert_line(
+        &stdout,
+        &format!(
+            "linked folder company: {} (skills: alpha, pdf)",
+            company.display()
+        ),
+    );
+    assert_line(
+        &stdout,
+        &format!(
+            "linked folder `gone` ({}) is not on this machine, so its skills are not distributed",
+            home.join("work/gone").display()
+        ),
+    );
+    assert_line(
+        &stdout,
+        &format!(
+            "linked folder `inside` is skipped: {} lies in {}, the canon, where skiman writes; fix [linked.inside] in skiman.toml",
+            inside.display(),
+            sandbox.canon().display()
+        ),
+    );
+    assert_line(
+        &stdout,
+        &format!(
+            "linked skill pdf in {} is not distributed: the skill folder skills/pdf uses the name",
+            company.join("pdf").display()
+        ),
+    );
+    assert_line(
+        &stdout,
+        &format!(
+            "{} is not a link, so linked folder `tools` is not linked; move it away, then run `skiman sync`",
+            linked.join("tools").display()
+        ),
+    );
+    assert_eq!(
+        (tree(sandbox.canon()), tree(&home), contents(&[&company])),
+        before
+    );
+}
+
+#[test]
+fn doctor_reports_linked_that_is_a_file() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    folder(&sandbox, "work/company", &["alpha"]);
+    append_manifest(&sandbox, COMPANY);
+    let linked = sandbox.canon().join("linked");
+    std::fs::write(&linked, "x").unwrap();
+
+    let stdout = doctor(&sandbox);
+
+    assert_line(
+        &stdout,
+        &format!(
+            "{} is a file, not a folder, so no linked skill is linked; move it away, then run `skiman sync`",
+            linked.display()
+        ),
+    );
+}
+
+/// A project item inside a linked folder is not counted as one to adopt:
+/// `doctor` names it as skipped, as `project adopt --dry-run` does.
+#[test]
+fn doctor_counts_no_project_item_inside_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let work = sandbox.home().join("work");
+    write(work.join("AGENTS.md"), "# work\n");
+    let company = folder(&sandbox, "work/company", &[]);
+    write(company.join("AGENTS.md"), "# company\n");
+    append_manifest(&sandbox, COMPANY);
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&work)
+        .assert()
+        .code(0);
+
+    let stdout = doctor(&sandbox);
+
+    assert!(
+        stdout.contains("project root work: 1 project item(s) are not adopted yet"),
+        "{stdout}"
+    );
+    assert_line(
+        &stdout,
+        &format!(
+            "project root work: {} is skipped: it overlaps linked folder `company` ({}), whose content skiman never copies or writes",
+            company.join("AGENTS.md").display(),
+            company.display()
+        ),
+    );
+}
+
+/// A mirrored project item that came to overlap a linked folder gets no
+/// `project restore` suggestion, which would refuse: `doctor` names it as
+/// skipped, once, by the same overlap rule.
+#[test]
+fn doctor_suggests_no_restore_for_a_mirrored_item_inside_a_linked_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let work = sandbox.home().join("work");
+    let company = folder(&sandbox, "work/company", &[]);
+    write(company.join("AGENTS.md"), "# company\n");
+    let gone = work.join("gone/AGENTS.md");
+    write(&gone, "# gone\n");
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&work)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    write(
+        sandbox.canon().join("projects/work/company/AGENTS.md"),
+        "# changed in the canon\n",
+    );
+    // A mirrored item inside the folder that is not on disk is skipped too.
+    let inside = company.join("gone");
+    std::fs::rename(work.join("gone"), &inside).unwrap();
+    std::fs::rename(
+        sandbox.canon().join("projects/work/gone"),
+        sandbox.canon().join("projects/work/company/gone"),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(&inside).unwrap();
+    append_manifest(&sandbox, COMPANY);
+
+    let stdout = doctor(&sandbox);
+
+    for path in [company.join("AGENTS.md"), inside.join("AGENTS.md")] {
+        let shown = path.display().to_string();
+        assert!(
+            !stdout
+                .lines()
+                .any(|l| l.contains(&shown) && l.contains("restore")),
+            "{stdout}"
+        );
+        let skipped = format!(
+            "project root work: {shown} is skipped: it overlaps linked folder `company` ({}), whose content skiman never copies or writes",
+            company.display()
+        );
+        assert_eq!(
+            stdout.lines().filter(|l| *l == skipped).count(),
+            1,
+            "{skipped}\n{stdout}"
+        );
+    }
+}
+
+/// While a single skill's top-level `SKILL.md` cannot be probed, `doctor`
+/// still shows it as one skill, not its sub-folders, as sync and `list`.
+#[test]
+fn doctor_shows_a_single_skill_that_cannot_be_probed_as_one_skill() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    let locked = super::unprobed_single(&sandbox);
+    let chmod = |mode| std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(mode));
+
+    chmod(0o000).unwrap();
+    let output = sandbox.skiman().arg("doctor").output().unwrap();
+    chmod(0o755).unwrap();
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let solo = sandbox.home().join("work/solo");
+    assert_line(
+        &stdout,
+        &format!("linked folder solo: {} (one skill)", solo.display()),
+    );
+    assert!(!stdout.contains("kid"), "{stdout}");
+}

@@ -1,4 +1,4 @@
-//! skiman: keeps agent skills and global instruction files in one skill repo
+//! skiman: keeps agent skills and global instruction files in one canon
 //! and distributes them to every agent tool.
 
 /// `println!` that ignores write errors: when stdout is closed early
@@ -20,6 +20,8 @@ macro_rules! err {
 }
 
 mod backup;
+mod canon;
+mod canon_lock;
 mod change;
 mod cli;
 mod commands;
@@ -34,8 +36,8 @@ mod git;
 mod git_hooks;
 mod import_guide;
 mod layout;
+mod linked;
 mod lockfile;
-mod managing_skills;
 mod manifest;
 mod merge;
 mod names;
@@ -43,12 +45,11 @@ mod ownership;
 mod path_safety;
 mod paths;
 mod project;
-mod repo;
-mod repo_lock;
 mod reported;
 mod rules;
 mod session_hooks;
 mod skill_md;
+mod skiman_manual;
 mod snapshot;
 mod source;
 mod staged;

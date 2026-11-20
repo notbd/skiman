@@ -8,12 +8,17 @@ use toml_edit::{Document, Item, TableLike};
 
 use super::secrets::AllowEntry;
 use super::{Scope, Violation, rule};
+use crate::manifest::{LinkedProblem, linked_problems};
+use crate::project::root::is_path_form;
 use crate::tree::Tree;
 
 pub const MANIFEST: &str = "skiman.toml";
 pub const LOCKFILE: &str = "skiman.lock";
 
 const REF_KINDS: &[&str] = &["branch", "tag", "commit"];
+
+/// A `[projects.<id>]` key that is no longer read (ADR 0013).
+const RETIRED_SKILL_DIRS: &str = "skill_dirs";
 
 /// The one-line text keys of `[skills.<name>]` that describe a skill to a
 /// person (`skiman overview`); `skiman check` reminds of missing ones. A
@@ -139,8 +144,19 @@ struct Section<'a> {
 impl Section<'_> {
     /// Reports every key not in `allowed`.
     fn unknown_keys(&self, allowed: &[&str], out: &mut BTreeSet<Violation>) {
+        self.unknown_keys_besides(allowed, None, out);
+    }
+
+    /// [`Self::unknown_keys`], leaving out the `retired` key, which the
+    /// caller reports with its own message.
+    fn unknown_keys_besides(
+        &self,
+        allowed: &[&str],
+        retired: Option<&str>,
+        out: &mut BTreeSet<Violation>,
+    ) {
         for (key, _) in self.table.iter() {
-            if !allowed.contains(&key) {
+            if !allowed.contains(&key) && retired != Some(key) {
                 let line = self.file.key_line(self.table, key, self.line);
                 out.insert(self.file.violation(
                     line,
@@ -364,8 +380,8 @@ impl Records {
         let m = &self.manifest;
         let root = doc.as_table();
         m.section(root, "skiman.toml", Some(1))
-            .unknown_keys(&["tools", "skills", "secrets", "projects"], out);
-        for key in ["tools", "skills", "secrets", "projects"] {
+            .unknown_keys(&["tools", "skills", "secrets", "projects", "linked"], out);
+        for key in ["tools", "skills", "secrets", "projects", "linked"] {
             if root.get(key).is_some_and(|i| i.as_table_like().is_none()) {
                 out.insert(m.violation(
                     m.key_line(root, key, Some(1)),
@@ -382,6 +398,10 @@ impl Records {
         if let Some(projects) = root.get("projects").and_then(Item::as_table_like) {
             let line = m.key_line(root, "projects", Some(1));
             self.check_projects(projects, line, out);
+        }
+        if let Some(linked) = root.get("linked").and_then(Item::as_table_like) {
+            let line = m.key_line(root, "linked", Some(1));
+            self.check_linked(linked, line, out);
         }
         if let Some(secrets) = root.get("secrets").and_then(Item::as_table_like) {
             let line = m.key_line(root, "secrets", Some(1));
@@ -413,9 +433,7 @@ impl Records {
 
     /// The `[projects.<id>]` tables (project-scope.md "Configuration"): the id
     /// follows the skill name rule; `path` is absolute or starts with `~/`;
-    /// `exclude` and `skill_dirs` are arrays of strings, and each `skill_dirs`
-    /// entry is a root-relative folder that holds no tool skill-dir pattern and
-    /// lies inside no other entry.
+    /// `exclude` is an array of strings; `skill_dirs` is retired (ADR 0013).
     fn check_projects(
         &self,
         projects: &dyn TableLike,
@@ -441,20 +459,24 @@ impl Records {
                 ));
             }
             let section = m.section(table, format!("[projects.{id}]"), line);
-            section.unknown_keys(&["path", "exclude", "skill_dirs"], out);
-            let path: fn(&Item) -> bool = |i| {
-                i.as_str()
-                    .is_some_and(|p| p.starts_with("~/") || p.starts_with('/'))
-            };
+            section.unknown_keys_besides(&["path", "exclude"], Some(RETIRED_SKILL_DIRS), out);
+            if table.contains_key(RETIRED_SKILL_DIRS) {
+                out.insert(m.violation(
+                    m.key_line(table, RETIRED_SKILL_DIRS, line),
+                    rule::TOML_VALUE,
+                    format!(
+                        "`{RETIRED_SKILL_DIRS}` in [projects.{id}] is retired; remove it and register each folder of skills with `skiman linked add <path>`"
+                    ),
+                ));
+            }
             section.value(
                 "path",
                 true,
                 "a string: an absolute path or one starting with `~/`",
-                path,
+                |i| i.as_str().is_some_and(is_path_form),
                 out,
             );
             section.value("exclude", false, "an array of strings", is_strings, out);
-            section.value("skill_dirs", false, "an array of strings", is_strings, out);
             let strings_of = |key: &str| -> Vec<String> {
                 table
                     .get(key)
@@ -476,16 +498,31 @@ impl Records {
                     ));
                 }
             }
-            let dirs = strings_of("skill_dirs");
-            let dirs_line = m.key_line(table, "skill_dirs", line);
-            for dir in &dirs {
-                if let Some(why) = crate::project::root::invalid_skill_dir(dir, &dirs) {
-                    out.insert(m.violation(
-                        dirs_line,
-                        rule::TOML_VALUE,
-                        format!("`skill_dirs` entry \"{dir}\" in [projects.{id}] {why}"),
-                    ));
-                }
+        }
+    }
+
+    /// The `[linked.<id>]` tables (ADR 0010), as [`linked_problems`]
+    /// defines a well-formed one. Both modes check them.
+    fn check_linked(
+        &self,
+        linked: &dyn TableLike,
+        line: Option<usize>,
+        out: &mut BTreeSet<Violation>,
+    ) {
+        let m = &self.manifest;
+        for (id, item) in linked.iter() {
+            let line = m.key_line(linked, id, line);
+            for problem in linked_problems(id, item) {
+                let (rule, key) = match &problem {
+                    LinkedProblem::UnknownKey(key) => (rule::UNKNOWN_KEY, Some(key.as_str())),
+                    LinkedProblem::BadPath => (rule::TOML_VALUE, Some("path")),
+                    _ => (rule::TOML_VALUE, None),
+                };
+                let line = match (item.as_table_like(), key) {
+                    (Some(table), Some(key)) => m.key_line(table, key, line),
+                    _ => line,
+                };
+                out.insert(m.violation(line, rule, problem.message(id)));
             }
         }
     }

@@ -1,4 +1,4 @@
-//! `skiman sync [--hook]`: link distribution, `managing-skills` and the repo lock.
+//! `skiman sync [--hook]`: link distribution, `skiman-manual` and the canon lock.
 
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -24,7 +24,7 @@ fn write_skill(dir: &std::path::Path, name: &str) {
 fn sync_links_a_skill_folder_created_by_hand() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
 
     sandbox
         .skiman()
@@ -39,7 +39,7 @@ linked [..]/home/.gemini/config/skills/notes
 "#]])
         .stderr_eq("");
 
-    let target = sandbox.skill_repo().join("skills/notes");
+    let target = sandbox.canon().join("skills/notes");
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join("notes"), &target, &target);
     }
@@ -49,7 +49,7 @@ linked [..]/home/.gemini/config/skills/notes
 fn sync_links_only_distributable_skill_folders() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     write_skill(&skills, "Bad_Name");
     write_skill(&skills, "synced");
     std::fs::create_dir(skills.join("empty")).unwrap();
@@ -59,29 +59,29 @@ fn sync_links_only_distributable_skill_folders() {
 
     for tool in Tool::ALL {
         let names: Vec<_> = tree(sandbox.tool_dir(tool)).into_keys().collect();
-        assert_eq!(names, [std::path::PathBuf::from("managing-skills")]);
+        assert_eq!(names, [std::path::PathBuf::from("skiman-manual")]);
     }
 }
 
 #[test]
-fn managing_skills_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten() {
+fn skiman_manual_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
-    let materialised = repo.join(".skiman/managing-skills");
+    let repo = sandbox.canon();
+    let materialised = repo.join(".skiman/skiman-manual");
 
     for tool in Tool::ALL {
         assert_symlink(
-            sandbox.tool_dir(tool).join("managing-skills"),
+            sandbox.tool_dir(tool).join("skiman-manual"),
             &materialised,
             &materialised,
         );
     }
     let skill_md = materialised.join("SKILL.md");
     let content = std::fs::read_to_string(&skill_md).unwrap();
-    assert!(content.starts_with("---\nname: managing-skills\ndescription: "));
+    assert!(content.starts_with("---\nname: skiman-manual\ndescription: "));
     assert!(
-        content.contains(&format!("The skill repo is `{}`.", repo.display())),
+        content.contains(&format!("The canon is `{}`.", repo.display())),
         "{content}"
     );
     let inode = std::fs::metadata(&skill_md).unwrap().ino();
@@ -93,12 +93,10 @@ fn managing_skills_is_linked_everywhere_holds_the_repo_path_and_is_not_rewritten
 }
 
 #[test]
-fn managing_skills_is_rewritten_when_its_content_differs() {
+fn skiman_manual_is_rewritten_when_its_content_differs() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skill_md = sandbox
-        .skill_repo()
-        .join(".skiman/managing-skills/SKILL.md");
+    let skill_md = sandbox.canon().join(".skiman/skiman-manual/SKILL.md");
     let content = std::fs::read_to_string(&skill_md).unwrap();
     std::fs::write(&skill_md, "edited").unwrap();
 
@@ -108,10 +106,10 @@ fn managing_skills_is_rewritten_when_its_content_differs() {
 }
 
 #[test]
-fn sync_hook_does_not_write_managing_skills_through_a_linked_folder_and_names_it() {
+fn sync_hook_does_not_write_skiman_manual_through_a_linked_folder_and_names_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let materialised = sandbox.skill_repo().join(".skiman/managing-skills");
+    let materialised = sandbox.canon().join(".skiman/skiman-manual");
     std::fs::remove_dir_all(&materialised).unwrap();
     let foreign = sandbox.root().join("foreign");
     std::fs::create_dir(&foreign).unwrap();
@@ -127,9 +125,86 @@ fn sync_hook_does_not_write_managing_skills_through_a_linked_folder_and_names_it
     );
     assert_eq!(std::fs::read_link(&materialised).unwrap(), foreign);
     assert.code(0).stdout_eq("").stderr_eq(str![[r#"
-error: cannot write [..]/skill-repo/.skiman/managing-skills: [..]/skill-repo/.skiman/managing-skills is not a real folder (a link or a file is in the way)
+error: cannot write [..]/canon/.skiman/skiman-manual: [..]/canon/.skiman/skiman-manual is not a real folder (a link or a file is in the way)
 
 "#]]);
+}
+
+/// The manual as a release before the rename left it: materialised at
+/// `.skiman/managing-skills` and linked under that name in every tool
+/// directory. Returns the old folder.
+fn old_manual(sandbox: &Sandbox) -> std::path::PathBuf {
+    init(sandbox);
+    let local = sandbox.canon().join(".skiman");
+    let old = local.join("managing-skills");
+    std::fs::rename(local.join("skiman-manual"), &old).unwrap();
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        std::fs::remove_file(dir.join("skiman-manual")).unwrap();
+        std::os::unix::fs::symlink(&old, dir.join("managing-skills")).unwrap();
+    }
+    old
+}
+
+/// `skiman doctor` reports no tool-directory entry under either name of
+/// the manual: neither is foreign nor occupied.
+fn assert_doctor_quiet_about_the_manual(sandbox: &Sandbox) {
+    let output = sandbox.skiman().arg("doctor").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    for tool in Tool::ALL {
+        for name in ["managing-skills", "skiman-manual"] {
+            let entry = sandbox.tool_dir(tool).join(name).display().to_string();
+            assert!(!stdout.contains(&entry), "{stdout}");
+        }
+    }
+}
+
+#[test]
+fn the_first_sync_after_the_rename_moves_the_manual_to_skiman_manual() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+
+    sandbox.skiman().arg("sync").assert().code(0).stderr_eq("");
+
+    let manual = sandbox.canon().join(".skiman/skiman-manual");
+    for tool in Tool::ALL {
+        let dir = sandbox.tool_dir(tool);
+        assert_symlink(dir.join("skiman-manual"), &manual, &manual);
+        assert!(!exists(dir.join("managing-skills")), "{}", tool.tool_dir());
+    }
+    assert!(!exists(&old), "the old manual folder is left");
+    assert_doctor_quiet_about_the_manual(&sandbox);
+}
+
+/// The name `managing-skills` is free again: a linked skill with that name
+/// takes the place of the old manual's link in the same sync.
+#[test]
+fn the_first_sync_after_the_rename_gives_managing_skills_to_a_linked_skill() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    let company = sandbox.home().join("work/company");
+    write_skill(&company, "managing-skills");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!("{text}\n[linked.company]\npath = \"~/work/company\"\n"),
+    )
+    .unwrap();
+
+    sandbox.skiman().arg("sync").assert().code(0).stderr_eq("");
+
+    let linked = sandbox.canon().join("linked/company/managing-skills");
+    let real = company.join("managing-skills");
+    for tool in Tool::ALL {
+        assert_symlink(
+            sandbox.tool_dir(tool).join("managing-skills"),
+            &linked,
+            &real,
+        );
+    }
+    assert!(!exists(&old), "the old manual folder is left");
+    assert_doctor_quiet_about_the_manual(&sandbox);
 }
 
 #[test]
@@ -139,11 +214,11 @@ fn sync_skips_a_tool_whose_presence_directory_is_missing_and_creates_a_missing_t
         .build();
     init(&sandbox);
     std::fs::remove_dir_all(sandbox.presence_dir(Tool::Antigravity)).unwrap();
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
 
     sandbox.skiman().arg("sync").assert().code(0);
 
-    let target = sandbox.skill_repo().join("skills/notes");
+    let target = sandbox.canon().join("skills/notes");
     assert_symlink(
         sandbox.tool_dir(Tool::Codex).join("notes"),
         &target,
@@ -156,7 +231,7 @@ fn sync_skips_a_tool_whose_presence_directory_is_missing_and_creates_a_missing_t
 fn sync_hook_with_nothing_to_change_prints_nothing_and_exits_0() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
     sandbox.skiman().arg("sync").assert().code(0);
     let before: Vec<_> = Tool::ALL
         .iter()
@@ -182,7 +257,7 @@ fn sync_hook_with_nothing_to_change_prints_nothing_and_exits_0() {
 fn sync_hook_links_new_skills_without_printing() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
 
     sandbox
         .skiman()
@@ -192,7 +267,7 @@ fn sync_hook_links_new_skills_without_printing() {
         .stdout_eq("")
         .stderr_eq("");
 
-    let target = sandbox.skill_repo().join("skills/notes");
+    let target = sandbox.canon().join("skills/notes");
     assert_symlink(
         sandbox.tool_dir(Tool::ClaudeCode).join("notes"),
         &target,
@@ -225,7 +300,7 @@ fn assert_kept(path: &Path) {
 fn a_file_that_appears_where_sync_is_about_to_link_a_skill_is_kept_and_reported_as_occupied() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
     let path = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
 
     let assert = sync_while_a_file_appears_at(&sandbox, &path);
@@ -261,15 +336,15 @@ warning: instruction file [..]/home/.claude/CLAUDE.md is not owned by skiman, so
 "#]]);
 }
 
-/// A skill repo whose next sync removes two of skiman's own links: the
+/// A canon whose next sync removes two of skiman's own links: the
 /// skill `notes` is gone, and Antigravity is no longer enabled.
 fn two_links_to_remove(sandbox: &Sandbox) {
     init(sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
     sandbox.skiman().arg("sync").assert().code(0);
-    std::fs::remove_dir_all(sandbox.skill_repo().join("skills/notes")).unwrap();
+    std::fs::remove_dir_all(sandbox.canon().join("skills/notes")).unwrap();
     std::fs::write(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         "[tools]\nenabled = [\"claude-code\", \"codex\"]\n",
     )
     .unwrap();
@@ -361,7 +436,7 @@ fn an_instruction_link_left_aside_goes_with_the_next_sync_not_the_hook() {
 fn a_link_left_aside_twice_goes_with_the_next_sync() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
     sandbox.skiman().arg("sync").assert().code(0);
     let skill = sandbox.tool_dir(Tool::ClaudeCode).join("notes");
     let claude_md = sandbox.instruction_file(Tool::ClaudeCode);
@@ -387,7 +462,7 @@ fn a_link_left_aside_twice_goes_with_the_next_sync() {
 fn a_link_under_a_temporary_name_that_points_elsewhere_is_not_skimans() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     write_skill(&skills, "notes");
     write_skill(&skills, "other");
     sandbox.skiman().arg("sync").assert().code(0);
@@ -420,7 +495,7 @@ fn a_link_under_a_temporary_name_that_points_elsewhere_is_not_skimans() {
 fn links_into_group_folders_are_skimans_under_their_name_or_a_temporary_one() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     write_skill(&skills.join("docs"), "notes");
     write_skill(&skills.join("docs"), "other");
     sandbox.skiman().arg("sync").assert().code(0);
@@ -463,7 +538,7 @@ fn links_into_group_folders_are_skimans_under_their_name_or_a_temporary_one() {
 fn a_link_into_a_folder_inside_a_skill_is_not_skimans() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     write_skill(&skills, "pdf");
     write_skill(&skills.join("docs"), "fill");
     let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
@@ -491,10 +566,10 @@ fn while_another_process_holds_the_lock_sync_hook_exits_0_silently_and_new_fails
 {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write_skill(&sandbox.skill_repo().join("skills"), "notes");
+    write_skill(&sandbox.canon().join("skills"), "notes");
     let lock = std::fs::File::options()
         .write(true)
-        .open(sandbox.skill_repo().join(".skiman/lock"))
+        .open(sandbox.canon().join(".skiman/lock"))
         .unwrap();
     lock.lock().unwrap();
 
@@ -518,7 +593,7 @@ fn while_another_process_holds_the_lock_sync_hook_exits_0_silently_and_new_fails
         .code(4)
         .stdout_eq("")
         .stderr_eq(str![[r#"
-error: another skiman command holds [..]/skill-repo/.skiman/lock (waited 10 seconds)
+error: another skiman command holds [..]/canon/.skiman/lock (waited 10 seconds)
 
 "#]]);
     let waited = started.elapsed();
@@ -526,7 +601,7 @@ error: another skiman command holds [..]/skill-repo/.skiman/lock (waited 10 seco
         waited >= Duration::from_millis(9_500) && waited < Duration::from_secs(20),
         "waited {waited:?}"
     );
-    assert!(!sandbox.skill_repo().join("skills/pdf").exists());
+    assert!(!sandbox.canon().join("skills/pdf").exists());
 
     drop(lock);
     sandbox
@@ -547,9 +622,9 @@ fn init_on_a_clone_on_a_second_machine_distributes_every_committed_skill() {
             .assert()
             .code(0);
     }
-    first.git(first.skill_repo(), ["add", "--all"]);
+    first.git(first.canon(), ["add", "--all"]);
     first.git(
-        first.skill_repo(),
+        first.canon(),
         [
             "-c",
             "user.name=T",
@@ -569,7 +644,7 @@ fn init_on_a_clone_on_a_second_machine_distributes_every_committed_skill() {
         ["clone", "--quiet"]
             .map(std::ffi::OsString::from)
             .into_iter()
-            .chain([first.skill_repo().into(), clone.clone().into()]),
+            .chain([first.canon().into(), clone.clone().into()]),
     );
 
     second
@@ -585,11 +660,11 @@ fn init_on_a_clone_on_a_second_machine_distributes_every_committed_skill() {
             assert_symlink(second.tool_dir(tool).join(name), &target, &target);
         }
     }
-    let managing = clone.join(".skiman/managing-skills");
+    let manual = clone.join(".skiman/skiman-manual");
     assert_symlink(
-        second.tool_dir(Tool::Codex).join("managing-skills"),
-        &managing,
-        &managing,
+        second.tool_dir(Tool::Codex).join("skiman-manual"),
+        &manual,
+        &manual,
     );
 }
 
@@ -613,11 +688,11 @@ fn a_file_named_like_skimans_move_note_is_only_content() {
         .code(0);
     assert!(
         sandbox
-            .skill_repo()
+            .canon()
             .join("skills/bar/.skiman-moved-to")
             .is_file()
     );
-    assert!(sandbox.skill_repo().join("upstream/bar/SKILL.md").is_file());
+    assert!(sandbox.canon().join("upstream/bar/SKILL.md").is_file());
 
     let tool_dir = sandbox.tool_dir(Tool::ClaudeCode);
     write_skill(&tool_dir, "baz");
@@ -696,16 +771,16 @@ fn a_fifo_in_what_a_move_cut_short_left_does_not_block_sync_hook() {
 }
 
 /// One write at a time on a machine: a command that waited for the
-/// machine lock while another switched the skill repo writes nothing.
+/// machine lock while another switched the canon writes nothing.
 #[test]
-fn a_command_that_waited_while_the_skill_repo_was_switched_writes_nothing() {
+fn a_command_that_waited_while_the_canon_was_switched_writes_nothing() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let other = sandbox.root().join("other-repo");
     std::fs::create_dir(&other).unwrap();
     let config = sandbox.config_home().join("skiman/config.toml");
     let text = std::fs::read_to_string(&config).unwrap();
-    let repo = sandbox.skill_repo().display().to_string();
+    let repo = sandbox.canon().display().to_string();
     let switched = text.replace(&repo, &other.display().to_string());
     assert_ne!(switched, text);
     let lock = std::fs::File::options()
@@ -726,10 +801,10 @@ fn a_command_that_waited_while_the_skill_repo_was_switched_writes_nothing() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(&format!(
-            "the skill repo changed to {}",
+            "the canon changed to {}",
             other.canonicalize().unwrap().display()
         )),
         "{stderr}"
     );
-    assert!(!sandbox.skill_repo().join("skills/pdf").exists());
+    assert!(!sandbox.canon().join("skills/pdf").exists());
 }

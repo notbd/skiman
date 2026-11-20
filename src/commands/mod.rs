@@ -8,6 +8,7 @@ pub mod diff;
 pub mod doctor;
 pub mod import;
 pub mod init;
+pub mod linked;
 pub mod list;
 pub mod mv;
 pub mod new;

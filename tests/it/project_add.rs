@@ -16,14 +16,14 @@ fn initialised() -> Sandbox {
 }
 
 fn manifest(sandbox: &Sandbox) -> String {
-    std::fs::read_to_string(sandbox.skill_repo().join("skiman.toml")).unwrap()
+    std::fs::read_to_string(sandbox.canon().join("skiman.toml")).unwrap()
 }
 
 /// Appends `text` to `skiman.toml`, as a user editing it by hand.
 fn append_manifest(sandbox: &Sandbox, text: &str) {
     let mut toml = manifest(sandbox);
     toml.push_str(text);
-    std::fs::write(sandbox.skill_repo().join("skiman.toml"), toml).unwrap();
+    std::fs::write(sandbox.canon().join("skiman.toml"), toml).unwrap();
 }
 
 /// Creates the folder `path` and returns it.
@@ -105,12 +105,12 @@ fn add_writes_a_tilde_path_and_an_id_from_the_folder_name() {
     assert!(
         stdout.contains(&format!(
             "{}/projects/acme-corp/",
-            sandbox.skill_repo().display()
-        )) && stdout.contains("pushed wherever the skill repo is pushed"),
+            sandbox.canon().display()
+        )) && stdout.contains("pushed wherever the canon is pushed"),
         "add says where the project files will be stored: {stdout}"
     );
     // Registering copies nothing yet, and the written table passes `check`.
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }
 
@@ -196,7 +196,7 @@ fn add_rewrites_a_projects_table_written_inline_as_a_standard_table_keeping_its_
     let b = folder(sandbox.home().join("b"));
     let tools = manifest(&sandbox);
     std::fs::write(
-        sandbox.skill_repo().join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
         format!("projects = {{ a = {{ path = \"~/a\" }} }}\n{tools}"),
     )
     .unwrap();
@@ -235,11 +235,11 @@ fn add_refuses_an_ancestor_of_home() {
 }
 
 #[test]
-fn add_refuses_the_skill_repo_and_folders_inside_it() {
+fn add_refuses_the_canon_and_folders_inside_it() {
     let sandbox = initialised();
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for dir in [repo.clone(), repo.join("skills")] {
-        assert_refused(&sandbox, add_cmd(&sandbox, dir), "is inside the skill repo");
+        assert_refused(&sandbox, add_cmd(&sandbox, dir), "is inside the canon");
     }
 }
 
@@ -380,7 +380,7 @@ fn sync_skips_home_and_its_ancestors_with_one_warning_each() {
         stderr.contains("is your home folder or one of its parents; register project folders instead; fix [projects.home] in skiman.toml"),
         "{stderr}"
     );
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
 }
 
 #[test]
@@ -421,13 +421,10 @@ fn adopt_skips_invalid_roots_and_adopts_under_the_valid_one() {
             stderr.contains(&format!("warning: project root `{id}` is skipped: ")),
             "{id}: {stderr}"
         );
-        assert!(
-            !exists(sandbox.skill_repo().join("projects").join(id)),
-            "{id}"
-        );
+        assert!(!exists(sandbox.canon().join("projects").join(id)), "{id}");
     }
     assert_eq!(
-        std::fs::read(sandbox.skill_repo().join("projects/ok/AGENTS.md")).unwrap(),
+        std::fs::read(sandbox.canon().join("projects/ok/AGENTS.md")).unwrap(),
         std::fs::read(ok.join("AGENTS.md")).unwrap()
     );
 }
@@ -449,7 +446,7 @@ fn adopt_refuses_a_path_inside_a_skipped_root() {
         .code(1);
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
     assert!(stderr.contains("is not inside a project root"), "{stderr}");
-    assert!(!exists(sandbox.skill_repo().join("projects")));
+    assert!(!exists(sandbox.canon().join("projects")));
 }
 
 // ------------------------------------------------- check on [projects]
@@ -463,7 +460,9 @@ fn check_reports_an_unknown_key_in_a_project_table() {
     );
     let out = check_violations(&sandbox);
     assert!(
-        out.contains("unknown-key: unknown key `excludes` in [projects.work] (allowed: path, exclude, skill_dirs)"),
+        out.contains(
+            "unknown-key: unknown key `excludes` in [projects.work] (allowed: path, exclude)"
+        ),
         "{out}"
     );
 }
@@ -490,80 +489,47 @@ fn check_reports_a_path_that_is_neither_absolute_nor_under_home() {
     }
 }
 
-/// `skiman check` output for one root whose `skill_dirs` is `dirs`.
-fn check_skill_dirs(dirs: &str) -> String {
-    let sandbox = initialised();
-    append_manifest(
-        &sandbox,
-        &format!("\n[projects.work]\npath = \"~/Work\"\nskill_dirs = {dirs}\n"),
-    );
-    check_violations(&sandbox)
-}
+/// The message of the retired `skill_dirs` key (ADR 0013).
+const RETIRED: &str = "toml-value: `skill_dirs` in [projects.work] is retired; remove it and register each folder of skills with `skiman linked add <path>`";
 
 #[test]
-fn check_reports_an_absolute_skill_dirs_entry() {
-    let out = check_skill_dirs(r#"["/srv/skills", "~/skills"]"#);
-    for dir in ["/srv/skills", "~/skills"] {
-        assert!(
-            out.contains(&format!(
-                "`skill_dirs` entry \"{dir}\" in [projects.work] must be relative to the root"
-            )),
-            "{dir}: {out}"
+fn check_and_check_staged_report_a_skill_dirs_key_as_retired_once() {
+    // A wrong value type is not reported on its own: the key is retired whatever it holds.
+    for value in [r#"["core/skills"]"#, "5"] {
+        let sandbox = initialised();
+        append_manifest(
+            &sandbox,
+            &format!("\n[projects.work]\npath = \"~/Work\"\nskill_dirs = {value}\n"),
+        );
+        let line = manifest(&sandbox)
+            .lines()
+            .position(|l| l.starts_with("skill_dirs"))
+            .unwrap()
+            + 1;
+        let expected = format!("skiman.toml:{line}: {RETIRED}\n");
+        assert_eq!(check_violations(&sandbox), expected, "{value}");
+
+        let repo = sandbox.canon();
+        sandbox.git(&repo, ["add", "--all"]);
+        let staged = sandbox
+            .skiman()
+            .args(["check", "--staged"])
+            .assert()
+            .code(1);
+        assert_eq!(
+            String::from_utf8_lossy(&staged.get_output().stdout),
+            expected,
+            "{value}"
         );
     }
-}
-
-#[test]
-fn check_reports_a_skill_dirs_entry_with_dot_dot() {
-    let out = check_skill_dirs(r#"["../shared", "a/../b"]"#);
-    for dir in ["../shared", "a/../b"] {
-        assert!(
-            out.contains(&format!(
-                "`skill_dirs` entry \"{dir}\" in [projects.work] must be a plain relative path"
-            )),
-            "{dir}: {out}"
-        );
-    }
-}
-
-#[test]
-fn check_reports_a_skill_dirs_entry_holding_a_tool_skill_dir() {
-    let out =
-        check_skill_dirs(r#"[".claude/skills", "team/.claude/skills", "x/.agents/skills/y"]"#);
-    for dir in [
-        ".claude/skills",
-        "team/.claude/skills",
-        "x/.agents/skills/y",
-    ] {
-        assert!(
-            out.contains(&format!(
-                "`skill_dirs` entry \"{dir}\" in [projects.work] holds a tool's own project skill folder"
-            )),
-            "{dir}: {out}"
-        );
-    }
-}
-
-#[test]
-fn check_reports_a_skill_dirs_entry_nested_in_another() {
-    // Listed before its parent, so the order does not matter.
-    let out = check_skill_dirs(r#"["shared/team", "shared"]"#);
-    assert!(
-        out.contains(
-            "`skill_dirs` entry \"shared/team\" in [projects.work] lies inside another `skill_dirs` entry"
-        ),
-        "{out}"
-    );
-    assert!(!out.contains("entry \"shared\" "), "{out}");
 }
 
 #[test]
 fn check_accepts_valid_project_tables() {
-    // `shared` and `shared2` share a prefix but neither lies inside the other.
     let sandbox = initialised();
     append_manifest(
         &sandbox,
-        "\n[projects.work]\npath = \"~/Work/Acme-Corp\"\nexclude = [\"_archive\", \"a/b\"]\nskill_dirs = [\"acme-core/skills\", \"shared\", \"shared2\"]\n\n[projects.srv]\npath = \"/srv/team\"\n",
+        "\n[projects.work]\npath = \"~/Work/Acme-Corp\"\nexclude = [\"_archive\", \"a/b\"]\n\n[projects.srv]\npath = \"/srv/team\"\n",
     );
     sandbox.skiman().arg("check").assert().code(0).stdout_eq("");
 }

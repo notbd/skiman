@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 
 use toml_edit::{DocumentMut, Item, Table, Value, value};
 
+use crate::canon::Canon;
 use crate::failure::Failure;
-use crate::repo::SkillRepo;
+use crate::project::root::is_path_form;
 
 #[derive(Debug, Clone)]
 pub struct Manifest {
@@ -25,7 +26,7 @@ pub struct SkillEntry {
 pub struct SkillInfo {
     /// What the skill is for, in one line.
     pub summary: Option<String>,
-    /// Where it came from before the skill repo held it: for an own skill,
+    /// Where it came from before the canon held it: for an own skill,
     /// the only record of its source.
     pub origin: Option<String>,
     /// The day it was installed, `YYYY-MM-DD`.
@@ -33,7 +34,7 @@ pub struct SkillInfo {
 }
 
 impl Manifest {
-    pub fn load(repo: &SkillRepo) -> Result<Manifest, Failure> {
+    pub fn load(repo: &Canon) -> Result<Manifest, Failure> {
         let file = repo.manifest_file();
         let text = std::fs::read_to_string(&file)
             .map_err(|e| Failure::operational(format!("cannot read {}: {e}", file.display())))?;
@@ -130,7 +131,6 @@ pub struct ProjectEntry {
     /// `path`, as written: absolute or starting with `~/`.
     pub path: Option<String>,
     pub exclude: Vec<String>,
-    pub skill_dirs: Vec<String>,
 }
 
 impl Manifest {
@@ -162,32 +162,163 @@ pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
             id: id.to_owned(),
             path: item.get("path").and_then(Item::as_str).map(str::to_owned),
             exclude: strings(item, "exclude"),
-            skill_dirs: strings(item, "skill_dirs"),
         })
         .collect()
+}
+
+/// One `[linked.<id>]` table (ADR 0010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkedEntry {
+    pub id: String,
+    /// `path` as written when the table is well formed.
+    pub path: Result<String, Malformed>,
+}
+
+/// A `[linked.<id>]` table that is not well formed: it breaks the rules,
+/// but the folder at a usable `path` stays protected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Malformed {
+    pub why: String,
+    /// `path` as written, when it is a string of the path form.
+    pub path: Option<String>,
+}
+
+impl Manifest {
+    /// Every `[linked.<id>]` table, sorted by id: between overlapping
+    /// registrations and colliding names, the id that sorts first wins.
+    pub fn linked(&self) -> Vec<LinkedEntry> {
+        let Some(linked) = self.doc.get("linked").and_then(Item::as_table_like) else {
+            return Vec::new();
+        };
+        let mut entries: Vec<LinkedEntry> = linked
+            .iter()
+            .map(|(id, item)| LinkedEntry {
+                id: id.to_owned(),
+                path: linked_path(id, item),
+            })
+            .collect();
+        entries.sort_by(|a, b| a.id.cmp(&b.id));
+        entries
+    }
+}
+
+/// The `path` of a well-formed `[linked.<id>]` table, or its first problem.
+fn linked_path(id: &str, item: &Item) -> Result<String, Malformed> {
+    let path = item
+        .as_table_like()
+        .and_then(|t| t.get("path"))
+        .and_then(Item::as_str)
+        .filter(|p| is_path_form(p))
+        .map(str::to_owned);
+    match linked_problems(id, item).first() {
+        None => Ok(path.expect("a well-formed table has a usable path")),
+        Some(problem) => Err(Malformed {
+            why: problem.message(id),
+            path,
+        }),
+    }
+}
+
+/// What makes a `[linked.<id>]` table not well formed (ADR 0010).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkedProblem {
+    NotATable,
+    /// The id breaks the skill-name rule or is reserved: why.
+    Id(String),
+    UnknownKey(String),
+    NoPath,
+    /// `path` is not a string of the path form.
+    BadPath,
+}
+
+impl LinkedProblem {
+    pub fn message(&self, id: &str) -> String {
+        const PATH: &str = "a string: an absolute path or one starting with `~/`";
+        match self {
+            LinkedProblem::NotATable => format!("[linked.{id}] must be a table"),
+            LinkedProblem::Id(why) => why.clone(),
+            LinkedProblem::UnknownKey(key) => {
+                format!("unknown key `{key}` in [linked.{id}] (allowed: path)")
+            }
+            LinkedProblem::NoPath => format!("[linked.{id}] has no `path` ({PATH})"),
+            LinkedProblem::BadPath => format!("`path` in [linked.{id}] must be {PATH}"),
+        }
+    }
+}
+
+/// Every problem of the `[linked.<id>]` table `item`: `check` reports each,
+/// sync the first. A table holding exactly the key `path`, a string of the
+/// path form, under an id that follows the skill-name rule and is not
+/// reserved is well formed.
+pub fn linked_problems(id: &str, item: &Item) -> Vec<LinkedProblem> {
+    let Some(table) = item.as_table_like() else {
+        return vec![LinkedProblem::NotATable];
+    };
+    let mut problems: Vec<LinkedProblem> = crate::linked::invalid_id(id)
+        .map(LinkedProblem::Id)
+        .into_iter()
+        .collect();
+    problems.extend(
+        table
+            .iter()
+            .filter(|(key, _)| *key != "path")
+            .map(|(key, _)| LinkedProblem::UnknownKey(key.to_owned())),
+    );
+    match table.get("path") {
+        None => problems.push(LinkedProblem::NoPath),
+        Some(path) if !path.as_str().is_some_and(is_path_form) => {
+            problems.push(LinkedProblem::BadPath)
+        }
+        Some(_) => {}
+    }
+    problems
 }
 
 /// `text` (a `skiman.toml`) with a new `[projects.<id>]` table holding `path`.
 /// Everything else keeps its bytes, except a `projects` table written inline,
 /// which becomes a standard table (`subtable`).
 pub fn with_project(text: &str, id: &str, path: &str) -> Result<String, String> {
-    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    let mut table = Table::new();
-    table.insert("path", value(path));
-    table.decor_mut().set_prefix("\n");
-    let projects = subtable(doc.as_table_mut(), "projects").ok_or("`projects` is not a table")?;
-    projects.insert(id, Item::Table(table));
-    Ok(doc.to_string())
+    with_path_table(text, "projects", id, path)
 }
 
 /// `text` (a `skiman.toml`) without the `[projects.<id>]` table; the
 /// `[projects]` table goes too when it is left empty and implicit.
 pub fn without_project(text: &str, id: &str) -> Result<String, String> {
+    without_table(text, "projects", id)
+}
+
+/// `text` (a `skiman.toml`) with a new `[linked.<id>]` table holding `path`,
+/// as [`with_project`] adds a project root.
+pub fn with_linked(text: &str, id: &str, path: &str) -> Result<String, String> {
+    with_path_table(text, "linked", id, path)
+}
+
+/// `text` (a `skiman.toml`) without the `[linked.<id>]` table, as
+/// [`without_project`] removes a project root.
+pub fn without_linked(text: &str, id: &str) -> Result<String, String> {
+    without_table(text, "linked", id)
+}
+
+/// `text` with a new `[<section>.<id>]` table holding `path`.
+fn with_path_table(text: &str, section: &str, id: &str, path: &str) -> Result<String, String> {
     let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-    if let Some(projects) = doc.get_mut("projects").and_then(Item::as_table_like_mut) {
-        projects.remove(id);
-        if projects.is_empty() {
-            doc.remove("projects");
+    let mut table = Table::new();
+    table.insert("path", value(path));
+    table.decor_mut().set_prefix("\n");
+    let parent = subtable(doc.as_table_mut(), section)
+        .ok_or_else(|| format!("`{section}` is not a table"))?;
+    parent.insert(id, Item::Table(table));
+    Ok(doc.to_string())
+}
+
+/// `text` without the `[<section>.<id>]` table, and without `[<section>]`
+/// when that leaves it empty.
+fn without_table(text: &str, section: &str, id: &str) -> Result<String, String> {
+    let mut doc = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
+    if let Some(parent) = doc.get_mut(section).and_then(Item::as_table_like_mut) {
+        parent.remove(id);
+        if parent.is_empty() {
+            doc.remove(section);
         }
     }
     Ok(doc.to_string())

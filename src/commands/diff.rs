@@ -10,11 +10,11 @@ use std::io::Write;
 use similar::TextDiff;
 
 use crate::Exit;
+use crate::canon::Canon;
 use crate::failure::{Failure, finish};
 use crate::manifest::Manifest;
 use crate::names;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
 use crate::tree::{Kind, Tree, WorkingTree, is_ignored};
 
 pub fn run(name: &str) -> Exit {
@@ -23,15 +23,19 @@ pub fn run(name: &str) -> Exit {
 
 fn diff(name: &str) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     let tree = WorkingTree::new(repo.root());
     let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
     let skill = repo.layout()?.path(name);
     let upstream = format!("upstream/{name}");
     if !names::is_valid(name) || tree.kind(&skill).map_err(io)? != Some(Kind::Dir) {
-        return Err(Failure::refused(format!(
-            "there is no skill folder {skill}"
-        )));
+        let manifest = Manifest::load(&repo)?;
+        return Err(Failure::refused(
+            match names::edited_elsewhere(&paths, &repo, &manifest, name) {
+                Some((why, _)) => why,
+                None => format!("there is no skill folder {skill}"),
+            },
+        ));
     }
     if Manifest::load(&repo)?.source(name).is_none() {
         return Err(Failure::refused(format!(

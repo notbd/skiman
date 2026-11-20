@@ -23,14 +23,14 @@ fn skiman(sandbox: &Sandbox, args: &[&str]) -> snapbox::cmd::OutputAssert {
 
 /// Every tool's link `name` points at `skills/<rel>`.
 fn assert_linked(sandbox: &Sandbox, name: &str, rel: &str) {
-    let target = sandbox.skill_repo().join("skills").join(rel);
+    let target = sandbox.canon().join("skills").join(rel);
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join(name), &target, &target);
     }
 }
 
 fn commit_on(sandbox: &Sandbox, day: &str) {
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(&repo, ["add", "--all"]);
     sandbox
         .command("git")
@@ -48,7 +48,7 @@ fn commit_on(sandbox: &Sandbox, day: &str) {
 fn check_reports_a_name_in_two_groups_a_bad_group_name_and_a_folder_in_a_group_without_skill_md() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skills = sandbox.skill_repo().join("skills");
+    let skills = sandbox.canon().join("skills");
     for rel in [
         "a/notes",
         "b/notes",
@@ -84,7 +84,7 @@ skills/writing/drafts: skill-md: no SKILL.md at the top of the skill folder
 fn a_grouped_skill_md_names_its_own_folder() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let skill_md_path = sandbox.skill_repo().join("skills/docs/pdf/SKILL.md");
+    let skill_md_path = sandbox.canon().join("skills/docs/pdf/SKILL.md");
     write(&skill_md_path, skill_md("pdf"));
     check(&sandbox).code(0).stdout_eq("");
 
@@ -104,7 +104,7 @@ fn new_puts_a_skill_in_a_group_and_refuses_a_bad_or_taken_group() {
         &["new", "notes", "-d", "Take notes", "--group", "writing"],
     )
     .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(repo.join("skills/writing/notes/SKILL.md").is_file());
     assert_linked(&sandbox, "notes", "writing/notes");
     skiman(
@@ -168,7 +168,7 @@ fn new_puts_a_skill_in_a_group_and_refuses_a_bad_or_taken_group() {
 fn mv_moves_a_skill_between_groups_and_its_links_follow() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     skiman(
         &sandbox,
         &["new", "notes", "-d", "Take notes", "--group", "a"],
@@ -185,8 +185,8 @@ fn mv_moves_a_skill_between_groups_and_its_links_follow() {
     skiman(&sandbox, &["mv", "notes", "--group", "b"])
         .code(0)
         .stdout_eq(str![[r#"
-renamed [..]/skill-repo/skills/a/notes to [..]/skill-repo/skills/b/notes
-removed the empty group folder [..]/skill-repo/skills/a
+renamed [..]/canon/skills/a/notes to [..]/canon/skills/b/notes
+removed the empty group folder [..]/canon/skills/a
 ...
 "#]]);
     assert_eq!(tree(repo.join("skills/b/notes")), content);
@@ -229,7 +229,7 @@ removed the empty group folder [..]/skill-repo/skills/a
 fn mv_moves_a_skill_into_and_out_of_nested_groups() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     for (name, group) in [("notes", "a/b"), ("memo", "a")] {
         skiman(&sandbox, &["new", name, "-d", "d", "--group", group]).code(0);
     }
@@ -238,8 +238,8 @@ fn mv_moves_a_skill_into_and_out_of_nested_groups() {
     skiman(&sandbox, &["mv", "notes", "--group", "c/d"])
         .code(0)
         .stdout_eq(str![[r#"
-renamed [..]/skill-repo/skills/a/b/notes to [..]/skill-repo/skills/c/d/notes
-removed the empty group folder [..]/skill-repo/skills/a/b
+renamed [..]/canon/skills/a/b/notes to [..]/canon/skills/c/d/notes
+removed the empty group folder [..]/canon/skills/a/b
 ...
 "#]]);
     assert!(repo.join("skills/a/memo/SKILL.md").is_file());
@@ -248,9 +248,9 @@ removed the empty group folder [..]/skill-repo/skills/a/b
     skiman(&sandbox, &["mv", "notes", "--no-group"])
         .code(0)
         .stdout_eq(str![[r#"
-renamed [..]/skill-repo/skills/c/d/notes to [..]/skill-repo/skills/notes
-removed the empty group folder [..]/skill-repo/skills/c/d
-removed the empty group folder [..]/skill-repo/skills/c
+renamed [..]/canon/skills/c/d/notes to [..]/canon/skills/notes
+removed the empty group folder [..]/canon/skills/c/d
+removed the empty group folder [..]/canon/skills/c
 ...
 "#]]);
     assert!(!repo.join("skills/c").exists());
@@ -300,7 +300,7 @@ fn the_install_day_follows_a_move_to_another_group() {
 fn a_secret_exemption_names_the_skill_without_its_group() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(repo.join("skills/docs/pdf/SKILL.md"), skill_md("pdf"));
     let key = aws_key();
     write(
@@ -345,7 +345,7 @@ fn a_third_party_skill_in_a_group_is_listed_diffed_and_removed() {
         &["add", "acme/pdf", "--yes", "--group", "documents"],
     )
     .code(0);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert_linked(&sandbox, "pdf", "documents/pdf");
     write(repo.join("skills/documents/pdf/forms.md"), "b\n");
 
@@ -372,8 +372,8 @@ fn a_third_party_skill_in_a_group_is_listed_diffed_and_removed() {
         .code(0)
         .stderr_eq("")
         .stdout_eq(str![[r#"
-renamed [..]/skill-repo/skills/documents/pdf to [..]/skill-repo/skills/forms/pdf
-removed the empty group folder [..]/skill-repo/skills/documents
+renamed [..]/canon/skills/documents/pdf to [..]/canon/skills/forms/pdf
+removed the empty group folder [..]/canon/skills/documents
 retargeted [..]
 ...
 "#]]);
@@ -406,14 +406,14 @@ fn adopt_puts_the_copy_in_a_group() {
     .code(0);
     assert!(
         sandbox
-            .skill_repo()
+            .canon()
             .join("skills/writing/notes/SKILL.md")
             .is_file()
     );
     assert_linked(&sandbox, "notes", "writing/notes");
 }
 
-/// An import folder lays the skill repo out as it will be, group folders
+/// An import folder lays the canon out as it will be, group folders
 /// included; a name in two groups refuses the import.
 #[test]
 fn import_keeps_the_group_folders_and_refuses_a_name_in_two_groups() {
@@ -430,7 +430,7 @@ fn import_keeps_the_group_folders_and_refuses_a_name_in_two_groups() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     assert!(repo.join("skills/writing/notes/SKILL.md").is_file());
     assert!(repo.join("skills/pdf/SKILL.md").is_file());
     assert_linked(&sandbox, "notes", "writing/notes");

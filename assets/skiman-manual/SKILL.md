@@ -1,16 +1,18 @@
 ---
-name: managing-skills
-description: Where the user's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, or to import an existing setup.
+name: skiman-manual
+description: skiman's manual on where this machine's agent skills and global instructions live and how to change them with skiman. Use when asked to create, install, edit, update, remove, rename or disable a skill, to edit the global instructions (CLAUDE.md, AGENTS.md, GEMINI.md), to create a project AGENTS.md, CLAUDE.md, rules file or project skill, to register or remove a linked folder (skills kept outside the canon), or to import an existing setup.
 ---
 
-# Managing skills
+# skiman manual
 
-The skill repo is `{{SKILL_REPO}}`. It is a git repo that holds the canonical
-copy of every skill and of the global instructions. skiman distributes it to
-every agent tool: tool directories ({{TOOL_DIRECTORIES}}) and global
-instruction files ({{INSTRUCTION_FILES}}) hold links to the skill repo.
+The canon is `{{CANON}}`. It is the git repo that is the source of truth
+for this machine's agent setup: it holds every own and third-party skill and
+the global instructions, and it registers linked folders, which hold skills
+kept outside it. skiman distributes it to every agent tool: tool directories
+({{TOOL_DIRECTORIES}}) and global instruction files ({{INSTRUCTION_FILES}})
+hold links to the canon.
 
-## Skill repo layout
+## Canon layout
 
 - `skills/<group>/<name>/` or `skills/<name>/`: every skill. A folder
   under `skills/` without a `SKILL.md` that holds only folders is a group
@@ -23,19 +25,22 @@ instruction files ({{INSTRUCTION_FILES}}) hold links to the skill repo.
   writes it; leave its content as it is.
 - `instructions/shared.md`: the shared body of the global instructions, loaded
   by every agent tool.
-- `skiman.toml`: enabled agent tools, per-skill settings and sources. You may
-  edit it.
+- `skiman.toml`: enabled agent tools, per-skill settings and sources,
+  linked folders (`[linked.<id>]`) and project roots (`[projects.<id>]`).
+  You may edit it.
 - `skiman.lock`: the version each third-party skill is at. skiman writes it.
 - `projects/<root id>/`: the mirror of project instruction files and project
   skills under each project root (see below). skiman writes it.
+- `linked/<id>`: a link to a linked folder (see "Linked skills"). Git
+  ignores it.
 - `.skiman/`: machine-local; skiman's own.
 
 ## Rules for every operation
 
-- Make every change in the skill repo.
-  Never create a folder in a tool directory, and never edit what is there: a
-  new folder there is a foreign skill no agent tool shares, and an edit to a
-  copy there is lost from the skill repo.
+- Make every change in the canon; a linked skill is the one exception (see
+  "Linked skills"). Never create a folder in a tool directory, and never
+  edit what is there: a new folder there is a foreign skill no agent tool
+  shares, and an edit to a copy there is lost from the canon.
 - Pass flags so that skiman never prompts. Exit code 2 means a flag is
   missing; the message lists the flags to add.
 - Exit codes: 0 success; 1 refused (a rule violation or bad input, the message
@@ -45,20 +50,22 @@ instruction files ({{INSTRUCTION_FILES}}) hold links to the skill repo.
   ones it wrote.
 - A write command that stopped part-way (killed, or exit 4) finishes when
   you run the same command again. If running it again is refused because
-  its skill repo part is done, `skiman sync` finishes it. After an update
+  its canon part is done, `skiman sync` finishes it. After an update
   finished that way, look at the skill's diff before you commit it.
 - After editing files by hand, run `skiman check`. It reports every rule
   violation with file and line. A skill needs `SKILL.md` with YAML frontmatter
   from line 1 holding `name` (lowercase letters, digits and single hyphens, at
   most 64 characters, equal to the folder name) and `description` (1 to 1024
-  characters), and no symlinks or secrets inside.
+  characters), and no symlinks or secrets inside. While Antigravity is
+  enabled, it also warns about a body over 24000 bytes, which Antigravity
+  cuts without a message.
 
 ## Create a skill
 
 1. Run `skiman new <name> -d "<what it does and when to use it>" --group
-   <group>`. It creates `{{SKILL_REPO}}/skills/<group>/<name>/SKILL.md` and
-   links it into every agent tool. Pick a group the skill repo already has
-   (`ls {{SKILL_REPO}}/skills`); a new group needs the user's approval.
+   <group>`. It creates `{{CANON}}/skills/<group>/<name>/SKILL.md` and
+   links it into every agent tool. Pick a group the canon already has
+   (`ls {{CANON}}/skills`); a new group needs the user's approval.
    Without `--group` the skill sits in no group.
 2. Write the body in that `SKILL.md` below the frontmatter, and any further
    files in the same folder.
@@ -96,14 +103,47 @@ own git, so skiman never installs them (the file list marks them
 
 ## Edit a skill
 
-Edit the files in `{{SKILL_REPO}}/skills/<name>/`, for own and third-party
+Edit the files in `{{CANON}}/skills/<name>/`, for own and third-party
 skills alike. This is the canonical copy for every agent tool. Edits to a
 third-party skill are local modifications that updates keep; `skiman diff
-<name>` shows them.
+<name>` shows them. A linked skill is edited in its linked folder (see
+"Linked skills").
+
+## Linked skills
+
+A linked skill's folder is outside the canon, in a linked folder the user
+registered (`[linked.<id>]` in `skiman.toml`): one skill folder, or a folder
+whose child folders are skills. skiman links the folder's skills into every
+agent tool and never writes into the folder.
+
+- To change a linked skill, edit it in its linked folder. `skiman list`
+  shows each linked skill with its folder's id and path. An edit takes
+  effect without a sync.
+- The same files are also under `{{CANON}}/linked/<id>/`, a link to that
+  folder. Reading or editing them through that path may need the user's
+  approval, because their real path is outside the canon.
+- A search from the canon's top folder does not reach linked skills:
+  `linked/` holds only links, and git ignores it. To search a linked skill,
+  name its linked folder's path.
+- A linked skill's summary is `metadata.summary` in the frontmatter of its
+  own `SKILL.md`, not a `[skills.<name>]` table.
+- `skiman update`, `diff`, `remove` and `mv` refuse a name that is only a
+  linked skill, and name its linked folder. `skiman new`, `add`, `adopt`,
+  `import` and `mv` refuse to give a skill or a group folder a linked
+  skill's name; choose another name.
+- To register a folder, run `skiman linked add <path>`. The id is the
+  folder's name, or its parent's name for a folder called `skills`;
+  `--id <id>` sets another. It prints the folder's skills and, for each
+  skill without a summary, the lines to add.
+- To stop using a folder, run `skiman linked remove <id>`. It removes the
+  registration and every link to the folder's skills; the folder's content
+  stays.
+- To move a folder, the user moves it and changes its `path` line in
+  `skiman.toml`; then run `skiman sync`.
 
 ## Edit the global instructions
 
-Edit the shared body in `{{SKILL_REPO}}/instructions/shared.md`. Every agent
+Edit the shared body in `{{CANON}}/instructions/shared.md`. Every agent
 tool loads it at its next session. Write the text itself: a word starting with
 `@` outside code (a file import) is a rule violation. `skiman check` also
 reports the size limit of the enabled agent tools.
@@ -114,10 +154,10 @@ reports the size limit of the enabled agent tools.
    With a single name, `--ref <branch|tag|commit>` switches what it follows.
    `--dry-run` first shows each new version, the files it would change
    (scripts and executables flagged) and any conflicts, and changes nothing
-   in the skill repo; show that to the user before updating a skill they
+   in the canon; show that to the user before updating a skill they
    have not reviewed.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
-   it in `{{SKILL_REPO}}/skills/<name>/`:
+   it in `{{CANON}}/skills/<name>/`:
    - Text between `<<<<<<< local (skiman)`, `=======` and
      `>>>>>>> upstream (skiman)`: write the wanted text and delete the three
      marker lines.
@@ -132,7 +172,7 @@ reports the size limit of the enabled agent tools.
 
 ## Describe a skill
 
-A skill's `[skills.<name>]` table in `{{SKILL_REPO}}/skiman.toml` tells a
+A skill's `[skills.<name>]` table in `{{CANON}}/skiman.toml` tells a
 person what the skill is; `skiman overview` shows it. Every value is one line.
 
 ```toml
@@ -161,7 +201,7 @@ installed = 2026-01-31           # optional: the day it was installed
 - Move to another group: `skiman mv <name> --group <group>` (`--no-group`
   takes it out of its group). It renames only the folder; the links follow.
   A group folder left empty is removed.
-- Disable: in `{{SKILL_REPO}}/skiman.toml`, set `enabled = false` in the
+- Disable: in `{{CANON}}/skiman.toml`, set `enabled = false` in the
   skill's `[skills.<name>]` table, then run `skiman sync`. Delete the line to
   enable it again.
 
@@ -171,7 +211,7 @@ The user registers project roots (`[projects.<id>]` in `skiman.toml`).
 Under them, project instruction files ({{PROJECT_INSTRUCTION_FILES}}) and
 project skills (a folder in {{PROJECT_SKILL_DIRS}}) stay real files in the
 project.
-skiman keeps a copy of each in `{{SKILL_REPO}}/projects/<id>/<same path>` and
+skiman keeps a copy of each in `{{CANON}}/projects/<id>/<same path>` and
 copies every change made in the project into it at each sync.
 
 - Edit project items in place, in the project folder. Never edit the copy
@@ -192,15 +232,18 @@ copies every change made in the project into it at each sync.
 
 ## Import an existing setup
 
-Run `skiman import --guide` and follow the guide it prints. The skill repo
+Run `skiman import --guide` and follow the guide it prints. The canon
 may hold only skills the import folder holds too, with the same content.
 
 ## See the state
 
-- `skiman list`: every skill with its kind, source, version, local
-  modifications, conflicts and whether it is enabled.
+- `skiman list`: every skill with its kind (own, third-party or linked),
+  source, version, local modifications, conflicts and whether it is
+  enabled. For a linked skill the source is its linked folder's id and
+  path.
 - `skiman overview`: every skill on this machine as Markdown, by group, with
-  its summary, source and install day; then the skills other managers keep
+  its summary, source and install day, and each linked folder as one
+  section; then the skills other managers keep
   (plugins, claude.ai sync, the tools' own), which skiman never changes.
-- `skiman doctor`: locations, hooks, foreign skills, occupied paths, project
-  roots and items, and other problems.
+- `skiman doctor`: locations, hooks, foreign skills, occupied paths, linked
+  folders, project roots and items, and other problems.

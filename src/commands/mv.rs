@@ -16,6 +16,8 @@ use std::path::PathBuf;
 
 use crate::Exit;
 use crate::backup::Backups;
+use crate::canon::Canon;
+use crate::canon_lock::CanonLock;
 use crate::change::{Change, Want};
 use crate::commands::remove::check_single_name;
 use crate::failure::{Failure, finish};
@@ -25,8 +27,6 @@ use crate::lockfile::{self, Lockfile};
 use crate::manifest::{self, Manifest};
 use crate::names;
 use crate::paths::Paths;
-use crate::repo::SkillRepo;
-use crate::repo_lock::RepoLock;
 use crate::rules::{self, Scope};
 use crate::skill_md::SkillMd;
 use crate::sync::{self, Output};
@@ -49,11 +49,11 @@ pub fn run(old: &str, new: Option<&str>, to: To) -> Exit {
 
 fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     let paths = Paths::from_env()?;
-    let repo = SkillRepo::from_config(&paths)?;
+    let repo = Canon::from_config(&paths)?;
     check_single_name(old)?;
     names::check_new_name(new)?;
 
-    let lock = RepoLock::wait(&paths, &repo)?;
+    let lock = CanonLock::wait(&paths, &repo)?;
     let layout = repo.layout()?;
     let folder = |name: &str| {
         let placed = layout.find(name)?;
@@ -64,20 +64,21 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     let Some(from) = folder(old) else {
         let done = match folder(new) {
             Some(placed) if new != old => format!(
-                "; {} is a skill folder: if `skiman mv {old} {new}` stopped part-way, it got through the skill repo, and `skiman sync` finishes the rest",
+                "; {} is a skill folder: if `skiman mv {old} {new}` stopped part-way, it got through the canon, and `skiman sync` finishes the rest",
                 placed.path()
             ),
             _ => String::new(),
         };
-        return Err(Failure::refused(format!(
-            "{} is not a skill folder{done}",
-            layout.path(old)
-        )));
+        let why = match names::edited_elsewhere(&paths, &repo, &Manifest::load(&repo)?, old) {
+            Some((why, _)) => why,
+            None => format!("{} is not a skill folder", layout.path(old)),
+        };
+        return Err(Failure::refused(format!("{why}{done}")));
     };
     let group = match &to_arg {
         To::Same => from.group.clone(),
         To::Group(group) => {
-            names::check_group(group, new, &layout)?;
+            names::check_group(&paths, &repo, group, new)?;
             Some(group.clone())
         }
         To::NoGroup => None,
@@ -87,16 +88,17 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
         // `mv pdf pdf` names a taken name; a move to the group it is in
         // finishes a move that is done but not yet synced.
         if to_arg == To::Same {
-            names::check_not_taken(&repo, new, |_| Ok(false))?;
+            names::check_not_taken(&paths, &repo, new, |_| Ok(false))?;
         }
         out!("{to} is already in place");
         return Ok(sync::run(&paths, &repo, &lock, Output::Normal));
     }
     if new != old {
         if half_renamed(&repo, &from, old, new)? {
+            names::check_not_linked(&paths, &repo, new)?;
             out!("{from}/SKILL.md already names `{new}`: finishing the rename");
         } else {
-            names::check_not_taken(&repo, new, |_| Ok(false))?;
+            names::check_not_taken(&paths, &repo, new, |_| Ok(false))?;
         }
     }
     let plan = Plan::build(&repo, old, new, from, to)?;
@@ -107,12 +109,12 @@ fn mv(old: &str, new: &str, to_arg: To) -> Result<Exit, Failure> {
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 
-/// Whether the skill repo is where a rename of `old` (in the skill folder
+/// Whether the canon is where a rename of `old` (in the skill folder
 /// `from`) to `new` stopped part-way: `from/SKILL.md` names `new` (the first
 /// thing mv writes), no skill folder of `new` is there (the last), and each
 /// of the `skiman.toml` table, the lock entry and `upstream/` has one of the
 /// two names at most (each is written in one step).
-fn half_renamed(repo: &SkillRepo, from: &str, old: &str, new: &str) -> Result<bool, Failure> {
+fn half_renamed(repo: &Canon, from: &str, old: &str, new: &str) -> Result<bool, Failure> {
     let (manifest, lock) = (
         Manifest::load(repo)?.skills(),
         Lockfile::load(repo)?.skill_names(),
@@ -146,7 +148,7 @@ struct Plan {
 
 impl Plan {
     fn build(
-        repo: &SkillRepo,
+        repo: &Canon,
         old: &str,
         new: &str,
         from: String,
@@ -198,12 +200,11 @@ impl Plan {
     }
 
     /// Moved content is checked only for the name rules of the new name
-    /// (done before), so nothing here blocks; every violation of the skill
-    /// repo as it will be is printed as a warning.
-    fn validate(&self, repo: &SkillRepo) -> Result<(), Failure> {
+    /// (done before), so nothing here blocks; every violation of the canon
+    /// as it will be is printed as a warning.
+    fn validate(&self, repo: &Canon) -> Result<(), Failure> {
         let working_tree = WorkingTree::new(repo.root());
-        let io =
-            |e: std::io::Error| Failure::operational(format!("cannot read the skill repo: {e}"));
+        let io = |e: std::io::Error| Failure::operational(format!("cannot read the canon: {e}"));
         let mut files = Vec::new();
         let mut executable = BTreeSet::new();
         let upstream = |name: &str| format!("upstream/{name}");

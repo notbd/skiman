@@ -3,14 +3,15 @@
 //!
 //! Entry points:
 //! - [`check_all`]: every rule on a whole [`Tree`] (the warnings a write
-//!   command prints); [`check_repo`] adds the unused secret exemptions
+//!   command prints); [`check_canon`] adds the unused secret exemptions
 //!   (`skiman check`).
 //! - [`check`]: only what a [`Scope`] names: what a write command writes.
 //! - [`allow_hint`]: the ready-to-paste `[[secrets.allow]]` entries for the
 //!   secret violations in a list.
 //!
 //! [`warnings_all`] returns what is printed as a warning but never fails:
-//! the shared body at 80 % of its size limit. [`missing_info`] returns the
+//! the shared body at 80 % of its size limit, and a skill body that an
+//! enabled tool cuts. [`missing_info`] returns the
 //! skills without a summary, group folder or origin, which only `skiman check`
 //! prints (every write command prints [`warnings_all`]).
 //!
@@ -24,6 +25,7 @@ mod project;
 mod secrets;
 mod shared_body;
 mod skill;
+pub mod skill_body;
 mod skill_info;
 
 use std::collections::BTreeSet;
@@ -77,6 +79,11 @@ pub mod rule {
     /// A skill without a summary, group folder or origin: a warning that only
     /// `skiman check` prints, never a violation.
     pub const SKILL_INFO: &str = "skill-info";
+    /// `linked` or a path under it in the git index (`skiman check` only).
+    pub const LINKED_TRACKED: &str = "linked-tracked";
+    /// A skill body that an enabled tool cuts without a message: a warning,
+    /// never a violation.
+    pub const SKILL_BODY_SIZE: &str = "skill-body-size";
 }
 
 /// The frontmatter rules on a skill's `SKILL.md`.
@@ -107,7 +114,7 @@ pub const LIMITS: Limits = Limits {
 /// One rule violation. Printed as `<path>[:<line>]: <rule>: <message>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Violation {
-    /// Relative to the skill repo root.
+    /// Relative to the canon root.
     pub path: String,
     /// 1-based line, where a line applies.
     pub line: Option<usize>,
@@ -251,7 +258,7 @@ impl Scope {
     }
 }
 
-/// Every top-level path of the skill repo that the rules read: everything
+/// Every top-level path of the canon that the rules read: everything
 /// [`Scope::all`] names lives below one of them.
 pub const TOP_LEVEL_PATHS: [&str; 6] = [
     MANIFEST,
@@ -329,7 +336,7 @@ impl fmt::Display for UnusedAllow {
 }
 
 /// Every rule on everything in `tree`, plus the unused secret exemptions.
-pub fn check_repo(tree: &dyn Tree) -> io::Result<Report> {
+pub fn check_canon(tree: &dyn Tree) -> io::Result<Report> {
     let (violations, found, records) = run(tree, &Scope::all(tree)?)?;
     let unused_allows = records
         .secret_allows()
@@ -441,7 +448,9 @@ pub fn allow_hint(violations: &[Violation]) -> Option<String> {
 /// Warnings on everything in `tree`, sorted by path and line.
 pub fn warnings_all(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
     let mut out = BTreeSet::new();
-    shared_body::warnings(tree, &config::Records::read(tree)?, &mut out)?;
+    let records = config::Records::read(tree)?;
+    shared_body::warnings(tree, &records, &mut out)?;
+    skill_body::warnings(tree, &records, &mut out)?;
     Ok(out.into_iter().collect())
 }
 
@@ -462,7 +471,7 @@ pub fn validate_write(tree: &dyn Tree, scope: &Scope) -> Result<(), Failure> {
 }
 
 fn unreadable(e: io::Error) -> Failure {
-    Failure::operational(format!("cannot read the skill repo: {e}"))
+    Failure::operational(format!("cannot read the canon: {e}"))
 }
 
 /// The refusing half of [`validate_write`], without the violations

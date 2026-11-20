@@ -1,4 +1,4 @@
-//! Git hooks of the skill repo: `init` installs them, pre-commit checks the
+//! Git hooks of the canon: `init` installs them, pre-commit checks the
 //! staged snapshot, the post hooks distribute. Every hook here is a real git
 //! hook fired by real git commands in the sandbox.
 
@@ -9,21 +9,18 @@ use snapbox::str;
 
 use crate::support::{PDF_SKILL_MD, Sandbox, Tool, Upstream, assert_symlink, init, skill_md};
 
-/// git in the skill repo with a commit identity; the caller asserts the outcome.
+/// git in the canon with a commit identity; the caller asserts the outcome.
 fn git(sandbox: &Sandbox) -> Command {
-    sandbox
-        .command("git")
-        .current_dir(sandbox.skill_repo())
-        .args([
-            "-c",
-            "user.name=Test User",
-            "-c",
-            "user.email=user@example.test",
-        ])
+    sandbox.command("git").current_dir(sandbox.canon()).args([
+        "-c",
+        "user.name=Test User",
+        "-c",
+        "user.email=user@example.test",
+    ])
 }
 
 fn write(sandbox: &Sandbox, rel: &str, contents: &str) -> PathBuf {
-    let path = sandbox.skill_repo().join(rel);
+    let path = sandbox.canon().join(rel);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, contents).unwrap();
     path
@@ -31,7 +28,7 @@ fn write(sandbox: &Sandbox, rel: &str, contents: &str) -> PathBuf {
 
 /// Stages everything and commits; asserts that git (and so pre-commit) succeeded.
 fn commit_all(sandbox: &Sandbox, message: &str) {
-    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
     git(sandbox)
         .args(["commit", "--quiet", "-m", message])
         .assert()
@@ -43,7 +40,7 @@ fn link(sandbox: &Sandbox, tool: Tool, name: &str) -> PathBuf {
 }
 
 fn assert_linked(sandbox: &Sandbox, name: &str) {
-    let target = sandbox.skill_repo().join("skills").join(name);
+    let target = sandbox.canon().join("skills").join(name);
     for tool in Tool::ALL {
         assert_symlink(link(sandbox, tool, name), &target, &target);
     }
@@ -61,7 +58,7 @@ fn assert_not_linked(sandbox: &Sandbox, name: &str) {
 }
 
 fn hooks_dir(sandbox: &Sandbox) -> PathBuf {
-    sandbox.skill_repo().join(".git/hooks")
+    sandbox.canon().join(".git/hooks")
 }
 
 #[test]
@@ -81,7 +78,7 @@ fn checking_out_a_branch_without_the_skill_removes_its_links() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    sandbox.git(sandbox.skill_repo(), ["branch", "without-pdf"]);
+    sandbox.git(sandbox.canon(), ["branch", "without-pdf"]);
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     commit_all(&sandbox, "add pdf");
     assert_linked(&sandbox, "pdf");
@@ -99,7 +96,7 @@ fn a_merge_distributes_the_merged_skills() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(&repo, ["switch", "--quiet", "-c", "feature"]);
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     commit_all(&sandbox, "add pdf");
@@ -122,7 +119,7 @@ fn a_rebase_distributes_the_rebased_skills() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(&repo, ["switch", "--quiet", "-c", "feature"]);
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     commit_all(&sandbox, "add pdf");
@@ -168,7 +165,7 @@ fn a_commit_whose_staged_snapshot_breaks_a_rule_is_rejected_though_the_working_t
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
     sandbox.git(&repo, ["add", "--all"]);
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
@@ -182,11 +179,11 @@ skills/pdf/SKILL.md:[..]: required-field: [..]
 
 The report above is about the staged snapshot (the git index), not about your files: the working tree passes every rule. Stage these paths with this line, then commit again:
 
-  git -C '[..]/skill-repo' add -A -- skiman.toml skills instructions
+  git -C '[..]/canon' add -A -- skiman.toml skills instructions
 
 It stages every change under these paths; to commit only some of them, stage those yourself. If the commit is still rejected, read the new report. Common causes:
-  - an ignore rule hides a file: see `git -C '[..]/skill-repo' status --ignored -- skiman.toml skills instructions`
-  - a skill folder holds its own .git, so git records it as a single entry of mode 160000: see `git -C '[..]/skill-repo' ls-files -s -- skiman.toml skills instructions`
+  - an ignore rule hides a file: see `git -C '[..]/canon' status --ignored -- skiman.toml skills instructions`
+  - a skill folder holds its own .git, so git records it as a single entry of mode 160000: see `git -C '[..]/canon' ls-files -s -- skiman.toml skills instructions`
   - line-ending conversion or a filter changed the content (core.autocrlf, .gitattributes)
 
 "#]])
@@ -212,7 +209,7 @@ It stages every change under these paths; to commit only some of them, stage tho
 fn a_commit_whose_staged_snapshot_is_valid_is_accepted_though_the_working_tree_is_broken() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     sandbox.git(&repo, ["add", "--all"]);
     write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
@@ -239,7 +236,7 @@ fn a_commit_that_stages_a_skiman_conflict_marker_is_rejected() {
         "skills/pdf/notes.md",
         "<<<<<<< local (skiman)\nmine\n=======\ntheirs\n>>>>>>> upstream (skiman)\n",
     );
-    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
 
     git(&sandbox)
         .args(["commit", "--quiet", "-m", "add pdf"])
@@ -257,7 +254,7 @@ fn a_commit_of_named_paths_is_checked_as_it_will_be_recorded() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     sandbox.git(&repo, ["add", "--all"]);
     write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
@@ -289,7 +286,7 @@ fn init_through_removable_binary(sandbox: &Sandbox) -> PathBuf {
     sandbox
         .command(&bin)
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0);
     bin
@@ -300,7 +297,7 @@ fn with_the_recorded_binary_missing_pre_commit_rejects_and_the_post_hooks_exit_0
     let sandbox = Sandbox::new();
     let bin = init_through_removable_binary(&sandbox);
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
-    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
     std::fs::remove_file(&bin).unwrap();
 
     git(&sandbox)
@@ -308,7 +305,7 @@ fn with_the_recorded_binary_missing_pre_commit_rejects_and_the_post_hooks_exit_0
         .assert()
         .code(1)
         .stderr_eq(str![[r#"
-skiman: [..]/bin/skiman does not exist, so the commit is rejected; install skiman, then run `skiman init <skill repo>` again
+skiman: [..]/bin/skiman does not exist, so the commit is rejected; install skiman, then run `skiman init <canon>` again
 
 "#]]);
 
@@ -319,7 +316,7 @@ skiman: [..]/bin/skiman does not exist, so the commit is rejected; install skima
             .code(0)
             .stdout_eq("")
             .stderr_eq(str![[r#"
-skiman: [..]/bin/skiman does not exist, so the agent tools were not updated; install skiman, then run `skiman init <skill repo>` again
+skiman: [..]/bin/skiman does not exist, so the agent tools were not updated; install skiman, then run `skiman init <canon>` again
 
 "#]]);
     }
@@ -367,11 +364,11 @@ fn init_leaves_a_pre_commit_hook_that_is_not_skimans_byte_identical_and_prints_t
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0)
         .stderr_eq(str![[r#"
-warning: [..]/skill-repo/.git/hooks/pre-commit is not skiman's git hook, so skiman left it unchanged; add this line to it:
+warning: [..]/canon/.git/hooks/pre-commit is not skiman's git hook, so skiman left it unchanged; add this line to it:
   '[..]/skiman' check --staged || exit 1
 
 "#]]);
@@ -388,7 +385,7 @@ fn init_writes_no_hook_when_core_hooks_path_points_elsewhere_and_prints_the_line
     let foreign = b"#!/bin/sh\nexit 0\n";
     std::fs::write(elsewhere.join("pre-commit"), foreign).unwrap();
     sandbox.git(
-        sandbox.skill_repo(),
+        sandbox.canon(),
         ["config", "core.hooksPath", elsewhere.to_str().unwrap()],
     );
     let own_hooks = crate::support::tree(hooks_dir(&sandbox));
@@ -396,7 +393,7 @@ fn init_writes_no_hook_when_core_hooks_path_points_elsewhere_and_prints_the_line
     sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.skill_repo())
+        .arg(sandbox.canon())
         .assert()
         .code(0)
         .stdout_eq("")
@@ -428,7 +425,7 @@ warning: core.hooksPath points to [..]/shared-hooks, so skiman installed no git 
 fn check_staged_outside_a_git_repo_is_an_operational_error() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    std::fs::remove_dir_all(sandbox.skill_repo().join(".git")).unwrap();
+    std::fs::remove_dir_all(sandbox.canon().join(".git")).unwrap();
 
     sandbox
         .skiman()
@@ -437,16 +434,16 @@ fn check_staged_outside_a_git_repo_is_an_operational_error() {
         .code(4)
         .stdout_eq("")
         .stderr_eq(str![[r#"
-error: cannot read the staged snapshot of [..]/skill-repo: git ls-files failed: fatal: not a git repository[..]
+error: cannot read the staged snapshot of [..]/canon: git ls-files failed: fatal: not a git repository[..]
 
 "#]]);
 }
 
-/// After `init` switches to another skill repo, the previous repo keeps
-/// skiman's hooks; its commits are not checked against the new skill repo.
+/// After `init` switches to another canon, the previous repo keeps
+/// skiman's hooks; its commits are not checked against the new canon.
 /// (git sends a hook's stdout to stderr.)
 #[test]
-fn a_commit_in_a_previous_skill_repo_is_not_blocked_by_its_leftover_hook() {
+fn a_commit_in_a_previous_canon_is_not_blocked_by_its_leftover_hook() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let second = sandbox.root().join("second-repo");
@@ -457,18 +454,18 @@ fn a_commit_in_a_previous_skill_repo_is_not_blocked_by_its_leftover_hook() {
         .assert()
         .code(0);
     write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
-    sandbox.git(sandbox.skill_repo(), ["add", "--all"]);
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
 
     git(&sandbox)
         .args(["commit", "--quiet", "-m", "in the old repo"])
         .assert()
         .success()
         .stderr_eq(str![[r#"
-skiman: [..]/skill-repo is not the skill repo ([..]/second-repo), so its skiman pre-commit hook checks nothing
+skiman: [..]/canon is not the canon ([..]/second-repo), so its skiman pre-commit hook checks nothing
 ...
 "#]]);
     assert_eq!(
-        sandbox.git(sandbox.skill_repo(), ["log", "--format=%s"]),
+        sandbox.git(sandbox.canon(), ["log", "--format=%s"]),
         "in the old repo"
     );
 }
@@ -497,7 +494,7 @@ fn rejected(commit: Command) -> String {
     String::from_utf8(output.stderr).unwrap()
 }
 
-/// The printed line that stages the skill repo's paths.
+/// The printed line that stages the canon's paths.
 #[track_caller]
 fn stage_line(stderr: &str) -> String {
     stderr
@@ -534,10 +531,7 @@ fn stage_as_printed_and_commit(sandbox: &Sandbox, stderr: &str, dir: impl AsRef<
 }
 
 fn committed_files(sandbox: &Sandbox) -> String {
-    sandbox.git(
-        sandbox.skill_repo(),
-        ["ls-tree", "-r", "--name-only", "HEAD"],
-    )
+    sandbox.git(sandbox.canon(), ["ls-tree", "-r", "--name-only", "HEAD"])
 }
 
 /// `add` after a first commit, then `git commit -am`, which leaves the new
@@ -568,20 +562,17 @@ fn after_add_and_commit_am_the_printed_line_stages_the_new_skill_for_a_plain_com
     let sandbox = Sandbox::new();
     let stderr = add_then_commit_am(&sandbox);
 
-    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.skill_repo());
+    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.canon());
 
     assert_pdf_committed(&sandbox);
 }
 
 #[test]
-fn the_printed_line_does_the_same_from_a_skill_folder_and_from_outside_the_skill_repo() {
+fn the_printed_line_does_the_same_from_a_skill_folder_and_from_outside_the_canon() {
     for dir in [Some("skills/pdf"), None] {
         let sandbox = Sandbox::new();
         let stderr = add_then_commit_am(&sandbox);
-        let dir = dir.map_or_else(
-            || sandbox.root().to_owned(),
-            |d| sandbox.skill_repo().join(d),
-        );
+        let dir = dir.map_or_else(|| sandbox.root().to_owned(), |d| sandbox.canon().join(d));
 
         stage_as_printed_and_commit(&sandbox, &stderr, &dir);
 
@@ -595,10 +586,10 @@ fn after_the_first_add_with_only_the_skill_folders_staged_the_printed_line_stage
     init(&sandbox);
     commit_all(&sandbox, "layout");
     add_pdf(&sandbox);
-    sandbox.git(sandbox.skill_repo(), ["add", "skills/pdf", "upstream/pdf"]);
+    sandbox.git(sandbox.canon(), ["add", "skills/pdf", "upstream/pdf"]);
 
     let stderr = rejected(git(&sandbox).args(["commit", "--quiet", "-m", "add pdf"]));
-    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.skill_repo());
+    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.canon());
 
     assert_pdf_committed(&sandbox);
 }
@@ -615,7 +606,7 @@ fn after_an_update_adds_a_file_and_commit_am_the_printed_line_stages_it() {
 
     let stderr = rejected(git(&sandbox).args(["commit", "--quiet", "-am", "update pdf"]));
     assert!(stderr.contains("snapshot-hash"), "{stderr}");
-    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.skill_repo());
+    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.canon());
 
     let files = committed_files(&sandbox);
     for path in ["skills/pdf/forms.md", "upstream/pdf/forms.md"] {
@@ -628,7 +619,7 @@ fn a_secret_staged_in_the_shared_body_but_fixed_on_disk_is_staged_away_with_the_
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     let shared = std::fs::read_to_string(repo.join("instructions/shared.md")).unwrap();
     let key = ["AK", "IA", "Q2W3E4R5T6Y7U8I9"].concat();
     write(
@@ -661,7 +652,7 @@ fn a_symlink_staged_in_a_new_skill_and_deleted_in_the_working_tree_is_staged_awa
     let sandbox = Sandbox::new();
     init(&sandbox);
     commit_all(&sandbox, "layout");
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     std::os::unix::fs::symlink("SKILL.md", repo.join("skills/pdf/link.md")).unwrap();
     sandbox.git(&repo, ["add", "--all"]);
@@ -701,14 +692,14 @@ fn after_the_last_project_is_ejected_the_printed_line_stages_the_mirror_deletion
         .arg(&project)
         .assert()
         .code(0);
-    assert!(!sandbox.skill_repo().join("projects").exists());
+    assert!(!sandbox.canon().join("projects").exists());
     add_pdf(&sandbox);
 
     // `git commit -a` checks a temporary index that no longer has
     // `projects/`; the line must still name it, or the deletion stays unstaged.
     let stderr = rejected(git(&sandbox).args(["commit", "--quiet", "-am", "add pdf"]));
     assert!(stage_line(&stderr).ends_with(" projects"), "{stderr}");
-    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.skill_repo());
+    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.canon());
 
     assert_pdf_committed(&sandbox);
     assert!(!committed_files(&sandbox).contains("projects/"));
@@ -720,7 +711,7 @@ fn no_line_is_printed_when_the_working_tree_breaks_the_rules_too() {
     init(&sandbox);
     add_pdf(&sandbox);
     commit_all(&sandbox, "add pdf");
-    std::fs::remove_dir_all(sandbox.skill_repo().join("skills/pdf")).unwrap();
+    std::fs::remove_dir_all(sandbox.canon().join("skills/pdf")).unwrap();
 
     let stderr = rejected(git(&sandbox).args(["commit", "--quiet", "-am", "drop pdf"]));
 
@@ -732,7 +723,7 @@ fn no_line_is_printed_when_the_working_tree_breaks_the_rules_too() {
 fn the_printed_line_cannot_stage_what_a_clean_filter_breaks_so_the_commit_is_rejected_again() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    let repo = sandbox.skill_repo();
+    let repo = sandbox.canon();
     sandbox.git(
         &repo,
         ["config", "filter.strip.clean", "sed /^description:/d"],

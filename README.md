@@ -210,6 +210,24 @@ Without a terminal, every flag that would otherwise be asked for is required
 (exit 2). Exit codes: 0 success, 1 rule violation or refused input, 2 usage
 error, 3 needs attention, 4 operational error.
 
+### What skiman keeps on each machine
+
+Outside the canon, in `${XDG_STATE_HOME:-~/.local/state}/skiman/`:
+
+- `backups/<timestamp>/`: what one command replaced or removed. skiman
+  never deletes what a backup holds, and each project edit that sync
+  copies into the mirror adds one, so delete old ones by hand.
+- `cache/`: one bare git repo per upstream URL, holding every commit `add`,
+  `update` and `import` fetched, whole even when the source names one
+  folder of the repo. Nothing prunes it; delete `cache/` to free the
+  space, and the next command that needs a commit fetches it again.
+
+`skiman add`, `skiman update` and `skiman import` read a local source
+folder as it is at that moment. A program that changes the folder while
+skiman reads it, say by replacing a file with a symlink, can make skiman
+copy a file from outside it, so add or import only from folders you
+trust.
+
 ### Codex and Antigravity
 
 skiman adds no session-start hook for Codex yet: Codex runs only the hooks
@@ -256,3 +274,27 @@ Evidence: [docs/project-scope-evidence.md](docs/project-scope-evidence.md).
 
    Or run `skiman init <path> --session-hooks none` on a real canon path,
    then `skiman doctor`.
+
+## Uninstall
+
+1. Set `enabled = []` under `[tools]` in the canon's `skiman.toml`, then run
+   `skiman sync`: it removes every link it made in the tool directories and
+   instruction locations. Do not commit this edit while other machines use
+   the canon: their next sync would remove their links too.
+2. Run `skiman init <canon> --session-hooks none` to remove the
+   session-start hooks.
+3. Step 1 removed every link, so copy back what you still want:
+   `instructions/shared.md` to each instruction location (such as
+   `~/.claude/CLAUDE.md`), and the folder of each skill under `skills/`
+   into the tool directories (such as `~/.claude/skills/<name>`).
+4. Delete the git hooks skiman installed in the canon, the files that
+   `grep -l 'Managed by skiman' <canon>/.git/hooks/*` lists. Without
+   skiman, its pre-commit hook refuses every commit.
+5. Delete `${XDG_CONFIG_HOME:-~/.config}/skiman/`, and
+   `${XDG_STATE_HOME:-~/.local/state}/skiman/` once you no longer need its
+   backups.
+6. Run `cargo uninstall skiman`.
+7. In the canon, run `git restore skiman.toml` to drop the edit of step 1.
+
+Project files and linked folders stay as they are, and the canon stays a
+plain git repo.

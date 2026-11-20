@@ -275,9 +275,6 @@ pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exi
 pub struct PreviousCanon {
     /// Its realpath: skiman's links into it count as owned for one sync.
     pub root: PathBuf,
-    /// Its registrations, when its `skiman.toml` can be read: they guard
-    /// every write that sync makes.
-    pub linked: Option<Linked>,
 }
 
 /// [`run`], also returning the report, after `init` switched away from
@@ -294,8 +291,7 @@ pub fn run_with(
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let linked = Linked::read(paths.home(), repo, &manifest)
-                .guarding_also(previous.and_then(|p| p.linked.as_ref()));
+            let linked = Linked::read(paths.home(), repo, &manifest);
             let previous_canon = previous.map(|p| p.root.clone());
             let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
             crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);

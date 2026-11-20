@@ -47,6 +47,7 @@ const ANOTHER_MANAGER: &str = "another manager";
 
 pub fn find(paths: &Paths, repo: &Canon) -> Found {
     let home = paths.home();
+    let ownership = Ownership::new(paths, repo, None);
     let mut found = Collected::default();
     let present = || TOOLS.iter().filter(|tool| tool.is_present(home));
     for tool in present() {
@@ -60,7 +61,8 @@ pub fn find(paths: &Paths, repo: &Canon) -> Found {
                 SkillsElsewhere::ClaudePlugins { registry, settings } => {
                     let turned_off = turned_off_plugins(&home.join(settings));
                     let registry = home.join(registry);
-                    for skill in plugin_skills(&registry, &turned_off, &mut found.notes) {
+                    for skill in plugin_skills(&registry, &turned_off, &ownership, &mut found.notes)
+                    {
                         let name = skill.name.as_deref();
                         found.add(&skill.folder, name, &skill.owner, tool.id, false);
                     }
@@ -74,7 +76,6 @@ pub fn find(paths: &Paths, repo: &Canon) -> Found {
             ));
         }
     }
-    let ownership = Ownership::new(paths, repo, None);
     for tool in present() {
         let Ok(real_dir) = tool.tool_dir(home).canonicalize() else {
             continue;
@@ -208,9 +209,16 @@ struct PluginSkill {
 /// Every skill of every plugin in Claude Code's
 /// plugin registry (`installed_plugins.json`, version 2). A missing registry
 /// lists nothing; what cannot be read adds a note, and the rest is listed.
+/// A plugin is listed when its `installPath`, as registered, is in the
+/// registry's own folder (where Claude Code installs, even when a link on
+/// the way, such as a moved cache, leads elsewhere), or when its realpath
+/// is in a folder `ownership` leaves to other managers. Any other plugin
+/// is a note: sync takes a link to one of its skills for one skiman did
+/// not make, and so does the overview.
 fn plugin_skills(
     registry: &Path,
     turned_off: &[String],
+    ownership: &Ownership,
     notes: &mut Vec<String>,
 ) -> Vec<PluginSkill> {
     let text = match std::fs::read(registry) {
@@ -261,11 +269,32 @@ fn plugin_skills(
             {
                 owner.push_str(&format!(" ({scope} scope)"));
             }
-            if turned_off.contains(plugin) {
+            let off = turned_off.contains(plugin);
+            if off {
                 owner.push_str(" (disabled)");
             }
-            let (folders, problems) = plugin_skill_folders(Path::new(dir));
             let root = Path::new(dir).canonicalize().ok();
+            let in_registry = registry
+                .parent()
+                .is_some_and(|p| Path::new(dir).starts_with(p));
+            // A missing folder gets its own note from `plugin_skill_folders`.
+            if let Some(real) = root
+                .as_ref()
+                .filter(|r| !in_registry && !ownership.is_under_managed_dir(r))
+            {
+                let read = if off {
+                    ""
+                } else {
+                    ", and Claude Code still reads them"
+                };
+                // The realpath: `installPath` can lead out through a link.
+                notes.push(format!(
+                    "{owner} is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed{read}.",
+                    real.display()
+                ));
+                continue;
+            }
+            let (folders, problems) = plugin_skill_folders(Path::new(dir));
             let plugin_name = plugin.split('@').next().unwrap_or(plugin);
             skills.extend(folders.into_iter().map(|folder| PluginSkill {
                 name: (Some(&folder) == root.as_ref()).then(|| plugin_name.to_owned()),

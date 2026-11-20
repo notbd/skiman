@@ -111,7 +111,7 @@ impl Ownership {
         } else {
             path.clone()
         };
-        if self.managed_under.iter().any(|dir| real.starts_with(dir)) {
+        if self.is_under_managed_dir(&real) {
             return Entry::ManagedElsewhere;
         }
         if name.as_encoded_bytes().starts_with(b".") || !real.is_dir() {
@@ -125,6 +125,14 @@ impl Ownership {
         } else {
             Entry::NotASkill
         }
+    }
+
+    /// Whether the realpath `real` lies under a directory whose content is
+    /// managed elsewhere ([`ManagedElsewhere::RealpathUnder`]): sync leaves
+    /// an entry that resolves there alone, and `overview` lists a plugin
+    /// installed there (or registered in its registry's folder).
+    pub fn is_under_managed_dir(&self, real: &Path) -> bool {
+        self.managed_under.iter().any(|dir| real.starts_with(dir))
     }
 
     /// The normalised target of the instruction location `location` (the

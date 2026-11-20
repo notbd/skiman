@@ -6,7 +6,7 @@ use std::path::Path;
 
 use snapbox::str;
 
-use crate::support::{Sandbox, init, read};
+use crate::support::{Sandbox, init, read, skill_md};
 
 /// Replaces the first occurrence of `from` in the file at `path`.
 fn edit(path: impl AsRef<Path>, from: &str, to: &str) {
@@ -267,4 +267,31 @@ NAME  KIND         SOURCE                                        VERSION        
 pdf   third-party  https://github.com/acme/pdf.git (skills/pdf)  follows the default branch (at [..])  no        no         yes
 
 "#]]);
+}
+
+/// The URL tells a local folder: a git skill whose lock entry is gone is
+/// not shown as one, and says what is missing.
+#[test]
+fn list_tells_a_local_folder_from_a_git_skill_without_a_lock_entry() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let local = sandbox.home().join("src/pdf");
+    std::fs::create_dir_all(&local).unwrap();
+    std::fs::write(local.join("SKILL.md"), skill_md("pdf")).unwrap();
+    sandbox
+        .skiman()
+        .args(["add", "~/src/pdf", "--yes"])
+        .assert()
+        .code(0);
+    add(&sandbox, "notes");
+    std::fs::remove_file(sandbox.canon().join("skiman.lock")).unwrap();
+
+    let output = sandbox.skiman().arg("list").assert().code(0);
+
+    let rows = columns(&output.get_output().stdout);
+    assert_eq!(
+        rows[1][3],
+        "follows the default branch (no commit in skiman.lock)"
+    );
+    assert_eq!(rows[2][3], "local folder");
 }

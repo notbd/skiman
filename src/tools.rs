@@ -25,8 +25,11 @@ pub enum SkillsElsewhere {
         owner: &'static str,
     },
     /// The skills of every plugin in this Claude Code plugin registry
-    /// (`installed_plugins.json`, relative to `HOME`); `settings` is the
-    /// settings file whose `enabledPlugins` says which ones are turned off.
+    /// (`installed_plugins.json`, relative to `HOME`) whose folder is
+    /// registered in the registry's folder, or whose realpath lies under a
+    /// directory sync leaves to another manager
+    /// (`Ownership::is_under_managed_dir`); `settings` is the settings file
+    /// whose `enabledPlugins` says which ones are turned off.
     ClaudePlugins {
         registry: &'static str,
         settings: &'static str,
@@ -248,21 +251,28 @@ mod tests {
 
     /// `sync` decides what to leave alone from `managed_elsewhere`; a place
     /// the overview lists must be one of them, or the two lists drift apart.
+    /// Claude Code installs plugins in the folder of its registry, and the
+    /// overview lists the plugins there, so sync must leave entries that
+    /// resolve into that folder alone.
     #[test]
-    fn every_folder_of_skills_elsewhere_is_managed_elsewhere() {
+    fn every_place_of_skills_elsewhere_is_managed_elsewhere() {
         for tool in TOOLS {
             for place in tool.skills_elsewhere {
-                if let SkillsElsewhere::Folders { dir, .. } = place {
-                    assert!(
-                        tool.managed_elsewhere.iter().any(|m| matches!(
-                            m,
-                            ManagedElsewhere::Path(p) | ManagedElsewhere::RealpathUnder(p)
-                                if dir.starts_with(p)
-                        )),
-                        "{} lists {dir} but does not leave it to another manager",
-                        tool.id
-                    );
-                }
+                let (dir, by_realpath) = match place {
+                    SkillsElsewhere::Folders { dir, .. } => (Path::new(dir), false),
+                    SkillsElsewhere::ClaudePlugins { registry, .. } => {
+                        (Path::new(registry).parent().unwrap(), true)
+                    }
+                };
+                assert!(
+                    tool.managed_elsewhere.iter().any(|m| match m {
+                        ManagedElsewhere::Path(p) => !by_realpath && dir.starts_with(p),
+                        ManagedElsewhere::RealpathUnder(p) => dir.starts_with(p),
+                    }),
+                    "{} lists {} but does not leave it to another manager",
+                    tool.id,
+                    dir.display()
+                );
             }
         }
     }

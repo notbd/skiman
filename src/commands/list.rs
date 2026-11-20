@@ -4,15 +4,19 @@
 //! one row per linked skill (kind `linked`, its folder's id and path as the
 //! source, and whether it is distributed), and one per linked folder that
 //! is not on this machine. Read-only; takes no lock and spawns no `git`.
+//! `overview` reads the canon's skills through the same [`canon_skills`].
 
 use crate::Exit;
 use crate::canon::Canon;
 use crate::failure::{Failure, finish};
-use crate::linked::{Linked, Shown};
+use crate::layout::Placed;
+use crate::linked::{Holder, Linked, Shown};
 use crate::lockfile::{LockEntry, Lockfile};
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
+use crate::project::root::written_form;
 use crate::rules;
+use crate::source::{UrlKind, check_url};
 use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree, tree_hash};
 
@@ -35,46 +39,30 @@ fn list() -> Result<Exit, Failure> {
     let repo = Canon::from_config(&paths)?;
     let manifest = Manifest::load(&repo)?;
     let lockfile = Lockfile::load(&repo)?;
-    let tree = WorkingTree::new(repo.root());
-    let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
-    let enabled = manifest.skills();
     let mut rows = vec![HEADER.map(str::to_owned)];
-    for placed in repo.layout()?.skills() {
-        let name = placed.name.clone();
-        if tree.kind(&placed.path()).map_err(io)? != Some(Kind::Dir) {
-            continue;
-        }
-        let conflicts = !rules::unresolved_conflicts(&tree, &placed.path())
-            .map_err(io)?
-            .is_empty();
-        let enabled = enabled.get(&name).is_none_or(|e| e.enabled);
-        let [kind, source, version, modified] = match manifest.source(&name) {
-            None => ["own", "-", "-", "-"].map(str::to_owned),
+    for skill in canon_skills(&repo, &manifest)? {
+        let (source, version) = match &skill.source {
+            None => ("-".to_owned(), "-".to_owned()),
             Some(source) => {
-                let entry = lockfile.entry(&name);
-                [
-                    "third-party".to_owned(),
-                    source_text(&source),
-                    version(&source, entry.as_ref()),
-                    modified(&tree, &placed.path(), &name).map_err(io)?,
-                ]
+                let entry = lockfile.entry(&skill.placed.name);
+                (source_text(source), version(source, entry.as_ref()))
             }
         };
-        let (conflicts, enabled) = (yes_no(conflicts), yes_no(enabled));
-        rows.push([name, kind, source, version, modified, conflicts, enabled]);
+        rows.push([
+            skill.placed.name.clone(),
+            skill.kind().to_owned(),
+            source,
+            version,
+            skill.modified,
+            yes_no(skill.conflicts),
+            yes_no(skill.enabled),
+        ]);
     }
     let linked = Linked::read(paths.home(), &repo, &manifest);
     let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
     for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
-        let source = format!(
-            "{} ({})",
-            folder.id,
-            folder
-                .path
-                .as_ref()
-                .expect("a shown folder has a path")
-                .display()
-        );
+        let path = folder.path.as_ref().expect("a shown folder has a path");
+        let source = format!("{} ({})", folder.id, written_form(paths.home(), path));
         let row = |name: String, state: String| {
             let dash = || "-".to_owned();
             [
@@ -89,17 +77,73 @@ fn list() -> Result<Exit, Failure> {
         };
         match shown {
             Shown::Missing => rows.push(row("-".to_owned(), "not on this machine".to_owned())),
-            Shown::Skills(skills) => rows.extend(skills.into_iter().map(|(name, lost)| {
-                let state = match lost {
-                    Some(holder) => format!("no: {holder}"),
-                    None => yes_no(true),
-                };
-                row(name, state)
-            })),
+            Shown::Skills(skills) => rows.extend(
+                skills
+                    .into_iter()
+                    .map(|(name, lost)| row(name, distributed(lost))),
+            ),
         }
     }
     print_columns(&rows);
     Ok(Exit::Success)
+}
+
+/// A skill folder under `skills/` as `list` and `overview` show it.
+pub(crate) struct CanonSkill {
+    pub placed: Placed,
+    /// `None` for an own skill.
+    pub source: Option<SourceRecord>,
+    /// For a third-party skill, whether it differs from its upstream
+    /// snapshot (tree hash; `unknown` without one); `-` for an own skill.
+    pub modified: String,
+    pub conflicts: bool,
+    pub enabled: bool,
+}
+
+impl CanonSkill {
+    /// `own`, or `third-party` for a skill with a source.
+    pub fn kind(&self) -> &'static str {
+        self.source.as_ref().map_or("own", |_| "third-party")
+    }
+}
+
+/// Every skill folder under `skills/`, in layout order.
+pub(crate) fn canon_skills(repo: &Canon, manifest: &Manifest) -> Result<Vec<CanonSkill>, Failure> {
+    let tree = WorkingTree::new(repo.root());
+    let io = |e| Failure::operational(format!("cannot read {}: {e}", repo.root().display()));
+    let enabled = manifest.skills();
+    let mut skills = Vec::new();
+    for placed in repo.layout()?.skills() {
+        let path = placed.path();
+        if tree.kind(&path).map_err(io)? != Some(Kind::Dir) {
+            continue;
+        }
+        let source = manifest.source(&placed.name);
+        let upstream = format!("upstream/{}", placed.name);
+        let modified = match source {
+            None => "-".to_owned(),
+            Some(_) if tree.kind(&upstream).map_err(io)? != Some(Kind::Dir) => "unknown".to_owned(),
+            Some(_) => yes_no(
+                tree_hash(&tree, &path).map_err(io)? != tree_hash(&tree, &upstream).map_err(io)?,
+            ),
+        };
+        skills.push(CanonSkill {
+            conflicts: !rules::unresolved_conflicts(&tree, &path)
+                .map_err(io)?
+                .is_empty(),
+            enabled: enabled.get(&placed.name).is_none_or(|e| e.enabled),
+            placed: placed.clone(),
+            source,
+            modified,
+        });
+    }
+    Ok(skills)
+}
+
+/// Whether a linked skill is distributed: `no: <what holds its name>` when
+/// it lost its name.
+pub(crate) fn distributed(lost: Option<Holder>) -> String {
+    lost.map_or_else(|| yes_no(true), |holder| format!("no: {holder}"))
 }
 
 pub(crate) fn yes_no(value: bool) -> String {
@@ -115,23 +159,27 @@ pub(crate) fn source_text(source: &SourceRecord) -> String {
     }
 }
 
-/// The followed ref or pinned version, with the locked commit. `ref_kind`
-/// describes the ref of the last update, so it is shown only while
-/// `source.ref` is still the lock's `ref`.
+/// The followed ref or pinned version, with the locked commit; the URL
+/// tells a local folder, which has neither. `ref_kind` describes the ref
+/// of the last update, so it is shown only while `source.ref` is still the
+/// lock's `ref`.
 fn version(source: &SourceRecord, entry: Option<&LockEntry>) -> String {
+    if check_url(&source.url) == Ok(UrlKind::Local) {
+        return "local folder".to_owned();
+    }
     let commit = entry.and_then(|e| e.commit.as_deref());
-    let at = commit
-        .map(|c| format!(" (at {})", short(c)))
-        .unwrap_or_default();
+    let at = commit.map_or_else(
+        || " (no commit in skiman.lock)".to_owned(),
+        |c| format!(" (at {})", short(c)),
+    );
     let locked = entry.is_some_and(|e| e.git_ref == source.git_ref);
     let kind = source.ref_kind.filter(|_| locked);
     match (source.git_ref.as_deref(), kind) {
-        (None, _) if commit.is_none() => "local folder".to_owned(),
         (None, _) => format!("follows the default branch{at}"),
         (Some(r), Some("branch")) => format!("follows branch {r}{at}"),
         (Some(r), Some("tag")) => match commit {
             Some(c) => format!("pinned to tag {r} ({})", short(c)),
-            None => format!("pinned to tag {r}"),
+            None => format!("pinned to tag {r}{at}"),
         },
         (Some(r), Some(_)) => format!("pinned to commit {}", short(r)),
         // A hand-written or changed ref: its kind is derived at the next update.
@@ -141,17 +189,6 @@ fn version(source: &SourceRecord, entry: Option<&LockEntry>) -> String {
 
 fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
-}
-
-/// Whether the skill folder `skill` differs from the upstream snapshot of
-/// `name` (tree hash).
-pub(crate) fn modified(tree: &dyn Tree, skill: &str, name: &str) -> std::io::Result<String> {
-    let upstream = format!("upstream/{name}");
-    if tree.kind(&upstream)? != Some(Kind::Dir) {
-        return Ok("unknown".to_owned());
-    }
-    let differs = tree_hash(tree, skill)? != tree_hash(tree, &upstream)?;
-    Ok(yes_no(differs))
 }
 
 /// Left-aligned columns separated by two spaces; the last column is not padded.

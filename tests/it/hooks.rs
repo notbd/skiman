@@ -181,7 +181,7 @@ The report above is about the staged snapshot (the git index), not about your fi
 
   git -C '[..]/canon' add -A -- skiman.toml skills instructions
 
-It stages every change under these paths; to commit only some of them, stage those yourself. If the commit is still rejected, read the new report. Common causes:
+It stages every change under these paths; to commit only some of them, stage those yourself. A commit that names paths (`git commit -- <path>`) leaves out what is staged under other paths, so after running that line, commit without paths, or name these paths as well. If the commit is still rejected, read the new report. Common causes:
   - an ignore rule hides a file: see `git -C '[..]/canon' status --ignored -- skiman.toml skills instructions`
   - a skill folder holds its own .git, so git records it as a single entry of mode 160000: see `git -C '[..]/canon' ls-files -s -- skiman.toml skills instructions`
   - line-ending conversion or a filter changed the content (core.autocrlf, .gitattributes)

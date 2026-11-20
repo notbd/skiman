@@ -758,6 +758,39 @@ fn a_canon_made_in_a_tool_directory_through_a_linked_home_says_to_keep_it_apart(
     assert!(stderr.contains(&line), "{stderr}");
 }
 
+/// `~/.agents` a plain file: sync and doctor name it as what is not a
+/// folder, and a tool directory that links below it as a link that leads
+/// nowhere, not the system error for `~/.agents/skills`.
+#[test]
+fn a_tool_directory_below_a_file_names_the_file() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let agents = sandbox.home().join(".agents");
+    std::fs::remove_dir_all(&agents).unwrap();
+    std::fs::write(&agents, "a file\n").unwrap();
+    let gemini = sandbox.tool_dir(Tool::Antigravity);
+    std::fs::remove_dir_all(&gemini).unwrap();
+    std::os::unix::fs::symlink(agents.join("skills"), &gemini).unwrap();
+    let lines = [
+        format!(
+            "cannot use {} as a tool directory: {} is not a folder",
+            sandbox.tool_dir(Tool::Codex).display(),
+            agents.display()
+        ),
+        format!(
+            "cannot use {} as a tool directory: {} is a link that leads nowhere",
+            gemini.display(),
+            gemini.display()
+        ),
+    ];
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    for line in lines {
+        assert!(out.contains(&line), "{out}");
+    }
+}
+
 /// A tool directory made between sync's first look and its write is read,
 /// not taken as empty: a skill someone put there is reported as foreign.
 #[test]

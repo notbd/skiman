@@ -1225,9 +1225,12 @@ fn followed(dir: &Path, reconciled: &[PathBuf], refused: &[PathBuf]) -> Option<P
 /// anything is written: it, or the first parent that is there, is a link
 /// that leads nowhere or round in a circle, is not a folder, or cannot be read.
 pub fn missing_dir(dir: &Path) -> Result<bool, String> {
-    // Whether `path` is a folder (`true`) or nothing (`false`).
+    use std::io::ErrorKind::{NotADirectory, NotFound};
+    // Whether `path` is a folder (`true`) or nothing (`false`). Below a
+    // file it is nothing too: that parent is named next, and a link that
+    // leads below one leads nowhere.
     let folder = |path: &Path| match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) if matches!(e.kind(), NotFound | NotADirectory) => Ok(false),
         Err(e) => Err(e.to_string()),
         // Not a link: what lstat said is what it is.
         Ok(meta) if !meta.is_symlink() && meta.is_dir() => Ok(true),
@@ -1235,7 +1238,7 @@ pub fn missing_dir(dir: &Path) -> Result<bool, String> {
         Ok(_) => match std::fs::metadata(path) {
             Ok(meta) if meta.is_dir() => Ok(true),
             Ok(_) => Err(format!("{} is not a folder", path.display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(e) if matches!(e.kind(), NotFound | NotADirectory) => {
                 Err(format!("{} is a link that leads nowhere", path.display()))
             }
             Err(e) => Err(e.to_string()),

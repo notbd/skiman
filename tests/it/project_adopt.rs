@@ -1032,3 +1032,40 @@ fn the_warning_about_a_mirror_git_ignores_shows_a_non_ascii_path_as_it_is() {
         "{stderr}"
     );
 }
+
+/// A root adopt cannot look into does not stop the others: its items are
+/// each one `cannot read` line, nothing under it is written, and the exit
+/// is 4.
+#[test]
+fn a_root_adopt_cannot_read_skips_its_items_and_the_other_roots_are_adopted() {
+    let sandbox = setup("");
+    write(root(&sandbox).join("p/AGENTS.md"), "p\n");
+    run(adopt(&sandbox, ["--yes"]), 0);
+    let good = sandbox.home().join("good");
+    write(good.join("q/AGENTS.md"), "q\n");
+    sandbox
+        .skiman()
+        .args(["project", "add"])
+        .arg(&good)
+        .assert()
+        .code(0);
+    let work = root(&sandbox);
+
+    std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let output = adopt(&sandbox, ["--yes"]).output().unwrap();
+    std::fs::set_permissions(&work, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(output.status.code(), Some(4), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let line = format!(
+        "cannot read {}: Permission denied (os error 13)",
+        work.join("p/AGENTS.md").display()
+    );
+    assert!(stderr.lines().any(|l| l == line), "{stderr}");
+    assert!(!stderr.contains("is gone"), "{stderr}");
+    assert_eq!(
+        read(sandbox.canon().join("projects/good/q/AGENTS.md")),
+        "q\n"
+    );
+    assert_eq!(read(mirror(&sandbox, "p/AGENTS.md")), "p\n");
+}

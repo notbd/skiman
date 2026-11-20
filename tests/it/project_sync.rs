@@ -544,6 +544,30 @@ fn a_project_folder_that_is_gone_is_reported_once_and_does_not_need_attention() 
     assert!(!exists(dir.join("proj")), "sync never writes the project");
 }
 
+/// A root sync cannot look into is an error, never a gone folder whose fix
+/// would eject an item that is still there.
+#[test]
+fn a_project_folder_sync_cannot_look_at_is_an_error_not_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = root(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "a\n");
+    register(&sandbox, &dir);
+    adopt_all(&sandbox);
+
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let out = sync(&sandbox);
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(out.status.code(), Some(4), "{}", stderr_of(&out));
+    let line = format!(
+        "error: cannot read {}: Permission denied (os error 13)",
+        dir.join("proj/AGENTS.md").display()
+    );
+    assert_eq!(stderr_of(&out).trim_end(), line);
+}
+
 // ------------------------------------------------------------ rows 7 and 9
 
 #[test]

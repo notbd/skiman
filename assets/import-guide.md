@@ -135,6 +135,11 @@ fingerprint = "sha256:<hash of the matched text>"
   a path under `projects/`. A project root the folder adds must not contain,
   or lie inside, a root the canon already has; otherwise skiman skips
   both roots, and `skiman sync` and `skiman doctor` name them.
+- For a skill the folder holds without a `[skills.<name>]` table (a
+  `[skills.<name>.source]` table counts as one, so a third-party skill
+  never gets this), skiman keeps the `summary`, `origin` and `installed`
+  the canon records for it; its `enabled` still comes from the folder, so
+  it is enabled.
 - skiman keeps the canon's linked folders too: every `[linked.<id>]`
   table stays. The import folder's `skiman.toml` holds no `[linked]` table
   (see "Skill folders kept elsewhere").
@@ -290,7 +295,9 @@ import writes it, writes the rest, and moves each original still in place.
   folder or a source's `url` or `path` changed there, `skiman.lock`
   deleted), a run is a full import again: the shared body and `skiman.toml`
   become the import folder's (the canon's project roots and linked
-  folders stay), the old ones go to the backup, and the preview shows it.
+  folders stay, and so do the `summary`, `origin` and `installed` of a
+  skill the folder gives no table), the old ones go to the backup, and the
+  preview shows it.
 - A skill in the canon that changed since the import wrote it (for
   example through its link in a session), or one the import folder does not
   hold, is refused and named with the two ways to go on.

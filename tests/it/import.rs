@@ -607,6 +607,47 @@ fn a_broken_canon_lock_refuses_the_import_before_anything_is_fetched() {
     assert_refused(&sandbox, &folder, 1, &["skiman.lock: TOML parse error"]);
 }
 
+/// Running the import again with one more skill rewrites `skiman.toml`; a
+/// skill the folder gives no table keeps what the canon records about it,
+/// and one the folder gives a table keeps the folder's table alone.
+#[test]
+fn import_again_keeps_the_summary_origin_and_install_day_of_a_skill_without_a_table() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let folder = import_folder(&sandbox, TOOLS);
+    write(folder.join("skills/more/SKILL.md"), skill_md("more"));
+    let import = || {
+        sandbox
+            .skiman()
+            .arg("import")
+            .arg(&folder)
+            .arg("--yes")
+            .assert()
+            .code(0);
+    };
+    import();
+    let manifest = sandbox.canon().join("skiman.toml");
+    let notes = "[skills.notes]\nsummary = \"Keep notes\"\norigin = \"written here\"\ninstalled = 2026-11-14\n";
+    let canon_more = "[skills.more]\nenabled = false\nsummary = \"The canon's\"\n";
+    write(
+        &manifest,
+        format!("{}\n{notes}\n{canon_more}", read(&manifest)),
+    );
+    let folder_more = "[skills.more]\nsummary = \"The folder's\"\n";
+    write(
+        folder.join("skiman.toml"),
+        format!("{TOOLS}\n{folder_more}"),
+    );
+    write(folder.join("skills/extra/SKILL.md"), skill_md("extra"));
+
+    import();
+    let written = read(&manifest);
+    assert!(written.contains(notes), "{written}");
+    assert!(written.contains(folder_more), "{written}");
+    assert!(!written.contains("The canon's"), "{written}");
+    assert!(!written.contains("enabled = false"), "{written}");
+}
+
 #[test]
 fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {

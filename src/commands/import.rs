@@ -117,7 +117,8 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
 
     let content = Folder::read(&folder)?;
     refuse_linked_tables(&content)?;
-    let manifest_text = merge_canon_config(&content.manifest, &repo_manifest)?;
+    let holds = |name: &str| content.skills.contains_key(name);
+    let manifest_text = merge_canon_config(&content.manifest, &repo_manifest, holds)?;
     check_folder(&content, &manifest_text)?;
     let folder_manifest = Manifest::parse(&manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
@@ -414,12 +415,19 @@ impl Folder {
 /// by key, since an import brings skills and instructions only: the
 /// canon's `[tools]` when the folder has none, each canon `[projects.<id>]`
 /// and `[linked.<id>]` whose id the folder does not define (it defines no
-/// `[linked]`: [`refuse_linked_tables`]), and each canon `[[secrets.allow]]`
-/// entry for a path below `projects/` the folder does not hold already.
-/// Tables written inline count on both sides. The folder's own text keeps
-/// its bytes, except an inline `projects` or `secrets` table that takes
-/// canon entries, which becomes a standard table.
-fn merge_canon_config(folder: &str, canon: &str) -> Result<String, Failure> {
+/// `[linked]`: [`refuse_linked_tables`]), each canon `[[secrets.allow]]`
+/// entry for a path below `projects/` the folder does not hold already,
+/// and for each skill the folder `holds` but gives no `[skills.<name>]`
+/// table, the canon's `summary`, `origin` and `installed` of it (its
+/// `enabled` and `source` stay the folder's). Tables written inline count
+/// on both sides. The folder's own text keeps its bytes, except an inline
+/// `projects`, `secrets` or `skills` table that takes canon entries, which
+/// becomes a standard table.
+fn merge_canon_config(
+    folder: &str,
+    canon: &str,
+    holds: impl Fn(&str) -> bool,
+) -> Result<String, Failure> {
     let Ok(mut doc) = folder.parse::<DocumentMut>() else {
         // The rules report the syntax error with its line.
         return Ok(folder.to_owned());
@@ -447,6 +455,21 @@ fn merge_canon_config(folder: &str, canon: &str) -> Result<String, Failure> {
                 && let Some(into) = manifest::subtable(&mut doc, key)
             {
                 into.insert(id, Item::Table(appended(table)));
+                merged = true;
+            }
+        }
+    }
+    let skills = canon.get("skills").and_then(Item::as_table_like);
+    for (name, table) in skills.into_iter().flat_map(|t| t.iter()) {
+        if holds(name)
+            && doc.get("skills").and_then(|kept| kept.get(name)).is_none()
+            && let Ok(mut table) = table.clone().into_table()
+        {
+            table.retain(|key, _| ["summary", "origin", "installed"].contains(&key));
+            if !table.is_empty()
+                && let Some(into) = manifest::subtable(&mut doc, "skills")
+            {
+                into.insert(name, Item::Table(appended(table)));
                 merged = true;
             }
         }
@@ -1716,9 +1739,9 @@ mod tests {
             ),
         ];
         for (canon, folder) in cases {
-            let merged = merge_canon_config(&folder, &canon).unwrap();
+            let merged = merge_canon_config(&folder, &canon, |_| true).unwrap();
             assert_eq!(
-                merge_canon_config(&folder, &merged).unwrap(),
+                merge_canon_config(&folder, &merged, |_| true).unwrap(),
                 merged,
                 "canon:\n{canon}\nfolder:\n{folder}"
             );

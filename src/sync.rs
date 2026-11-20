@@ -17,10 +17,9 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::layout::{Layout, Placed};
+use crate::layout::{Layout, SkillFolder, skill_folder};
 use crate::linked::{self, Holder, Linked, State};
 use crate::manifest::Manifest;
-use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
 use crate::reported::Reported;
@@ -796,39 +795,6 @@ pub fn wanted_entries(
         });
     }
     Ok(wanted)
-}
-
-/// What sync makes of a skill folder under `skills/`
-/// ([`skill_folder`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkillFolder {
-    /// Not a real folder: sync leaves it to the rules, which report it.
-    NotAFolder,
-    /// An invalid skill folder, not distributed for this reason.
-    Invalid(&'static str),
-    /// Distributed while it is enabled and no kept link holds its name.
-    Distributable,
-}
-
-/// What sync makes of the skill folder `placed` of `layout`, at `dir`. A
-/// distributable one is a real folder whose name passes the regex, is not
-/// reserved and is in one place only, and that holds a `SKILL.md`. Sync,
-/// `check` and `doctor` all decide by it.
-pub fn skill_folder(layout: &Layout, placed: &Placed, dir: &Path) -> SkillFolder {
-    let name = &placed.name;
-    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
-        SkillFolder::NotAFolder
-    } else if layout.all_of(name).len() > 1 {
-        SkillFolder::Invalid("its name is in more than one group folder")
-    } else if names::is_reserved(name) {
-        SkillFolder::Invalid("its name is reserved")
-    } else if !names::is_valid(name) {
-        SkillFolder::Invalid("its name is not a valid skill name")
-    } else if !dir.join("SKILL.md").is_file() {
-        SkillFolder::Invalid("it holds no SKILL.md")
-    } else {
-        SkillFolder::Distributable
-    }
 }
 
 /// The entries of `dir` with their own metadata (links not followed),

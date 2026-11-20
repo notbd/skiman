@@ -452,7 +452,7 @@ impl Withheld {
 
 /// Every skill folder under `skills/` (`layout`) of the canon at `root`
 /// whose name `kept` holds, that is not `enabled = false` in `manifest`
-/// and that is distributable ([`crate::sync::skill_folder`]), in layout
+/// and that is distributable ([`crate::layout::skill_folder`]), in layout
 /// order: sync, `check` and `doctor` report each.
 pub fn withheld(
     root: &Path,
@@ -468,8 +468,8 @@ pub fn withheld(
             let holder = kept.get(&placed.name)?;
             let enabled = entries.get(&placed.name).is_none_or(|e| e.enabled);
             let dir = root.join(placed.path());
-            let distributable = crate::sync::skill_folder(layout, placed, &dir)
-                == crate::sync::SkillFolder::Distributable;
+            let distributable = crate::layout::skill_folder(layout, placed, &dir)
+                == crate::layout::SkillFolder::Distributable;
             (enabled && distributable).then(|| Withheld {
                 path: placed.path(),
                 holder: holder.clone(),

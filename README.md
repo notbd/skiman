@@ -298,3 +298,7 @@ Evidence: [docs/project-scope-evidence.md](docs/project-scope-evidence.md).
 
 Project files and linked folders stay as they are, and the canon stays a
 plain git repo.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

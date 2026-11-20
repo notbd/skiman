@@ -10,12 +10,12 @@ a work folder such as `~/Work/Acme-Corp`, project skills such as
 `~/Work/Acme-Corp/acme-core/skills/`, the `AGENTS.md` of code projects
 that their own git repo does not track. They have no history and no backup.
 
-The user registers one or more folders (project roots). skiman finds every
+You register one or more folders (project roots). skiman finds every
 project instruction file and project skill under them and keeps a copy of
 each in the canon (the mirror). The project files stay real files and
 stay where they are; the mirror follows them automatically, so the canon
-holds their history once the user commits it. The project is written only when the user asks, and
-whatever skiman replaces on either side goes to a backup first.
+holds their history once you commit it. The project is written only when
+you ask, and whatever skiman replaces on either side goes to a backup first.
 
 | Requirement | Where |
 |---|---|
@@ -44,7 +44,7 @@ Two decisions came out of measuring the real tools against two earlier drafts:
    overwrote project content that existed nowhere else, and a conflicted
    `git pull` could write conflict markers into a project. Now sync only
    copies project → mirror; mirror → project happens only through
-   `skiman project restore`, which the user runs and which backs up what it
+   `skiman project restore`, which you run and which backs up what it
    replaces.
 
 The analogy is a backup tool with history: the project is the live copy, the
@@ -102,8 +102,6 @@ path = "~/Work/Acme-Corp"
 exclude = ["_archive", "项目甲/草稿"]
 ```
 
-(An example: this change configures nothing on the user's machine.)
-
 - `<id>` follows the skill name rule; `path` is absolute or starts with `~/`
   (`project add` writes `~/` when under `HOME`). The path is shared by every
   machine (no per-machine override in v1); a machine without it gets one
@@ -151,7 +149,7 @@ canon/
 
 `<root>/<rel>` on disk pairs with `projects/<id>/<rel>`: path arithmetic, so
 the mirror tree is the only record of what is managed, laid out exactly as
-the user sees it on disk.
+you see it on disk.
 
 `projects-synced.toml` holds, per root id, the root's realpath and one synced
 hash per item (a folder uses the existing tree hash). It sits in machine
@@ -226,7 +224,7 @@ Sync writes only the mirror (row 13) and machine state. It never writes a
 project folder and never spawns git. `sync --hook` prints only new reports
 and always exits 0, as today; nothing in the project part prints outside
 that mechanism. Cost at session start: both sides of every item
-are read and hashed (measured on the user's two roots: 100 files, 835 KB,
+are read and hashed (measured on two real roots: 100 files, 835 KB,
 3.5 ms of hashing); a file over the size limit is reported "blocked" from
 its `lstat` size without being read.
 
@@ -338,8 +336,8 @@ locks, staging, backups under machine state.
   previous mirror content is in a backup.
 - **Edited in the mirror, or the mirror reset by git** (`git restore`,
   `git pull` from another machine): row 14, reported; nothing is written to
-  the project until the user picks `restore` or `adopt` for that item.
-- **Both edited**: conflict; the user picks a side per item, the other side
+  the project until you pick `restore` or `adopt` for that item.
+- **Both edited**: conflict; you pick a side per item, the other side
   goes to a backup.
 - **Deleted in the project**: reported; `restore <item>` brings it back,
   `eject` stops managing it.
@@ -377,8 +375,8 @@ locks, staging, backups under machine state.
   step with its fix, managed items now tracked by a project repo, how many
   candidates are not adopted yet, how many items exist only in the mirror
   (row 7), leftover staging folders, mirror paths git ignores, and whether
-  `projects/` has uncommitted changes (skiman never commits; mirror changes
-  are committed by the user like any other change). While a git operation
+  `projects/` has uncommitted changes (skiman never commits; you commit
+  mirror changes like any other change). While a git operation
   in the canon pauses sync, doctor still reports each item.
 - `skiman-manual`: project items are real files, edit them in place; after
   creating a project `AGENTS.md`, rules file or project skill under a root,

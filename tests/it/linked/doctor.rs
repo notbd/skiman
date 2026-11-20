@@ -46,10 +46,7 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
 
     assert_line(
         &stdout,
-        &format!(
-            "linked folder company: {} (skills: alpha, pdf)",
-            company.display()
-        ),
+        "linked folder company: ~/work/company (skills: alpha, pdf)",
     );
     assert_line(
         &stdout,

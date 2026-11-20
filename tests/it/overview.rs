@@ -95,7 +95,7 @@ fn the_canon_comes_by_group_and_other_managers_skills_are_listed_once() {
     symlink(home.join("outside/escape"), plugin.join("extra")).unwrap();
     write(
         plugin.join(".claude-plugin/plugin.json"),
-        r#"{"name": "kit", "skills": ["./skills/eng/tdd", "../outside", "./extra"]}"#,
+        r#"{"name": "kit", "skills": ["./skills/eng/tdd", "../outside", "./extra", 5]}"#,
     );
     write(
         home.join(".claude/plugins/installed_plugins.json"),
@@ -167,7 +167,9 @@ skiman lists these here and never changes them.
 
 ## Notes
 
-- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the canon, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
+- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the canon (a copy of another skill's SKILL.md counts as added), which can be later than the real install; `installed = YYYY-MM-DD` in its `[skills.<name>]` table records the real day.
+- Claude Code plugin kit@market 1.0: `skills` in ~/.claude/plugins/cache/market/kit/1.0/.claude-plugin/plugin.json lists `5`, which is not a path.
+- Claude Code plugin kit@market 1.0: the skills path `../outside` does not exist.
 - Claude Code plugin kit@market 1.0: the skills path `./extra` leads outside the plugin.
 - `claude-code` also reads built-in skills that are not stored on disk; they are not listed.
 - `codex` also reads the skills of its plugins in `~/.codex/plugins`; they are not listed.
@@ -177,6 +179,19 @@ skiman lists these here and never changes them.
 "#]])
         .stderr_eq("");
     assert_eq!(tree(sandbox.root()), before, "overview changed a file");
+}
+
+/// No agent tool and no day from git: nothing to note, so no Notes section.
+#[test]
+fn an_overview_with_nothing_to_note_has_no_notes() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    for tool in [".claude", ".codex", ".gemini"] {
+        std::fs::remove_dir_all(sandbox.home().join(tool)).unwrap();
+    }
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(!stdout.contains("## Notes"), "{stdout}");
 }
 
 #[test]
@@ -196,6 +211,8 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
         stdout.contains("installed_plugins.json is not in a format skiman reads; its plugins' skills are not listed."),
         "{stdout}"
     );
+    // No row has a day marked (git), so nothing explains one.
+    assert!(!stdout.contains("(git)"), "{stdout}");
 
     // An unreadable entry is named; the others are still listed.
     let cache = sandbox.home().join(".claude/plugins/cache/market");
@@ -207,8 +224,9 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     write(
         &registry,
         format!(
-            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}], "solo@market": [{{"installPath": "{}"}}]}}}}"#,
+            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project", "projectPath": "{}"}}], "solo@market": [{{"installPath": "{}", "scope": "project", "projectPath": ""}}]}}}}"#,
             plugin.display(),
+            sandbox.home().join("work/app").display(),
             solo.display()
         ),
     );
@@ -218,13 +236,37 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     );
     let stdout = overview();
     assert!(
-        stdout.contains("The entry of plugin bad@market in ")
+        stdout.contains("The entry of plugin bad@market in ~/.claude/plugins/installed_plugins.json is not in a format")
             && stdout.contains(
-                "| solo | Claude Code plugin solo@market | ~/.claude/plugins/cache/market/solo/2.0 | claude-code |"
+                "| solo | Claude Code plugin solo@market (project scope) | ~/.claude/plugins/cache/market/solo/2.0 | claude-code |"
             )
             && stdout.contains(
-                "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/.claude/plugins/cache/market/kit/1.0/skills/tdd | claude-code |"
+                "| tdd | Claude Code plugin kit@market (project scope: ~/work/app) (disabled) | ~/.claude/plugins/cache/market/kit/1.0/skills/tdd | claude-code |"
             ),
+        "{stdout}"
+    );
+
+    // Settings that cannot be read turn no plugin off, and say so.
+    write(
+        sandbox.home().join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"kit@market": false"#,
+    );
+    let stdout = overview();
+    assert!(
+        stdout.contains(
+            "- Cannot tell which plugins ~/.claude/settings.json turns off: it is not valid JSON: "
+        ) && stdout.contains("; no plugin is marked (disabled).\n")
+            && stdout
+                .contains("| tdd | Claude Code plugin kit@market (project scope: ~/work/app) | "),
+        "{stdout}"
+    );
+    // So do settings that are JSON but not an object.
+    write(sandbox.home().join(".claude/settings.json"), "[]");
+    let stdout = overview();
+    assert!(
+        stdout.contains(
+            "- Cannot tell which plugins ~/.claude/settings.json turns off: it is not a JSON object; no plugin is marked (disabled).\n"
+        ),
         "{stdout}"
     );
 }
@@ -269,13 +311,11 @@ fn a_plugin_outside_the_plugins_folder_is_shown_as_sync_treats_it() {
     assert!(
         stdout.contains(
             "| notes | unknown: a link skiman did not make | ~/local-plugin/skills/notes | codex |"
-        ) && stdout.contains(&format!(
-            "- Claude Code plugin local@fixture is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed, and Claude Code still reads them.",
-            plugin.display()
-        )) && stdout.contains(&format!(
-            "- Claude Code plugin off@fixture (disabled) is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed.\n",
-            off.display()
-        )),
+        ) && stdout.contains(
+            "- Claude Code plugin local@fixture is installed at ~/local-plugin, outside the folders skiman leaves to other managers; its skills are not listed, and Claude Code still reads them."
+        ) && stdout.contains(
+            "- Claude Code plugin off@fixture (disabled) is installed at ~/off-plugin, outside the folders skiman leaves to other managers; its skills are not listed.\n"
+        ),
         "{stdout}"
     );
     let sync = sandbox.skiman().arg("sync").assert().code(0);
@@ -316,6 +356,49 @@ fn a_plugin_in_a_cache_linked_elsewhere_is_listed() {
         stdout.contains(
             "| tdd | Claude Code plugin kit@market | ~/bigdisk/claude-cache/market/kit/1.0/skills/tdd | claude-code |"
         ),
+        "{stdout}"
+    );
+}
+
+/// Claude Code installs a plugin whose `command` source has `"mode":
+/// "link"` as links to the folder the command printed, named in
+/// `.claude-plugin-link`: its skills are listed where they really are.
+#[test]
+fn a_plugin_installed_in_link_mode_is_listed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let printed = home.join("printed");
+    write(
+        printed.join(".claude-plugin/plugin.json"),
+        r#"{"name": "lnk"}"#,
+    );
+    write(printed.join("skills/review/SKILL.md"), skill_md("review"));
+    let plugin = home.join(".claude/plugins/cache/localmkt/lnk/829a0436803e");
+    write(
+        plugin.join(".claude-plugin-link"),
+        format!(r#"{{"target":"{}"}}"#, printed.display()),
+    );
+    symlink(
+        printed.join(".claude-plugin"),
+        plugin.join(".claude-plugin"),
+    )
+    .unwrap();
+    symlink(printed.join("skills"), plugin.join("skills")).unwrap();
+    write(
+        home.join(".claude/plugins/installed_plugins.json"),
+        format!(
+            r#"{{"version": 2, "plugins": {{"lnk@localmkt": [{{"scope": "user", "installPath": "{}", "version": "829a0436803e"}}]}}}}"#,
+            plugin.display()
+        ),
+    );
+
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains(
+            "| review | Claude Code plugin lnk@localmkt 829a0436803e | ~/printed/skills/review | claude-code |"
+        ) && !stdout.contains("leads outside the plugin"),
         "{stdout}"
     );
 }

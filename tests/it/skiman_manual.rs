@@ -63,7 +63,7 @@ fn skiman_manual_matches_its_snapshot_with_the_canon_path_filled_in() {
     );
 }
 
-/// Every everyday operation the ticket lists, with the text that tells an
+/// Each of the manual's everyday operations, with the text that tells an
 /// agent how to do it the canonical way.
 #[test]
 fn skiman_manual_covers_every_everyday_operation() {

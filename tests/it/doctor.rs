@@ -344,8 +344,8 @@ fn doctor_shows_tmp_content_as_in_use_while_the_canon_lock_is_held() {
 }
 
 /// Clarification 7 on #1: the lock entry was written, then moving the old
-/// folders to the backup failed, so they stay in `.skiman/tmp/`. `update`
-/// is another ticket: the state it leaves is built by hand here.
+/// folders to the backup failed, so they stay in `.skiman/tmp/`. The state
+/// `update` leaves is built by hand here.
 #[test]
 fn doctor_lists_old_folders_an_update_left_in_tmp() {
     let sandbox = Sandbox::new();

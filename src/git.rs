@@ -119,7 +119,7 @@ pub fn query_command(dir: &Path) -> Command {
 }
 
 /// Settings the MERGE profile adds: the user's global attributes file is not
-/// covered by `GIT_CONFIG_GLOBAL` (git-fetch-and-merge.md 1.3).
+/// covered by `GIT_CONFIG_GLOBAL`.
 const MERGE_CONFIG: &[&str] = &["core.attributesFile=/dev/null"];
 
 /// A git command in the MERGE profile on the temporary bare repository

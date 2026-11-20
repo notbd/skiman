@@ -19,6 +19,7 @@ Single-context: root `GLOSSARY.md` + `docs/adr/`. See `docs/agents/domain.md`.
 - Each commit passes what CI runs: `cargo fmt --check` (on Linux), then `cargo clippy --all-targets --locked -- -D warnings` and `cargo test --locked` (on macOS and Linux).
 - Never run skiman against your real home. Use a throwaway one, outside any git repository (its `.git` folder counts too): `(export HOME=$(mktemp -d) XDG_CONFIG_HOME= XDG_STATE_HOME=; ...)`. A canon inside another repo (a folder there that already holds `skiman.toml`) gets its git hooks installed into that repo's `.git/hooks`.
 - Every agent tool is one row of `TOOLS` in `src/tools.rs`; code iterates over the table and never matches on a tool id.
+- "spec" in code comments means issue #1 (v1: numbered user stories, and numbered clarifications in its comments) and issue #37 (linked skills); a story or clarification number without an issue number is issue #1's. Issue #1 is not kept up to date: where it disagrees with the code, `docs/adr/` or `docs/project-scope.md`, those win.
 - skiman never commits. `skiman sync` never spawns git, and `sync --hook` always exits 0; `scripts/perf_sync_hook.py` times it against a 100 ms target (not in CI).
 
 ## Tests

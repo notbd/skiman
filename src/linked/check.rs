@@ -1,5 +1,5 @@
 //! What `skiman check` on the working tree warns about linked skills (spec
-//! "Checks", user story 14): problems inside them, what cannot be read
+//! #37 "Checks", user story 14): problems inside them, what cannot be read
 //! now, the names they share and a `[skills.<name>]` table that names one.
 //! Warnings only, never a violation: the canon cannot fix content it does
 //! not hold.

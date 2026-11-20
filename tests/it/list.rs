@@ -241,8 +241,8 @@ fn list_shows_the_upstream_folder_of_a_skill_inside_a_bigger_repo() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let repo = sandbox.canon();
-    // Multi-skill sources need --skill (another ticket): install a
-    // single-skill upstream, then point its recorded path at a sub-folder.
+    // Written before `add --skill` existed: install a single-skill
+    // upstream, then point its recorded path at a sub-folder.
     let single = sandbox.upstream("acme/pdf");
     single.write("SKILL.md", "---\nname: pdf\ndescription: d\n---\n");
     single.commit("v1");

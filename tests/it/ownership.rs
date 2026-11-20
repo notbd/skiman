@@ -503,7 +503,10 @@ retargeted [..]/home/.codex/AGENTS.md
 retargeted [..]/home/.gemini/GEMINI.md
 
 "#]])
-        .stderr_eq("");
+        .stderr_eq(str![[r#"
+warning: the shared body [..]/canon/instructions/shared.md is missing, so every instruction file linked to it leads nowhere; make it a file (it may be empty)
+
+"#]]);
 
     let pdf = second.join("skills/pdf");
     let manual = second.join(".skiman/skiman-manual");
@@ -556,6 +559,7 @@ fn init_with_a_foreign_skill_points_to_adopt_when_the_canon_has_skills() {
         .code(0)
         .stderr_eq(str![[r#"
 warning: foreign skill [..]/home/.claude/skills/theirs is not managed by skiman; bring it in with `skiman adopt theirs --from claude-code`
+warning: the shared body [..]/canon/instructions/shared.md is missing, so every instruction file linked to it leads nowhere; make it a file (it may be empty)
 hint: the tool directories hold foreign skills; bring each one into the canon with `skiman adopt <name> --from <tool id>`
 
 "#]]);

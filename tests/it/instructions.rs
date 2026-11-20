@@ -461,3 +461,82 @@ fn what_comes_out_of_a_retarget_swapped_back_is_never_removed() {
         assert!(stderr.contains(&said), "{stderr}");
     }
 }
+
+/// What sync and doctor say about the shared body, in its words.
+fn shared_body_line(sandbox: &Sandbox, why: &str) -> String {
+    let shared = sandbox.canon().join("instructions/shared.md");
+    format!(
+        "the shared body {} {why}, so every instruction file linked to it leads nowhere; make it a file (it may be empty)",
+        shared.display()
+    )
+}
+
+/// Without `instructions/shared.md` every instruction link leads nowhere:
+/// `sync` and doctor say so (exit 0; an empty file is fine), and say it is
+/// not a file when a folder is there; `sync --hook` reads no more than
+/// before and stays silent.
+#[test]
+fn a_missing_shared_body_is_named_by_sync_and_doctor() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let shared = sandbox.canon().join("instructions/shared.md");
+    std::fs::remove_file(&shared).unwrap();
+    let line = shared_body_line(&sandbox, "is missing");
+
+    sandbox
+        .skiman()
+        .args(["sync", "--hook"])
+        .assert()
+        .code(0)
+        .stdout_eq("");
+    let sync = sandbox.skiman().arg("sync").assert().code(0);
+    let stderr = String::from_utf8(sync.get_output().stderr.clone()).unwrap();
+    assert_eq!(stderr, format!("warning: {line}\n"));
+    let doctor = sandbox.skiman().arg("doctor").assert().code(0);
+    let stdout = String::from_utf8(doctor.get_output().stdout.clone()).unwrap();
+    assert!(stdout.lines().any(|l| l == line), "{stdout}");
+    std::fs::create_dir(&shared).unwrap();
+    let sync = sandbox.skiman().arg("sync").assert().code(0);
+    let stderr = String::from_utf8(sync.get_output().stderr.clone()).unwrap();
+    let line = shared_body_line(&sandbox, "is not a file");
+    assert_eq!(stderr, format!("warning: {line}\n"));
+    std::fs::remove_dir(&shared).unwrap();
+    std::fs::write(&shared, "").unwrap();
+    sandbox.skiman().arg("sync").assert().code(0).stderr_eq("");
+}
+
+/// With no installed tool enabled, no instruction link leads to the shared
+/// body, so a missing one is not named, though a tool that is not enabled
+/// is on this machine.
+#[test]
+fn a_missing_shared_body_is_not_named_when_no_enabled_tool_is_installed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let manifest = sandbox.canon().join("skiman.toml");
+    std::fs::write(&manifest, "[tools]\nenabled = [\"claude-code\"]\n").unwrap();
+    std::fs::remove_dir_all(sandbox.presence_dir(Tool::ClaudeCode)).unwrap();
+    std::fs::remove_file(sandbox.canon().join("instructions/shared.md")).unwrap();
+
+    let sync = sandbox.skiman().arg("sync").assert().code(0);
+
+    let stderr = String::from_utf8(sync.get_output().stderr.clone()).unwrap();
+    assert!(!stderr.contains("shared body"), "{stderr}");
+}
+
+/// The missing shared body is named by `skiman sync` only, so it is not
+/// recorded for the hook: `sync`, `sync --hook`, `sync` leave the record of
+/// what was reported byte for byte as it is.
+#[test]
+fn a_missing_shared_body_is_not_recorded_for_the_hook() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    std::fs::remove_file(sandbox.canon().join("instructions/shared.md")).unwrap();
+    let reported = sandbox.state_home().join("skiman/reported.toml");
+    sandbox.skiman().arg("sync").assert().code(0);
+    let before = std::fs::read(&reported).ok();
+
+    for args in [&["sync", "--hook"][..], &["sync"]] {
+        sandbox.skiman().args(args).assert().code(0);
+        assert_eq!(std::fs::read(&reported).ok(), before, "after {args:?}");
+    }
+}

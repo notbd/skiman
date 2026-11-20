@@ -66,6 +66,9 @@ pub enum ItemKind {
     InvalidSkillFolder { reason: &'static str },
     /// An instruction location skiman does not own, so the shared body is not linked there (exit 3).
     RefusedLocation,
+    /// The shared body an instruction link points at is not a readable
+    /// file (`why`), so the link leads nowhere. Not recorded for the hook.
+    NoSharedBody { why: String },
     /// A report on a project item or root (`crate::project::sync`): `what`
     /// names the report in the recorded set; `attention` makes it exit 3.
     Project {
@@ -157,6 +160,7 @@ impl Item {
             ItemKind::Occupied { .. } => "occupied",
             ItemKind::InvalidSkillFolder { .. } => "invalid-skill-folder",
             ItemKind::RefusedLocation => "refused-location",
+            ItemKind::NoSharedBody { .. } => "no-shared-body",
             ItemKind::Project { what, .. } => {
                 return format!("project-{what} {}", self.path.display());
             }
@@ -214,6 +218,9 @@ impl Item {
             }
             ItemKind::RefusedLocation => format!(
                 "instruction file {path} is not owned by skiman, so the shared body is not linked there; move it away, then run `skiman sync`"
+            ),
+            ItemKind::NoSharedBody { why } => format!(
+                "the shared body {path} {why}, so every instruction file linked to it leads nowhere; make it a file (it may be empty)"
             ),
             ItemKind::Project { message, .. } | ItemKind::Linked { message, .. } => message.clone(),
         }
@@ -334,7 +341,10 @@ pub fn run_with(
             }
             Output::Hook => {}
         }
-        now.insert(&item.scope, id);
+        // Only `skiman sync` looks for it: recorded, the hook would drop it each time.
+        if !matches!(item.kind, ItemKind::NoSharedBody { .. }) {
+            now.insert(&item.scope, id);
+        }
     }
     if now != last
         && let Err(e) = now.save(paths)
@@ -647,6 +657,8 @@ fn reconcile_instruction_locations(
 ) {
     let target = repo.shared_body();
     let mut reconciled = Vec::new();
+    // Whether an installed tool's location is, or is to be, a link to the body.
+    let mut leads_to_body = false;
     // Locations inside a linked folder: never written, never swept.
     let mut refused = Vec::new();
     for to in targets
@@ -686,7 +698,9 @@ fn reconcile_instruction_locations(
             // is refused like one the check found.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let link = || fsutil::link_new(&target, &location, &location);
-                make(output, report, (Change::Linked, &path), link) == Some(false)
+                let made = make(output, report, (Change::Linked, &path), link);
+                leads_to_body |= made == Some(true);
+                made == Some(false)
             }
             Err(e) => {
                 let path = path.display();
@@ -694,10 +708,15 @@ fn reconcile_instruction_locations(
                 false
             }
             Ok(meta) => match ownership.owned_instruction(&location, &meta) {
-                Some(current) if current == target => false,
+                Some(current) if current == target => {
+                    leads_to_body = true;
+                    false
+                }
                 Some(current) => {
                     let relink = || fsutil::relink(&location, real, &current, Some(&target));
-                    make(output, report, (Change::Retargeted, &path), relink) == Some(false)
+                    let made = make(output, report, (Change::Retargeted, &path), relink);
+                    leads_to_body |= made == Some(true);
+                    made == Some(false)
                 }
                 None => true,
             },
@@ -730,6 +749,17 @@ fn reconcile_instruction_locations(
     // Only a sync that may read more than it changes looks for these.
     if output == Output::Hook {
         return;
+    }
+    let why = || match std::fs::metadata(&target) {
+        Ok(meta) if meta.is_file() => None,
+        Ok(_) => Some("is not a file".to_owned()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some("is missing".to_owned()),
+        Err(e) => Some(format!("cannot be read ({e})")),
+    };
+    if leads_to_body && let Some(why) = why() {
+        let (scope, path) = (target.display().to_string(), target.clone());
+        let kind = ItemKind::NoSharedBody { why };
+        report.items.push(Item { scope, path, kind });
     }
     // A sync killed while it took one of these links aside left it under a
     // temporary name.

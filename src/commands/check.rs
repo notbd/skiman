@@ -124,7 +124,7 @@ fn linked_not_ignored(repo: &Canon, manifest: &Manifest) -> Option<String> {
     if manifest.linked().is_empty() {
         return None;
     }
-    match gitignore::check_ignore(repo.root()) {
+    match gitignore::check_ignore(repo.root(), "linked/") {
         gitignore::Ignored::No => {}
         gitignore::Ignored::Failed(why) => {
             return Some(format!(

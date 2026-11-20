@@ -299,8 +299,10 @@ fn init_swaps_in_a_new_gitignore_that_keeps_its_mode_and_leaves_a_hard_link_with
     assert_eq!(mode & 0o7777, 0o640);
 }
 
+/// git does not read a `.gitignore` that is a link (a canon managed with
+/// dotfiles), so `init` writes nothing through it and says so (exit 3).
 #[test]
-fn init_adds_the_skiman_entry_to_the_file_a_linked_gitignore_points_to_and_keeps_the_link() {
+fn init_writes_nothing_through_a_gitignore_that_is_a_link_and_warns() {
     let sandbox = Sandbox::new();
     let repo = reused_repo(&sandbox);
     let dotfiles = sandbox.root().join("dotfiles");
@@ -308,35 +310,48 @@ fn init_adds_the_skiman_entry_to_the_file_a_linked_gitignore_points_to_and_keeps
     std::fs::write(dotfiles.join("gitignore"), "target\n").unwrap();
     std::os::unix::fs::symlink(dotfiles.join("gitignore"), repo.join(".gitignore")).unwrap();
 
+    init_reused(&sandbox).code(3).stderr_eq(str![[r#"
+warning: [..]/canon/.gitignore is a link, and git does not read a `.gitignore` that is a link, so skiman writes nothing to it; replace the link with a file holding its lines plus `.skiman/`, `/linked/`, or add those lines to .git/info/exclude
+...
+"#]]);
+
+    assert_eq!(read(dotfiles.join("gitignore")), "target\n");
+}
+
+/// When git cannot tell whether a folder is ignored (here `linked` is a
+/// link: `check-ignore` stops at it), a line already in `.gitignore`
+/// counts wherever it is: running `init` again appends nothing.
+#[test]
+fn init_run_again_does_not_repeat_a_line_git_cannot_judge() {
+    let sandbox = Sandbox::new();
+    let repo = reused_repo(&sandbox);
+    init_reused(&sandbox).code(0);
+    std::fs::write(repo.join(".gitignore"), "/linked/\n.skiman/\ntarget\n").unwrap();
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, repo.join("linked")).unwrap();
+
+    init_reused(&sandbox);
+    init_reused(&sandbox);
+
+    assert_eq!(
+        read(repo.join(".gitignore")),
+        "/linked/\n.skiman/\ntarget\n"
+    );
+}
+
+/// A line that names `.skiman/` but that a later line undoes does not
+/// count: `init` asks git, as it does for `linked/`.
+#[test]
+fn init_adds_the_skiman_entry_when_a_later_line_undoes_the_one_there() {
+    let sandbox = Sandbox::new();
+    let repo = reused_repo(&sandbox);
+    std::fs::write(repo.join(".gitignore"), "/.skiman/\n!/.skiman/\n").unwrap();
+
     init_reused(&sandbox).code(0);
 
     assert_eq!(
-        std::fs::read_link(repo.join(".gitignore")).unwrap(),
-        dotfiles.join("gitignore")
+        read(repo.join(".gitignore")),
+        "/.skiman/\n!/.skiman/\n.skiman/\n/linked/\n"
     );
-    assert_eq!(read(dotfiles.join("gitignore")), "target\n.skiman/\n");
-}
-
-#[test]
-fn init_refuses_a_gitignore_that_links_to_a_missing_file_and_does_not_create_that_file() {
-    let sandbox = Sandbox::new();
-    let repo = reused_repo(&sandbox);
-    let dotfiles = sandbox.root().join("dotfiles");
-    std::fs::create_dir(&dotfiles).unwrap();
-    std::os::unix::fs::symlink(dotfiles.join("gitignore"), repo.join(".gitignore")).unwrap();
-
-    let assert = init_reused(&sandbox);
-
-    assert!(
-        std::fs::symlink_metadata(dotfiles.join("gitignore")).is_err(),
-        "init created the file the link points to"
-    );
-    assert_eq!(
-        std::fs::read_link(repo.join(".gitignore")).unwrap(),
-        dotfiles.join("gitignore")
-    );
-    assert.code(1).stdout_eq("").stderr_eq(str![[r#"
-error: [..]/canon/.gitignore is a link to a missing file; create that file or remove the link, then run `skiman init` again
-
-"#]]);
 }

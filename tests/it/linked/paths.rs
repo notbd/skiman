@@ -534,36 +534,6 @@ fn a_presence_directory_that_resolves_into_a_linked_folder_is_left_alone() {
     assert_eq!(contents(&[&company]), before);
 }
 
-/// A canon `.gitignore` that is a link into a registered folder: `init`
-/// writes nothing through it (exit 3).
-#[test]
-fn init_leaves_a_gitignore_that_resolves_into_a_linked_folder_alone() {
-    let sandbox = Sandbox::new();
-    init(&sandbox);
-    let company = folder(&sandbox, "work/company", &["alpha"]);
-    append_manifest(&sandbox, COMPANY);
-    let gitignore = sandbox.canon().join(".gitignore");
-    std::fs::remove_file(&gitignore).unwrap();
-    std::fs::write(company.join("gitignore"), "target\n").unwrap();
-    symlink(company.join("gitignore"), &gitignore).unwrap();
-    let before = contents(&[&company]);
-
-    let output = sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.canon())
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_eq!(output.status.code(), Some(3), "{stderr}");
-    assert!(
-        stderr.contains("inside linked folder `company`"),
-        "{stderr}"
-    );
-    assert_eq!(contents(&[&company]), before);
-}
-
 /// A new canon path through a link to a plain folder, re-pointed into a
 /// registered folder right after `init` checked it: the canon is made
 /// where it was checked, the user config is not pointed through the
@@ -703,32 +673,6 @@ fn a_new_settings_file_is_made_where_the_guard_checked() {
         read(plain.join("settings.json")).contains("SessionStart"),
         "{stderr}"
     );
-}
-
-/// While `skiman.toml` cannot be parsed no registration is known, so
-/// `init` writes nothing through a `.gitignore` that is a link.
-#[test]
-fn init_writes_no_linked_gitignore_while_the_manifest_does_not_parse() {
-    let sandbox = Sandbox::new();
-    init(&sandbox);
-    let repo = sandbox.canon();
-    let real = sandbox.root().join("dotfiles/gitignore");
-    write(&real, "target\n");
-    std::fs::remove_file(repo.join(".gitignore")).unwrap();
-    symlink(&real, repo.join(".gitignore")).unwrap();
-    std::fs::write(repo.join("skiman.toml"), "[tools\n").unwrap();
-
-    let output = sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(&repo)
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8(output.stderr).unwrap();
-    assert_ne!(output.status.code(), Some(0), "{stderr}");
-    assert!(stderr.contains("`.skiman/` is not added to it"), "{stderr}");
-    assert_eq!(read(&real), "target\n");
 }
 
 /// `init` into a registered folder of the current canon, or into a folder

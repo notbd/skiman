@@ -297,7 +297,11 @@ fn report_distribution(home: &Path, (linked, report): (&Linked, &sync::Report), 
             } else {
                 format!("skills: {}", names.join(", "))
             };
-            out!("linked folder {}: {} ({skills})", folder.id, path.display());
+            out!(
+                "linked folder {}: {} ({skills})",
+                folder.id,
+                root::written_form(home, path)
+            );
         }
     }
     report_plan(report, exit);

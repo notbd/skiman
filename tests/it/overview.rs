@@ -218,7 +218,7 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     );
     let stdout = overview();
     assert!(
-        stdout.contains("The entry of plugin bad@market in ")
+        stdout.contains("The entry of plugin bad@market in ~/.claude/plugins/installed_plugins.json is not in a format")
             && stdout.contains(
                 "| solo | Claude Code plugin solo@market | ~/.claude/plugins/cache/market/solo/2.0 | claude-code |"
             )
@@ -269,13 +269,11 @@ fn a_plugin_outside_the_plugins_folder_is_shown_as_sync_treats_it() {
     assert!(
         stdout.contains(
             "| notes | unknown: a link skiman did not make | ~/local-plugin/skills/notes | codex |"
-        ) && stdout.contains(&format!(
-            "- Claude Code plugin local@fixture is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed, and Claude Code still reads them.",
-            plugin.display()
-        )) && stdout.contains(&format!(
-            "- Claude Code plugin off@fixture (disabled) is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed.\n",
-            off.display()
-        )),
+        ) && stdout.contains(
+            "- Claude Code plugin local@fixture is installed at ~/local-plugin, outside the folders skiman leaves to other managers; its skills are not listed, and Claude Code still reads them."
+        ) && stdout.contains(
+            "- Claude Code plugin off@fixture (disabled) is installed at ~/off-plugin, outside the folders skiman leaves to other managers; its skills are not listed.\n"
+        ),
         "{stdout}"
     );
     let sync = sandbox.skiman().arg("sync").assert().code(0);

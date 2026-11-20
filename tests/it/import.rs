@@ -1475,6 +1475,21 @@ fn a_change_between_the_confirmation_and_the_canon_lock_refuses_the_import_befor
         }
     }
 
+    // The import folder's refusal, word for word.
+    let sandbox = Sandbox::new();
+    let folder = stopped_before_the_last_skill(&sandbox, false);
+    let notes = folder.join("skills/notes/SKILL.md");
+    let run = format!("echo edited >> '{}'", notes.display());
+    let output = import_with_hook(&sandbox, &folder, "import:confirmed", &run);
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        format!(
+            "error: the import folder {} changed after this import read it; nothing was changed, run the import again\n",
+            folder.canonicalize().unwrap().display()
+        )
+    );
+    assert_eq!(output.status.code(), Some(1));
+
     // Where the canon holds the import, a skiman.toml that changes no
     // condition is still checked byte for byte: Codex is no longer enabled,
     // and its entry stays where it is.
@@ -1533,7 +1548,7 @@ fn a_canon_file_changed_while_the_import_fetches_refuses_the_import_and_keeps_th
         let output = import_with_hook(&sandbox, &folder, "import:fetched", &run);
         assert_eq!(
             String::from_utf8(output.stderr).unwrap(),
-            "error: the canon changed after the preview; nothing was changed, run the import again\n",
+            "error: the canon changed after this import read it; nothing was changed, run the import again\n",
             "{rel}"
         );
         assert_eq!(output.status.code(), Some(1), "{rel}");

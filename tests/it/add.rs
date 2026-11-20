@@ -714,12 +714,21 @@ fn a_finished_cut_short_move_is_said_when_the_next_one_cannot_be_finished() {
     let assert = sandbox.skiman().args(["add", "acme/pdf", "--yes"]).assert();
     std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let stdout = String::from_utf8(assert.code(4).get_output().stdout.clone()).unwrap();
+    let output = assert.code(4).get_output().clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(&said_finished(&first, &copy)), "{stdout}");
     assert!(
         !stdout.contains(&said_finished(&stuck, &stuck_copy)),
         "{stdout}"
     );
+    // The copy is of `stuck` alone, not of the whole leftover the error names.
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let whose = format!(
+        "; the complete copy of {} is at {};",
+        stuck.display(),
+        stuck_copy.display()
+    );
+    assert!(stderr.contains(&whose), "{stderr}");
     assert!(!first.exists());
     assert_eq!(read(copy.join("f")), "moved\n");
     assert_eq!(read(stuck.join("f")), "moved\n");

@@ -199,6 +199,8 @@ enum Unusable {
 
 /// What saving a settings file through `serde_json` does to the rest of it.
 const REWRITTEN: &str = "; skiman rewrote the whole file, so how it is written may have changed, and a number that 64 bits cannot hold may have lost digits";
+/// [`REWRITTEN`] before the question, for a settings file that exists.
+const REWRITES: &str = "\nadding it rewrites the whole file, so how it is written may change, and a number that 64 bits cannot hold may lose digits";
 
 fn load(path: PathBuf) -> Result<Settings, Unusable> {
     let text = match std::fs::read_to_string(&path) {
@@ -438,7 +440,7 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, own: &str, guard: Guard) -> Exit {
         }
         match plan_addition(home, tool, own) {
             Ok(None) | Err(Unusable::NotInstalled(_)) => {}
-            Ok(Some(settings)) => planned.push((tool, settings.path)),
+            Ok(Some(settings)) => planned.push((tool, settings)),
             Err(Unusable::Broken(reason)) => {
                 print_by_hand(&reason, session_hook(tool).shape, own);
                 exit = Exit::OperationalError;
@@ -448,12 +450,13 @@ fn ask(home: &Path, tools: Vec<&AgentTool>, own: &str, guard: Guard) -> Exit {
     if planned.is_empty() {
         return exit;
     }
-    for (tool, path) in &planned {
+    for (tool, settings) in &planned {
         let (place, entry) = entry_to_add(session_hook(tool).shape, own);
         err!(
-            "skiman can add this session-start hook entry to {place} of {}, so starting a session refreshes distribution:\n{}",
-            path.display(),
-            pretty(&entry)
+            "skiman can add this session-start hook entry to {place} of {}, so starting a session refreshes distribution:\n{}{}",
+            settings.path.display(),
+            pretty(&entry),
+            settings.permissions.as_ref().map_or("", |_| REWRITES)
         );
     }
     let question = if planned.len() == 1 {

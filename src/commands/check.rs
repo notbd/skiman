@@ -244,14 +244,14 @@ fn stage_hint(root: &Path, violations: &[rules::Violation]) -> Option<String> {
     let mut hint = hint_text(root, &paths.join(" "));
     if !ignored.is_empty() {
         hint.push_str(&format!(
-            "\n\nGit ignores these files, so the line above leaves them out:\n{}",
+            "\n\nGit ignores these paths, so the line above leaves them out:\n{}",
             listing(ignored.iter())
         ));
     }
     Some(hint)
 }
 
-/// One indented line per ignored file, with its rule.
+/// One indented line per ignored path (a folder ends with `/`), with its rule.
 fn listing<'a>(ignored: impl Iterator<Item = &'a (String, String)>) -> String {
     ignored
         .map(|(path, rule)| format!("\n  {path} ({rule})"))
@@ -267,7 +267,10 @@ fn hint_text(root: &Path, paths: &str) -> String {
          the working tree passes every rule. Stage these paths with this line, then commit again:\n\
          \n  {git} add -A -- {paths}\n\
          \nIt stages every change under these paths; to commit only some of them, stage those \
-         yourself. If the commit is still rejected, read the new report. Common causes:\n  \
+         yourself. A commit that names paths (`git commit -- <path>`) leaves out what is \
+         staged under other paths, so after running that line, commit without paths, or name \
+         these paths as well. If the commit is still rejected, read the new report. Common \
+         causes:\n  \
          - an ignore rule hides a file: see `{git} status --ignored -- {paths}`\n  \
          - a skill folder holds its own .git, so git records it as a single entry of mode \
          160000: see `{git} ls-files -s -- {paths}`\n  \

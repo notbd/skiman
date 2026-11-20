@@ -191,12 +191,12 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
         };
     if changed {
         return Err(Failure::refused(
-            "the canon changed after the preview; nothing was changed, run the import again",
+            "the canon changed after this import read it; nothing was changed, run the import again",
         ));
     }
     if Folder::hash(&folder)? != content.hash {
         return Err(Failure::refused(format!(
-            "the import folder {} changed after the preview; nothing was changed, run the import again",
+            "the import folder {} changed after this import read it; nothing was changed, run the import again",
             folder.display()
         )));
     }

@@ -181,7 +181,7 @@ The report above is about the staged snapshot (the git index), not about your fi
 
   git -C '[..]/canon' add -A -- skiman.toml skills instructions
 
-It stages every change under these paths; to commit only some of them, stage those yourself. If the commit is still rejected, read the new report. Common causes:
+It stages every change under these paths; to commit only some of them, stage those yourself. A commit that names paths (`git commit -- <path>`) leaves out what is staged under other paths, so after running that line, commit without paths, or name these paths as well. If the commit is still rejected, read the new report. Common causes:
   - an ignore rule hides a file: see `git -C '[..]/canon' status --ignored -- skiman.toml skills instructions`
   - a skill folder holds its own .git, so git records it as a single entry of mode 160000: see `git -C '[..]/canon' ls-files -s -- skiman.toml skills instructions`
   - line-ending conversion or a filter changed the content (core.autocrlf, .gitattributes)
@@ -751,24 +751,30 @@ Change those rules, or stage the files with `git add -f`, then commit again.
 "#]]);
 }
 
-/// The ignored file is not the one the violation is about: the line still
-/// fixes the commit, and the ignored file is named next to it.
+/// The ignored file and folder are not what the violation is about: the
+/// line still fixes the commit, and they are named next to it.
 #[test]
-fn when_git_ignores_another_file_the_hint_keeps_the_line_and_names_that_file() {
+fn when_git_ignores_other_paths_the_hint_keeps_the_line_and_names_them() {
     let sandbox = Sandbox::new();
     init(&sandbox);
-    write(&sandbox, ".gitignore", ".skiman/\n/linked/\nlocal.txt\n");
+    write(
+        &sandbox,
+        ".gitignore",
+        ".skiman/\n/linked/\nlocal.txt\ncache/\n",
+    );
     commit_all(&sandbox, "layout");
     write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
     sandbox.git(sandbox.canon(), ["add", "--all"]);
     write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
     write(&sandbox, "skills/pdf/local.txt", "mine\n");
+    write(&sandbox, "skills/pdf/cache/data", "mine\n");
 
     let stderr = rejected(git(&sandbox).args(["commit", "--quiet", "-m", "add pdf"]));
 
     assert!(
         stderr.ends_with(
-            "Git ignores these files, so the line above leaves them out:\n\n  \
+            "Git ignores these paths, so the line above leaves them out:\n\n  \
+             skills/pdf/cache/ (.gitignore:4:cache/)\n  \
              skills/pdf/local.txt (.gitignore:3:local.txt)\n"
         ),
         "{stderr}"

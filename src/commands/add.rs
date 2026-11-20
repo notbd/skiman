@@ -190,6 +190,7 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
         .collect();
     let files: Vec<String> = listing.keys().cloned().collect();
     let mut folders = discovery::candidates(&files);
+    let found = !folders.is_empty();
     folders.retain(|folder| {
         let path = discovery::join(&source.path, folder);
         let size = listing[&discovery::join(folder, "SKILL.md")].1;
@@ -217,8 +218,12 @@ fn discover(source: &Source, upstream: &Upstream) -> Result<Vec<Candidate>, Fail
         } else {
             format!(" below {}", source.path)
         };
+        let why = match found {
+            true => "every folder that holds a SKILL.md is skipped",
+            false => "no folder holds a SKILL.md",
+        };
         return Err(Failure::refused(format!(
-            "no skill found in {}{at}: no folder holds a SKILL.md",
+            "no skill found in {}{at}: {why}",
             source.url
         )));
     }

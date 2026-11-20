@@ -878,6 +878,19 @@ dry run: nothing was written
         .stderr_eq(format!(
             "warning: https://github.com/acme/many.git holds huge/SKILL.md of {size} bytes, over the limit of 10485760 bytes; the skill there is skipped\n"
         ));
+
+    // With nothing else there, the refusal does not say no SKILL.md is there.
+    std::fs::remove_dir_all(dir.join("pdf")).unwrap();
+    sandbox
+        .skiman()
+        .args(["add", "~/src/many", "--all", "--dry-run"])
+        .assert()
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(format!(
+            "warning: ~/src/many holds huge/SKILL.md of {size} bytes, over the limit of 10485760 bytes; the skill there is skipped\n\
+             error: no skill found in ~/src/many: every folder that holds a SKILL.md is skipped\n"
+        ));
 }
 
 #[test]

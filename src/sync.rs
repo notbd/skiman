@@ -849,16 +849,21 @@ pub fn refusal(
         } else {
             ("is inside the canon", "inside the canon")
         };
-        // No link on the way: the canon sits in the tool's own folder.
-        if path == target {
-            return format!(
-                "{shown} {is}, so skiman writes nothing there; keep the canon in a folder of its own"
-            );
-        }
-        format!(
-            "{shown} resolves to {}, {into}, so skiman writes nothing there; point it elsewhere, then run the command again",
-            target.display()
-        )
+        let what = match path == target {
+            true => format!("{shown} {is}"),
+            false => format!("{shown} resolves to {}, {into}", target.display()),
+        };
+        // A link on the way that leads into the canon can be pointed
+        // elsewhere (a file's own link decides nothing: its folder does).
+        // With none, or only one that leads above the canon (a HOME that
+        // is a link), the canon sits in the tool's own folder.
+        let leads_in =
+            |at: &Path| at.is_symlink() && at.canonicalize().is_ok_and(|r| r.starts_with(canon));
+        let fix = match path.ancestors().skip(usize::from(file)).any(leads_in) {
+            true => "point it elsewhere, then run the command again",
+            false => "keep the canon in a folder of its own",
+        };
+        format!("{what}, so skiman writes nothing there; {fix}")
     };
     linked.refusal(path, target).or_else(|| inside.then(canons))
 }
@@ -1220,9 +1225,12 @@ fn followed(dir: &Path, reconciled: &[PathBuf], refused: &[PathBuf]) -> Option<P
 /// anything is written: it, or the first parent that is there, is a link
 /// that leads nowhere or round in a circle, is not a folder, or cannot be read.
 pub fn missing_dir(dir: &Path) -> Result<bool, String> {
-    // Whether `path` is a folder (`true`) or nothing (`false`).
+    use std::io::ErrorKind::{NotADirectory, NotFound};
+    // Whether `path` is a folder (`true`) or nothing (`false`). Below a
+    // file it is nothing too: that parent is named next, and a link that
+    // leads below one leads nowhere.
     let folder = |path: &Path| match std::fs::symlink_metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) if matches!(e.kind(), NotFound | NotADirectory) => Ok(false),
         Err(e) => Err(e.to_string()),
         // Not a link: what lstat said is what it is.
         Ok(meta) if !meta.is_symlink() && meta.is_dir() => Ok(true),
@@ -1230,7 +1238,7 @@ pub fn missing_dir(dir: &Path) -> Result<bool, String> {
         Ok(_) => match std::fs::metadata(path) {
             Ok(meta) if meta.is_dir() => Ok(true),
             Ok(_) => Err(format!("{} is not a folder", path.display())),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Err(e) if matches!(e.kind(), NotFound | NotADirectory) => {
                 Err(format!("{} is a link that leads nowhere", path.display()))
             }
             Err(e) => Err(e.to_string()),

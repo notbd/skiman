@@ -416,10 +416,11 @@ fn the_entry_command_runs_when_the_binary_path_has_a_space() {
         .stdout_eq("");
 }
 
-/// What `init` shows before asking, for the entry in `settings`.
+/// What `init` shows before asking, for the entry in `settings`, a file
+/// that exists (one that does not is written fresh, with no rewrite line).
 fn preview(settings: &Path) -> String {
     format!(
-        "skiman can add this session-start hook entry to `hooks.SessionStart` of {}, so starting a session refreshes distribution:\n{}\n",
+        "skiman can add this session-start hook entry to `hooks.SessionStart` of {}, so starting a session refreshes distribution:\n{}\nadding it rewrites the whole file, so how it is written may change, and a number that 64 bits cannot hold may lose digits\n",
         settings.display(),
         serde_json::to_string_pretty(&skiman_group()).unwrap()
     )
@@ -714,6 +715,12 @@ fn with_a_terminal_init_previews_every_tools_entry_and_accepting_writes_them() {
         serde_json::to_string_pretty(&json!({ "skiman": antigravity_skiman_hook() })).unwrap()
     );
     assert!(shown.contains(&antigravity_preview), "{shown}");
+    // Only Claude Code's file exists, so only its preview says it is rewritten.
+    assert_eq!(
+        shown.matches("adding it rewrites the whole file").count(),
+        1,
+        "{shown}"
+    );
     assert_eq!(
         read_json(&claude_settings(&sandbox)),
         with_skiman_group(user_settings())

@@ -176,6 +176,30 @@ fn list_shows_every_column_for_each_kind_of_skill() {
     assert_eq!(columns(&output.get_output().stdout), expected);
 }
 
+/// A `source.ref` edited by hand since the last update is not the ref
+/// `ref_kind` describes: the row shows it as a plain ref until `update`.
+#[test]
+fn list_shows_a_ref_edited_since_the_last_update_as_a_plain_ref() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let commit = add(&sandbox, "tag");
+    let repo = sandbox.canon();
+    let header = "[skills.tag.source]\n";
+    let pinned = format!("{header}ref = \"v1.0\"\nref_kind = \"tag\"\n");
+    edit(repo.join("skiman.toml"), header, &pinned);
+    edit(
+        repo.join("skiman.lock"),
+        "[skills.tag]\n",
+        "[skills.tag]\nref = \"v1.0\"\n",
+    );
+    edit(repo.join("skiman.toml"), "\"v1.0\"", "\"v2.0\"");
+
+    let output = sandbox.skiman().arg("list").assert().code(0);
+
+    let version = format!("ref v2.0 (at {})", &commit[..7]);
+    assert_eq!(columns(&output.get_output().stdout)[1][3], version);
+}
+
 fn third_party(
     name: &str,
     version: String,

@@ -9,7 +9,7 @@ use crate::Exit;
 use crate::canon::Canon;
 use crate::failure::{Failure, finish};
 use crate::linked::{Linked, Shown};
-use crate::lockfile::Lockfile;
+use crate::lockfile::{LockEntry, Lockfile};
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
 use crate::rules;
@@ -51,11 +51,11 @@ fn list() -> Result<Exit, Failure> {
         let [kind, source, version, modified] = match manifest.source(&name) {
             None => ["own", "-", "-", "-"].map(str::to_owned),
             Some(source) => {
-                let commit = lockfile.entry(&name).and_then(|entry| entry.commit);
+                let entry = lockfile.entry(&name);
                 [
                     "third-party".to_owned(),
                     source_text(&source),
-                    version(&source, commit.as_deref()),
+                    version(&source, entry.as_ref()),
                     modified(&tree, &placed.path(), &name).map_err(io)?,
                 ]
             }
@@ -115,12 +115,17 @@ pub(crate) fn source_text(source: &SourceRecord) -> String {
     }
 }
 
-/// The followed ref or pinned version, with the locked commit.
-fn version(source: &SourceRecord, commit: Option<&str>) -> String {
+/// The followed ref or pinned version, with the locked commit. `ref_kind`
+/// describes the ref of the last update, so it is shown only while
+/// `source.ref` is still the lock's `ref`.
+fn version(source: &SourceRecord, entry: Option<&LockEntry>) -> String {
+    let commit = entry.and_then(|e| e.commit.as_deref());
     let at = commit
         .map(|c| format!(" (at {})", short(c)))
         .unwrap_or_default();
-    match (source.git_ref.as_deref(), source.ref_kind) {
+    let locked = entry.is_some_and(|e| e.git_ref == source.git_ref);
+    let kind = source.ref_kind.filter(|_| locked);
+    match (source.git_ref.as_deref(), kind) {
         (None, _) if commit.is_none() => "local folder".to_owned(),
         (None, _) => format!("follows the default branch{at}"),
         (Some(r), Some("branch")) => format!("follows branch {r}{at}"),
@@ -129,7 +134,7 @@ fn version(source: &SourceRecord, commit: Option<&str>) -> String {
             None => format!("pinned to tag {r}"),
         },
         (Some(r), Some(_)) => format!("pinned to commit {}", short(r)),
-        // A hand-written ref: its kind is derived at the next update.
+        // A hand-written or changed ref: its kind is derived at the next update.
         (Some(r), None) => format!("ref {r}{at}"),
     }
 }

@@ -194,9 +194,10 @@ impl Backups {
             let Some(copy) = moved_copy(&entry, &self.parent) else {
                 continue;
             };
-            delete(&entry).map_err(|e| kept(e, &copy))?;
+            delete(&entry).map_err(|e| kept_of(e, &entry, &copy))?;
             done(&entry, &copy);
-            std::fs::remove_file(note_of(&entry, &self.parent)?).map_err(|e| kept(e, &copy))?;
+            std::fs::remove_file(note_of(&entry, &self.parent)?)
+                .map_err(|e| kept_of(e, &entry, &copy))?;
         }
         Ok(())
     }
@@ -274,6 +275,16 @@ impl Drop for Backups {
 fn kept(e: io::Error, copy: &Path) -> io::Error {
     let message = format!("{e}; the complete copy is at {}", copy.display());
     io::Error::new(e.kind(), Kept(message))
+}
+
+/// [`kept`] for `entry`, below the folder the caller names: says whose
+/// complete copy is at `copy`.
+fn kept_of(e: io::Error, entry: &Path, copy: &Path) -> io::Error {
+    let (entry, copy) = (entry.display(), copy.display());
+    io::Error::new(
+        e.kind(),
+        Kept(format!("{e}; the complete copy of {entry} is at {copy}")),
+    )
 }
 
 /// The message of a [`kept`] error.

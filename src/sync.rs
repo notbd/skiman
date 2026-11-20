@@ -849,16 +849,21 @@ pub fn refusal(
         } else {
             ("is inside the canon", "inside the canon")
         };
-        // No link on the way: the canon sits in the tool's own folder.
-        if path == target {
-            return format!(
-                "{shown} {is}, so skiman writes nothing there; keep the canon in a folder of its own"
-            );
-        }
-        format!(
-            "{shown} resolves to {}, {into}, so skiman writes nothing there; point it elsewhere, then run the command again",
-            target.display()
-        )
+        let what = match path == target {
+            true => format!("{shown} {is}"),
+            false => format!("{shown} resolves to {}, {into}", target.display()),
+        };
+        // A link on the way that leads into the canon can be pointed
+        // elsewhere (a file's own link decides nothing: its folder does).
+        // With none, or only one that leads above the canon (a HOME that
+        // is a link), the canon sits in the tool's own folder.
+        let leads_in =
+            |at: &Path| at.is_symlink() && at.canonicalize().is_ok_and(|r| r.starts_with(canon));
+        let fix = match path.ancestors().skip(usize::from(file)).any(leads_in) {
+            true => "point it elsewhere, then run the command again",
+            false => "keep the canon in a folder of its own",
+        };
+        format!("{what}, so skiman writes nothing there; {fix}")
     };
     linked.refusal(path, target).or_else(|| inside.then(canons))
 }

@@ -730,6 +730,34 @@ fn a_canon_made_in_a_tool_directory_says_it_is_the_canon() {
     assert!(out.lines().any(|l| l == line), "{out}");
 }
 
+/// Through a HOME that is a link, the canon made in a tool directory is
+/// still in the tool's own folder: there is no link there to point elsewhere.
+#[test]
+fn a_canon_made_in_a_tool_directory_through_a_linked_home_says_to_keep_it_apart() {
+    let sandbox = Sandbox::new();
+    let real = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&real).unwrap();
+    let home = sandbox.root().join("linked-home");
+    std::os::unix::fs::symlink(sandbox.home(), &home).unwrap();
+    let dir = home.join(real.strip_prefix(sandbox.home()).unwrap());
+
+    let init = sandbox
+        .skiman()
+        .env("HOME", &home)
+        .args(["init", "--session-hooks", "none"])
+        .arg(&dir)
+        .assert()
+        .code(3);
+
+    let line = format!(
+        "warning: {} resolves to {}, which is the canon, so skiman writes nothing there; keep the canon in a folder of its own\n",
+        dir.display(),
+        real.display()
+    );
+    let stderr = String::from_utf8(init.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains(&line), "{stderr}");
+}
+
 /// A tool directory made between sync's first look and its write is read,
 /// not taken as empty: a skill someone put there is reported as foreign.
 #[test]

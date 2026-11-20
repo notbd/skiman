@@ -360,6 +360,49 @@ fn a_plugin_in_a_cache_linked_elsewhere_is_listed() {
     );
 }
 
+/// Claude Code installs a plugin whose `command` source has `"mode":
+/// "link"` as links to the folder the command printed, named in
+/// `.claude-plugin-link`: its skills are listed where they really are.
+#[test]
+fn a_plugin_installed_in_link_mode_is_listed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let printed = home.join("printed");
+    write(
+        printed.join(".claude-plugin/plugin.json"),
+        r#"{"name": "lnk"}"#,
+    );
+    write(printed.join("skills/review/SKILL.md"), skill_md("review"));
+    let plugin = home.join(".claude/plugins/cache/localmkt/lnk/829a0436803e");
+    write(
+        plugin.join(".claude-plugin-link"),
+        format!(r#"{{"target":"{}"}}"#, printed.display()),
+    );
+    symlink(
+        printed.join(".claude-plugin"),
+        plugin.join(".claude-plugin"),
+    )
+    .unwrap();
+    symlink(printed.join("skills"), plugin.join("skills")).unwrap();
+    write(
+        home.join(".claude/plugins/installed_plugins.json"),
+        format!(
+            r#"{{"version": 2, "plugins": {{"lnk@localmkt": [{{"scope": "user", "installPath": "{}", "version": "829a0436803e"}}]}}}}"#,
+            plugin.display()
+        ),
+    );
+
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains(
+            "| review | Claude Code plugin lnk@localmkt 829a0436803e | ~/printed/skills/review | claude-code |"
+        ) && !stdout.contains("leads outside the plugin"),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn a_renamed_skill_keeps_the_day_its_first_name_was_committed() {
     let sandbox = Sandbox::new();

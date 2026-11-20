@@ -217,7 +217,10 @@ struct PluginSkill {
 /// the way, such as a moved cache, leads elsewhere), or when its realpath
 /// is in a folder `ownership` leaves to other managers. Any other plugin
 /// is a note: sync takes a link to one of its skills for one skiman did
-/// not make, and so does the overview.
+/// not make, and so does the overview. A listed plugin's skills can still
+/// lie outside `~/.claude/plugins` (a moved cache, a plugin installed in
+/// link mode); a link in another tool's directory to one of them is in the
+/// plugin's row here, while sync takes it for one skiman did not make.
 fn plugin_skills(
     home: &Path,
     registry: &Path,
@@ -352,8 +355,10 @@ fn turned_off_plugins(home: &Path, settings: &Path, notes: &mut Vec<String>) -> 
 /// The skill folders of the plugin installed at `dir`, as Claude Code loads
 /// them: its `skills` folder, plus each path its `.claude-plugin/plugin.json`
 /// lists under `skills` (a skill folder, or a folder of skill folders). A
-/// path that resolves outside the plugin is left out, as Claude Code leaves
-/// it out. Returns the folders and what could not be read.
+/// path that resolves outside the plugin is left out. The plugin is `dir`,
+/// and for one Claude Code installs in link mode also the folder its
+/// `.claude-plugin-link` names, where the links in `dir` lead. Returns the
+/// folders and what could not be read.
 fn plugin_skill_folders(home: &Path, dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let mut problems = Vec::new();
     let Ok(root) = dir.canonicalize() else {
@@ -408,10 +413,14 @@ fn plugin_skill_folders(home: &Path, dir: &Path) -> (Vec<PathBuf>, Vec<String>) 
     {
         return (vec![root], problems);
     }
+    let linked_to = std::fs::read(root.join(".claude-plugin-link"))
+        .ok()
+        .and_then(|text| serde_json::from_slice::<Value>(&text).ok())
+        .and_then(|link| Path::new(link.get("target")?.as_str()?).canonicalize().ok());
     let inside = |path: &Path| {
-        path.canonicalize()
-            .ok()
-            .filter(|real| real.starts_with(&root))
+        path.canonicalize().ok().filter(|real| {
+            real.starts_with(&root) || linked_to.as_ref().is_some_and(|t| real.starts_with(t))
+        })
     };
     let mut folders = Vec::new();
     let skills_folder = std::iter::once(("skills".to_owned(), false));

@@ -244,14 +244,14 @@ fn stage_hint(root: &Path, violations: &[rules::Violation]) -> Option<String> {
     let mut hint = hint_text(root, &paths.join(" "));
     if !ignored.is_empty() {
         hint.push_str(&format!(
-            "\n\nGit ignores these files, so the line above leaves them out:\n{}",
+            "\n\nGit ignores these paths, so the line above leaves them out:\n{}",
             listing(ignored.iter())
         ));
     }
     Some(hint)
 }
 
-/// One indented line per ignored file, with its rule.
+/// One indented line per ignored path (a folder ends with `/`), with its rule.
 fn listing<'a>(ignored: impl Iterator<Item = &'a (String, String)>) -> String {
     ignored
         .map(|(path, rule)| format!("\n  {path} ({rule})"))

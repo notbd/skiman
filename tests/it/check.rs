@@ -168,6 +168,36 @@ skiman.toml:7: toml-value: `installed` in [skills.pdf] must be a date without a 
     assert!(!String::from_utf8(out).unwrap().contains("installed"));
 }
 
+/// git leaves an ignored file out of every commit, though the working tree
+/// holds it; an ignored folder is one line, and names the rules skip are
+/// not reported.
+#[test]
+fn a_managed_file_git_ignores_is_a_warning_with_its_rule() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    sandbox
+        .skiman()
+        .args(["new", "pdf", "-d", "Fill PDF forms", "--group", "docs"])
+        .assert()
+        .code(0);
+    append(
+        &sandbox,
+        "skiman.toml",
+        "\n[skills.pdf]\nsummary = \"Fill PDF forms\"\norigin = \"written here\"\n",
+    );
+    write(&sandbox, "skills/docs/pdf/notes.md", "# Notes\n");
+    write(&sandbox, "skills/docs/pdf/.DS_Store", "");
+    write(&sandbox, "skills/docs/pdf/cache/a.pyc", "");
+    write(&sandbox, "skills/docs/pdf/cache/b.pyc", "");
+    append(&sandbox, ".gitignore", "notes.md\n.DS_Store\ncache/\n");
+
+    check(&sandbox).code(0).stdout_eq("").stderr_eq(str![[r#"
+warning: git ignores skills/docs/pdf/cache/ (.gitignore:5:cache/), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`
+warning: git ignores skills/docs/pdf/notes.md (.gitignore:3:notes.md), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`
+
+"#]]);
+}
+
 #[test]
 fn a_skill_folder_without_skill_md_is_reported() {
     let sandbox = Sandbox::new();

@@ -719,6 +719,63 @@ fn no_line_is_printed_when_the_working_tree_breaks_the_rules_too() {
     assert!(!stderr.contains("git -C"), "{stderr}");
 }
 
+/// Only the ignored files the violations are about are named.
+#[test]
+fn when_git_ignores_the_file_a_violation_needs_the_hint_names_it_instead_of_a_line_to_stage() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(
+        &sandbox,
+        ".gitignore",
+        ".skiman/\n/linked/\nSKILL.md\nlocal.txt\n",
+    );
+    commit_all(&sandbox, "layout");
+    write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
+    write(&sandbox, "skills/pdf/reference.md", "# Reference\n");
+    write(&sandbox, "skills/pdf/local.txt", "mine\n");
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
+
+    git(&sandbox)
+        .args(["commit", "--quiet", "-m", "add pdf"])
+        .assert()
+        .code(1)
+        .stderr_eq(str![[r#"
+skills/pdf: skill-md: no SKILL.md at the top of the skill folder
+
+The report above is about the staged snapshot (the git index), not about your files: the working tree passes every rule, but git ignores these files, so `git add` leaves them out:
+
+  skills/pdf/SKILL.md (.gitignore:3:SKILL.md)
+
+Change those rules, or stage the files with `git add -f`, then commit again.
+
+"#]]);
+}
+
+/// The ignored file is not the one the violation is about: the line still
+/// fixes the commit, and the ignored file is named next to it.
+#[test]
+fn when_git_ignores_another_file_the_hint_keeps_the_line_and_names_that_file() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(&sandbox, ".gitignore", ".skiman/\n/linked/\nlocal.txt\n");
+    commit_all(&sandbox, "layout");
+    write(&sandbox, "skills/pdf/SKILL.md", NO_DESCRIPTION);
+    sandbox.git(sandbox.canon(), ["add", "--all"]);
+    write(&sandbox, "skills/pdf/SKILL.md", &skill_md("pdf"));
+    write(&sandbox, "skills/pdf/local.txt", "mine\n");
+
+    let stderr = rejected(git(&sandbox).args(["commit", "--quiet", "-m", "add pdf"]));
+
+    assert!(
+        stderr.ends_with(
+            "Git ignores these files, so the line above leaves them out:\n\n  \
+             skills/pdf/local.txt (.gitignore:3:local.txt)\n"
+        ),
+        "{stderr}"
+    );
+    stage_as_printed_and_commit(&sandbox, &stderr, sandbox.canon());
+}
+
 #[test]
 fn the_printed_line_cannot_stage_what_a_clean_filter_breaks_so_the_commit_is_rejected_again() {
     let sandbox = Sandbox::new();

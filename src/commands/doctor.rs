@@ -29,7 +29,7 @@ use crate::canon_lock::CanonLock;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
 use crate::git;
-use crate::git_hooks::{self, Hook};
+use crate::git_hooks::{self, Hook, shell_quote};
 use crate::layout::Layout;
 use crate::linked::{Linked, State};
 use crate::manifest::Manifest;
@@ -134,20 +134,46 @@ fn report_git_hooks(repo: &Canon, binary: &Path, exit: &mut Exit) {
         Ok(git_hooks::Status::NotAGitRepo) => {
             out!("git hooks: {root} is not in a git repo, so it has no git hooks")
         }
-        // Not a problem: doctor cannot tell whether the hooks there hold the lines.
-        Ok(git_hooks::Status::HooksPathElsewhere(dir)) => out!(
-            "git hooks: core.hooksPath points to {}, so skiman's git hooks do not run; add skiman's lines to the hooks there by hand",
-            dir.display()
-        ),
-        Ok(git_hooks::Status::Hooks { dir, hooks }) => {
+        Ok(git_hooks::Status::Hooks {
+            dir,
+            elsewhere,
+            hooks,
+        }) => {
+            // e.g. `/dev/null`, a common way to turn hooks off.
+            if elsewhere && !dir.is_dir() {
+                out!(
+                    "git hooks: core.hooksPath points to {}, which is not a folder, so git runs no hooks",
+                    dir.display()
+                );
+                return;
+            }
             if hooks.iter().all(|(_, hook)| *hook == Hook::Installed) {
                 out!("git hooks: installed in {}", dir.display());
+            } else if elsewhere {
+                out!(
+                    "git hooks: core.hooksPath points to {}, so `skiman init` writes no git hooks there",
+                    dir.display()
+                );
             }
             for (path, hook) in hooks {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let line = git_hooks::line_to_add(&name, binary);
+                let quoted = shell_quote(&path.to_string_lossy());
                 let path = path.display();
                 match hook {
                     Hook::Installed => {}
+                    // doctor does not run the hook: an earlier line may exit.
+                    Hook::HoldsLine => out!(
+                        "git hook {path}: holds skiman's line; whether git reaches it is not checked"
+                    ),
+                    Hook::NotExecutable => problem!(
+                        exit,
+                        "git hook {path}: not executable, so git skips it; make it executable: chmod +x {quoted}"
+                    ),
+                    // Not a problem: the user keeps these hooks, skiman's line or not.
+                    Hook::Missing | Hook::Outdated | Hook::Foreign if elsewhere => {
+                        out!("git hook {path}: add this line to it by hand: {line}")
+                    }
                     Hook::Missing => {
                         problem!(
                             exit,
@@ -158,11 +184,9 @@ fn report_git_hooks(repo: &Canon, binary: &Path, exit: &mut Exit) {
                         exit,
                         "git hook {path}: skiman's, but not what `skiman init` writes now; run `skiman init {root}` again"
                     ),
-                    // Not a problem: doctor cannot tell whether it holds the line.
-                    Hook::Foreign => out!(
-                        "git hook {path}: not skiman's; add this line to it by hand: {}",
-                        git_hooks::line_to_add(&name, binary)
-                    ),
+                    Hook::Foreign => {
+                        out!("git hook {path}: not skiman's; add this line to it by hand: {line}")
+                    }
                     Hook::Unreadable(e) => problem!(exit, "git hook {path}: cannot read it: {e}"),
                 }
             }

@@ -2,6 +2,7 @@
 //! `skiman check --staged` and fails closed; the post hooks run
 //! `skiman sync --hook` and always exit 0. `init` installs them.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -79,42 +80,63 @@ pub fn install(repo_root: &Path, binary: &Path) -> Result<Installed, Failure> {
 pub enum Status {
     /// The canon is not in a git repo.
     NotAGitRepo,
-    /// `core.hooksPath` points to this folder instead of the repo's own.
-    HooksPathElsewhere(PathBuf),
-    /// Each hook file in the hooks folder, in [`hook_names`] order.
+    /// Each hook file in the folder git runs hooks from, in [`hook_names`]
+    /// order; `elsewhere` when `core.hooksPath` points away from the repo's
+    /// own hooks folder, where `install` writes nothing.
     Hooks {
         dir: PathBuf,
+        elsewhere: bool,
         hooks: Vec<(PathBuf, Hook)>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hook {
-    /// Exactly what `install` writes.
+    /// Exactly what `install` writes, and executable.
     Installed,
+    /// Not skiman's, holds the line [`line_to_add`] gives, and executable;
+    /// whether git reaches that line is not known.
+    HoldsLine,
+    /// What `install` writes, or holds the line, but not executable: git skips it.
+    NotExecutable,
     Missing,
     /// skiman's (it has the marker) with other content, e.g. another binary.
     Outdated,
-    /// Not skiman's: `install` leaves it alone.
+    /// Not skiman's and without the line: `install` leaves it alone.
     Foreign,
     Unreadable(String),
 }
 
-/// Compares every hook file with what [`install`] would write for `binary`. Read-only.
+/// Compares every hook file with what [`install`] would write for `binary`,
+/// and looks for the line to add by hand in the others. Read-only: no hook runs.
 pub fn status(repo_root: &Path, binary: &Path) -> Result<Status, Failure> {
     let Some((hooks_dir, own_dir)) = hooks_dirs(repo_root)? else {
         return Ok(Status::NotAGitRepo);
     };
-    if hooks_dir != own_dir {
-        return Ok(Status::HooksPathElsewhere(hooks_dir));
-    }
     let hooks = hook_names()
         .map(|name| {
             let path = hooks_dir.join(name);
             let hook = match std::fs::read(&path) {
-                Ok(current) if current == script(name, binary).as_bytes() => Hook::Installed,
-                Ok(current) if is_skimans(&current) => Hook::Outdated,
-                Ok(_) => Hook::Foreign,
+                Ok(current) => {
+                    let hook = if current == script(name, binary).as_bytes() {
+                        Hook::Installed
+                    } else if is_skimans(&current) {
+                        Hook::Outdated
+                    } else if current
+                        .split(|b| *b == b'\n')
+                        .any(|line| line.trim_ascii() == line_to_add(name, binary).as_bytes())
+                    {
+                        Hook::HoldsLine
+                    } else {
+                        Hook::Foreign
+                    };
+                    let executable = std::fs::metadata(&path)
+                        .is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0);
+                    match hook {
+                        Hook::Installed | Hook::HoldsLine if !executable => Hook::NotExecutable,
+                        hook => hook,
+                    }
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Hook::Missing,
                 Err(e) => Hook::Unreadable(e.to_string()),
             };
@@ -122,6 +144,7 @@ pub fn status(repo_root: &Path, binary: &Path) -> Result<Status, Failure> {
         })
         .collect();
     Ok(Status::Hooks {
+        elsewhere: hooks_dir != own_dir,
         dir: hooks_dir,
         hooks,
     })

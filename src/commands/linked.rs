@@ -118,7 +118,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
         }
     }
     let gitignore = repo.root().join(".gitignore");
-    match gitignore::ignore(repo.root())? {
+    match gitignore::ignore(repo.root(), gitignore::LINE)? {
         gitignore::Outcome::Link => {
             return Err(Failure::refused(format!(
                 "{} is a link, so skiman cannot add `/linked/` to it; replace the link with a file holding the same lines, then run this again",

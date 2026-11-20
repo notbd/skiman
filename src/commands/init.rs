@@ -15,7 +15,7 @@ use crate::canon_lock::CanonLock;
 use crate::commands::has_terminal;
 use crate::config::UserConfig;
 use crate::failure::{Failure, finish};
-use crate::fsutil::{absolute_lexical, rewrite_atomic, write_atomic};
+use crate::fsutil::absolute_lexical;
 use crate::git_hooks;
 use crate::linked::{self, Linked, gitignore};
 use crate::manifest::Manifest;
@@ -83,22 +83,12 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
         .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
         .filter(|previous| previous != repo.root())
         .map(|root| sync::PreviousCanon { root });
-    let mut guarded = Exit::Success;
-    if target == Target::Reuse {
-        guarded = ignore_machine_state(&repo, paths.home())?;
-    } else {
+    if target != Target::Reuse {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the canon: {e}")))?;
         out!("created canon {}", path.display());
     }
-    // A linked `.gitignore` keeps only the `.skiman/` handling above.
-    if gitignore::ignore(repo.root())? == gitignore::Outcome::Added && target == Target::Reuse {
-        out!(
-            "added {} to {}",
-            gitignore::LINE,
-            repo.root().join(".gitignore").display()
-        );
-    }
+    let guarded = ignore_lines(&repo, target)?;
     // The user config names `path`: when a link on it was re-pointed since
     // the check, it no longer leads to the canon made, so it is not saved.
     let now = linked::written_through(&path);
@@ -329,9 +319,8 @@ fn git_init(path: &Path) -> Result<(), Failure> {
     Ok(())
 }
 
-/// `skills/`, an empty `instructions/shared.md`, `skiman.toml` listing the
-/// tools present right now, and the `.gitignore` entry for `.skiman/`
-/// (`init` adds the one for `linked/` next).
+/// `skills/`, an empty `instructions/shared.md`, and `skiman.toml` listing
+/// the tools present right now (`init` adds the `.gitignore` lines next).
 fn write_layout(repo: &Canon, home: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(repo.skills_dir())?;
     let shared = repo.shared_body();
@@ -342,75 +331,35 @@ fn write_layout(repo: &Canon, home: &Path) -> std::io::Result<()> {
         .filter(|tool| tool.is_present(home))
         .map(|tool| tool.id)
         .collect();
-    std::fs::write(repo.manifest_file(), new_manifest_text(&present))?;
-    std::fs::write(repo.root().join(".gitignore"), ".skiman/\n")
+    std::fs::write(repo.manifest_file(), new_manifest_text(&present))
 }
 
-/// A reused canon gets the `.gitignore` entry for `.skiman/` when no
-/// line ignores it yet (the file is created when missing); nothing else of
-/// it changes. The new content replaces the file in one step and keeps its
-/// mode. When `.gitignore` is a link (a repo managed with dotfiles), the
-/// file it points to is replaced and the link stays; a link to a missing
-/// file is refused, and so is one into a linked folder of this canon.
-fn ignore_machine_state(repo: &Canon, home: &Path) -> Result<Exit, Failure> {
+/// Adds `.skiman/` and `/linked/` to the canon's `.gitignore` where git
+/// does not ignore those folders yet ([`gitignore::ignore`]), saying so in
+/// a reused canon. A `.gitignore` that is a link is not written through:
+/// git does not read it, so a warning says to replace it or to use
+/// `.git/info/exclude` (exit 3).
+fn ignore_lines(repo: &Canon, target: Target) -> Result<Exit, Failure> {
     let path = repo.root().join(".gitignore");
-    let cannot_read =
-        |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", path.display()));
-    let (real, text, permissions) = match std::fs::symlink_metadata(&path) {
-        Ok(_) => {
-            let real = path.canonicalize().map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Failure::refused(format!(
-                        "{} is a link to a missing file; create that file or remove the link, then run `skiman init` again",
-                        path.display()
-                    ))
-                } else {
-                    cannot_read(e)
-                }
-            })?;
-            let text = std::fs::read_to_string(&real).map_err(cannot_read)?;
-            let permissions = std::fs::metadata(&real).map_err(cannot_read)?.permissions();
-            (real, text, Some(permissions))
+    let mut not_added = Vec::new();
+    for line in [gitignore::SKIMAN_LINE, gitignore::LINE] {
+        match gitignore::ignore(repo.root(), line)? {
+            gitignore::Outcome::Added if target == Target::Reuse => {
+                out!("added {line} to {}", path.display());
+            }
+            gitignore::Outcome::Link => not_added.push(format!("`{line}`")),
+            _ => {}
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (path.clone(), String::new(), None),
-        Err(e) => return Err(cannot_read(e)),
-    };
-    if text.lines().any(|line| {
-        matches!(
-            line.trim(),
-            ".skiman" | ".skiman/" | "/.skiman" | "/.skiman/"
-        )
-    }) {
+    }
+    if not_added.is_empty() {
         return Ok(Exit::Success);
     }
-    // Written through a link: never into a linked folder, nor while the
-    // registrations cannot be read. `real` is what is written.
-    if real != path {
-        let refused = match Manifest::load(repo) {
-            Ok(manifest) => Linked::read(home, repo, &manifest).refusal(&path, &real),
-            Err(_) => Some(format!(
-                "{} is a link, and while skiman.toml cannot be read skiman cannot tell whether it leads into a linked folder",
-                path.display()
-            )),
-        };
-        if let Some(message) = refused {
-            err!("warning: {message}; `.skiman/` is not added to it");
-            return Ok(Exit::NeedsAttention);
-        }
-    }
-    let separator = if text.is_empty() || text.ends_with('\n') {
-        ""
-    } else {
-        "\n"
-    };
-    let new = format!("{text}{separator}.skiman/\n");
-    match permissions {
-        Some(permissions) => rewrite_atomic(&real, new.as_bytes(), permissions),
-        None => write_atomic(&real, new.as_bytes()),
-    }
-    .map_err(|e| Failure::operational(format!("cannot write {}: {e}", path.display())))?;
-    out!("added .skiman/ to {}", path.display());
-    Ok(Exit::Success)
+    err!(
+        "warning: {} is a link, and git does not read a `.gitignore` that is a link, so skiman writes nothing to it; replace the link with a file holding its lines plus {}, or add those lines to .git/info/exclude",
+        path.display(),
+        not_added.join(", ")
+    );
+    Ok(Exit::NeedsAttention)
 }
 
 /// The path skiman was invoked through: `argv[0]` made absolute, or resolved

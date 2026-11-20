@@ -430,8 +430,9 @@ pub fn with_source(text: &str, name: &str, source: &SourceRecord) -> Result<Stri
 
 /// `text` (a `skiman.toml`) with `ref` and `ref_kind` of
 /// `[skills.<name>.source]` set to `git_ref` and `ref_kind`, each removed
-/// when `None`. A key that already holds its value keeps its bytes, so the
-/// text is unchanged exactly when both already match.
+/// when `None`. When both already match, `text` comes back as it is, line
+/// endings included; otherwise a key that already holds its value keeps
+/// its bytes.
 pub fn with_source_ref(
     text: &str,
     name: &str,
@@ -445,16 +446,19 @@ pub fn with_source_ref(
         .and_then(|skill| skill.get_mut("source"))
         .and_then(Item::as_table_like_mut)
         .ok_or_else(|| format!("[skills.{name}.source] is not a table"))?;
+    let mut changed = false;
     for (key, want) in [("ref", git_ref), ("ref_kind", ref_kind)] {
         match want {
             Some(want) if source.get(key).and_then(Item::as_str) != Some(want) => {
                 source.insert(key, value(want));
+                changed = true;
             }
             Some(_) => {}
-            None => {
-                source.remove(key);
-            }
+            None => changed |= source.remove(key).is_some(),
         }
+    }
+    if !changed {
+        return Ok(text.to_owned());
     }
     Ok(doc.to_string())
 }

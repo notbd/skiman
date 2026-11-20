@@ -232,6 +232,26 @@ fn an_up_to_date_skill_changes_nothing_and_creates_no_backup() {
     assert!(backup_dirs(&sandbox).is_empty());
 }
 
+/// A `skiman.toml` whose `ref` and `ref_kind` stay the same keeps its
+/// bytes, line endings included.
+#[test]
+fn an_up_to_date_skill_keeps_a_crlf_skiman_toml_as_it_is() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    let manifest = sandbox.canon().join("skiman.toml");
+    let crlf = read(&manifest).replace("\n", "\r\n");
+    write(&manifest, &crlf);
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!("skill pdf: up to date at {}\n", up.head()));
+
+    assert_eq!(read(&manifest), crlf);
+}
+
 fn inode(path: impl AsRef<Path>) -> u64 {
     std::fs::metadata(path).unwrap().ino()
 }

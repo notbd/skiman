@@ -53,7 +53,7 @@ use crate::skiman_manual;
 use crate::snapshot::Snapshot;
 use crate::source::{UrlKind, check_url};
 use crate::staging::Staging;
-use crate::sync::{self, Output};
+use crate::sync::{self, Output, Place};
 use crate::test_hook;
 use crate::tree::{self, Kind, Overlay, Tree, WorkingTree};
 use crate::upstream::{self, Upstream, print_not_installed};
@@ -736,8 +736,9 @@ fn refuse_linked_tables(content: &Folder) -> Result<(), Failure> {
 /// be read, since what leads into it is unknown; when a skill folder or a
 /// group folder of the import folder uses a linked skill's name; and when
 /// a place the closing sync writes ([`sync::write_targets`], its cleanup of
-/// tools that are not enabled included) resolves into a linked folder
-/// (spec "Write targets never reach into a linked folder").
+/// tools that are not enabled included) is one sync's guard refuses
+/// ([`sync::refusal`]): in a linked folder (spec "Write targets never reach
+/// into a linked folder") or in the canon.
 fn linked_folders(
     paths: &Paths,
     repo: &Canon,
@@ -783,15 +784,19 @@ fn linked_folders(
             lines.join("\n")
         )));
     }
-    // Every place the closing sync writes, its cleanup included.
+    // Every place the closing sync writes, its cleanup included: the
+    // takeover moves nothing from where sync's guard writes nothing.
     let lines: Vec<String> = sync::write_targets(paths.home(), manifest)
         .iter()
-        .filter_map(|t| linked.refusal(&t.path, &t.lands))
+        .filter_map(|t| {
+            let file = t.place == Place::Instructions;
+            sync::refusal((repo, &linked), (&t.path, &t.lands, file))
+        })
         .map(|why| format!("  {why}"))
         .collect();
     if !lines.is_empty() {
         return Err(Failure::refused(format!(
-            "refusing to import {}: it would write into a linked folder; nothing was changed:\n{}",
+            "refusing to import {}: it would write into a linked folder or the canon; nothing was changed:\n{}",
             content.root.display(),
             lines.join("\n")
         )));

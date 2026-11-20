@@ -500,6 +500,37 @@ fn a_special_file_in_an_entry_to_move_refuses_the_import_naming_it() {
     assert!(!sandbox.state_home().join("skiman/backups").exists());
 }
 
+/// A tool directory leading into the canon's `skills/`: running the import
+/// again would take the canon's own skills for a tool's and move them to
+/// the backup, so it is refused as sync's guard refuses writing there.
+#[test]
+fn a_tool_directory_that_leads_into_the_canon_refuses_the_import() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let folder = import_folder(&sandbox, TOOLS);
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&claude).unwrap();
+    std::os::unix::fs::symlink(sandbox.canon().join("skills"), &claude).unwrap();
+
+    assert_refused(
+        &sandbox,
+        &folder,
+        1,
+        &["inside the canon, so skiman writes nothing there"],
+    );
+    assert_eq!(
+        read(sandbox.canon().join("skills/notes/SKILL.md")),
+        skill_md("notes")
+    );
+}
+
 #[test]
 fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {

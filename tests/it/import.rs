@@ -531,6 +531,31 @@ fn a_tool_directory_that_leads_into_the_canon_refuses_the_import() {
     );
 }
 
+/// Codex's tool directory leads through `bundle`, a foreign skill the
+/// import moves: once moved, the tool directory would lead nowhere.
+#[test]
+fn a_tool_directory_through_an_entry_the_import_moves_refuses_the_import() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let bundle = sandbox.root().join("real-bundle");
+    write(bundle.join("SKILL.md"), skill_md("bundle"));
+    write(bundle.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+    let claude = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::create_dir_all(&claude).unwrap();
+    std::os::unix::fs::symlink(&bundle, claude.join("bundle")).unwrap();
+    let codex = sandbox.tool_dir(Tool::Codex);
+    std::fs::remove_dir_all(&codex).unwrap();
+    std::os::unix::fs::symlink(claude.join("bundle/skills"), &codex).unwrap();
+    let folder = import_folder(&sandbox, TOOLS);
+
+    let through = format!(
+        "  {}: through {}",
+        codex.display(),
+        claude.join("bundle").display()
+    );
+    assert_refused(&sandbox, &folder, 1, &[&through]);
+}
+
 #[test]
 fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {

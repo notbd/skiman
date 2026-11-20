@@ -43,12 +43,11 @@ during the import.
   - any folder containing `.claude-plugin/plugin.json`
 - Follow symlinks to find where content really lives. Several entries can
   point to the same folder.
-- skiman refuses the import while a tool directory is a link into the
-  canon (such as `~/.claude/skills -> <canon>/skills`). No tool directory
-  may be a link into an entry the import moves either (such as
-  `~/.agents/skills -> ~/.claude/skills/bundle/skills`, where `bundle` is a
-  foreign skill): the import would leave that tool directory dangling. Ask
-  the user to replace such a link with a real folder first.
+- skiman refuses the import while a tool directory leads into the canon
+  (such as `~/.claude/skills -> <canon>/skills`) or through an entry the
+  import moves (such as `~/.agents/skills -> ~/.claude/skills/bundle/skills`,
+  where `bundle` is a foreign skill). Ask the user to replace such a link
+  with a real folder first.
 
 ## The import folder
 

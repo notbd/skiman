@@ -854,8 +854,9 @@ struct Plan {
 impl Plan {
     /// Classifies every entry of every installed tool's tool directory (tool
     /// directories resolving to one real directory once) and every
-    /// instruction location, as sync would after the import. Refuses (exit
-    /// 1) what [`linked_folders`] refuses.
+    /// instruction location, as sync would after the import. Refuses (exit 1)
+    /// what [`linked_folders`] refuses, and an installed tool's directory
+    /// whose [`resolution`] passes through an entry that moves.
     fn make(
         paths: &Paths,
         repo: &Canon,
@@ -936,6 +937,30 @@ impl Plan {
         })?;
         plan.moves
             .extend(order.into_iter().map(|i| entries[i].clone()));
+        // A tool directory resolved through an entry that moves would lead
+        // nowhere once it moved, and sync could not write there.
+        let lines: Vec<String> = sync::installed_tools(home, manifest)
+            .map(|tool| tool.tool_dir(home))
+            .filter_map(|dir| {
+                let hops = resolution(&dir);
+                let entry = plan
+                    .moves
+                    .iter()
+                    .find(|m| hops.iter().any(|hop| hop.starts_with(&m.real)))?;
+                Some(format!(
+                    "  {}: through {}",
+                    dir.display(),
+                    entry.path.display()
+                ))
+            })
+            .collect();
+        if !lines.is_empty() {
+            return Err(Failure::refused(format!(
+                "refusing to import {}: these tool directories lead through an entry the import moves to the backup, after which they would lead nowhere; replace each with a real folder, nothing was changed:\n{}",
+                content.root.display(),
+                lines.join("\n")
+            )));
+        }
         let mut seen = BTreeSet::new();
         for tool in sync::installed_tools(home, manifest) {
             let path = home.join(tool.instruction_file);

@@ -707,6 +707,29 @@ fn a_canon_in_a_tool_directory_is_refused_in_its_own_words() {
     assert!(out.contains(&nowhere), "{out}");
 }
 
+/// A canon made right in a tool directory is named as the canon, not as a
+/// path that resolves into it.
+#[test]
+fn a_canon_made_in_a_tool_directory_says_it_is_the_canon() {
+    let sandbox = Sandbox::new();
+    let dir = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&dir).unwrap();
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&dir)
+        .assert()
+        .code(3);
+    let line = format!(
+        "{} is the canon, so skiman writes nothing there; keep the canon in a folder of its own",
+        dir.display()
+    );
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == line), "{out}");
+}
+
 /// A tool directory made between sync's first look and its write is read,
 /// not taken as empty: a skill someone put there is reported as foreign.
 #[test]

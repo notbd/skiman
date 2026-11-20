@@ -167,7 +167,7 @@ skiman lists these here and never changes them.
 
 ## Notes
 
-- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the canon, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
+- An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the canon (a copy of another skill's SKILL.md counts as added), which can be later than the real install; `installed = YYYY-MM-DD` in its `[skills.<name>]` table records the real day.
 - Claude Code plugin kit@market 1.0: `skills` in ~/.claude/plugins/cache/market/kit/1.0/.claude-plugin/plugin.json lists `5`, which is not a path.
 - Claude Code plugin kit@market 1.0: the skills path `../outside` does not exist.
 - Claude Code plugin kit@market 1.0: the skills path `./extra` leads outside the plugin.
@@ -179,6 +179,19 @@ skiman lists these here and never changes them.
 "#]])
         .stderr_eq("");
     assert_eq!(tree(sandbox.root()), before, "overview changed a file");
+}
+
+/// No agent tool and no day from git: nothing to note, so no Notes section.
+#[test]
+fn an_overview_with_nothing_to_note_has_no_notes() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    for tool in [".claude", ".codex", ".gemini"] {
+        std::fs::remove_dir_all(sandbox.home().join(tool)).unwrap();
+    }
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(!stdout.contains("## Notes"), "{stdout}");
 }
 
 #[test]
@@ -198,6 +211,8 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
         stdout.contains("installed_plugins.json is not in a format skiman reads; its plugins' skills are not listed."),
         "{stdout}"
     );
+    // No row has a day marked (git), so nothing explains one.
+    assert!(!stdout.contains("(git)"), "{stdout}");
 
     // An unreadable entry is named; the others are still listed.
     let cache = sandbox.home().join(".claude/plugins/cache/market");

@@ -42,10 +42,11 @@ const STAND_IN_NOTE: &str = "A summary in italics stands in for a missing `metad
      it is the first sentence of the skill's description.";
 /// The summary of the skill skiman brings, which has no `[skills.<name>]` table.
 const MANUAL_SUMMARY: &str = "How to change skills and global instructions with skiman";
-/// What a day marked `(git)` means.
+/// What a day marked `(git)` means; printed when a row has one.
 const GIT_DAY_NOTE: &str = "An installed day marked (git) is the day of the latest commit that added \
-     the skill's SKILL.md to the canon, which can be later than the real install; \
-     `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.";
+     the skill's SKILL.md to the canon (a copy of another skill's SKILL.md counts as added), \
+     which can be later than the real install; \
+     `installed = YYYY-MM-DD` in its `[skills.<name>]` table records the real day.";
 
 pub fn run() -> Exit {
     finish(overview())
@@ -58,6 +59,7 @@ fn overview() -> Result<Exit, Failure> {
     // Groups in name order; skills without one come last.
     let mut groups: BTreeMap<String, Vec<[String; 7]>> = BTreeMap::new();
     let mut ungrouped = Vec::new();
+    let mut git_day = false;
     let skills = canon_skills(&repo, &manifest)?;
     for skill in &skills {
         let (name, path) = (&skill.placed.name, skill.placed.path());
@@ -74,10 +76,11 @@ fn overview() -> Result<Exit, Failure> {
         } else {
             skill.modified.clone()
         };
-        let installed = info
-            .installed
-            .clone()
-            .or_else(|| install_commit_day(repo.root(), &path).map(|day| format!("{day} (git)")));
+        let installed = info.installed.clone().or_else(|| {
+            let day = install_commit_day(repo.root(), &path)?;
+            git_day = true;
+            Some(format!("{day} (git)"))
+        });
         let row = [
             name.clone(),
             or_dash(info.summary.clone()),
@@ -165,9 +168,13 @@ fn overview() -> Result<Exit, Failure> {
             .collect();
         table(&ELSEWHERE_HEADER, &rows);
     }
-    out!("## Notes\n");
-    for note in std::iter::once(GIT_DAY_NOTE.to_owned()).chain(found.notes) {
-        out!("- {note}");
+    let git_day = git_day.then(|| GIT_DAY_NOTE.to_owned());
+    let notes: Vec<String> = git_day.into_iter().chain(found.notes).collect();
+    if !notes.is_empty() {
+        out!("## Notes\n");
+        for note in notes {
+            out!("- {note}");
+        }
     }
     Ok(Exit::Success)
 }

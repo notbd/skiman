@@ -857,6 +857,38 @@ fn sync_hook_prints_each_project_report_once_and_exits_0() {
     assert_eq!(sync(&sandbox).status.code(), Some(3));
 }
 
+/// The hook says the one command for all items of a root again when the
+/// items it names change, though the root and its count of lines do not.
+#[test]
+fn sync_hook_repeats_the_command_for_all_items_when_they_change() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = root(&sandbox);
+    let files = ["a/AGENTS.md", "b/AGENTS.md", "c/AGENTS.md"].map(|rel| dir.join(rel));
+    for file in &files {
+        write(file, "v1\n");
+    }
+    register(&sandbox, &dir);
+    adopt_all(&sandbox);
+    let all = |files: &[PathBuf]| {
+        let paths: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
+        format!(
+            "skiman: to bring them all back: skiman project restore {}\n",
+            paths.join(" ")
+        )
+    };
+    for file in &files[..2] {
+        std::fs::remove_file(file).unwrap();
+    }
+    assert!(stdout_of(&hook(&sandbox)).contains(&all(&files[..2])));
+
+    std::fs::remove_file(&files[2]).unwrap();
+    let stdout = stdout_of(&hook(&sandbox));
+
+    assert!(stdout.contains(&all(&files)), "{stdout}");
+    assert_eq!(stdout.lines().count(), 2, "{stdout}");
+}
+
 #[test]
 fn sync_hook_mirrors_a_project_edit_without_printing() {
     let sandbox = Sandbox::new();

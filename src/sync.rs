@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use sha2::Digest;
+
 use crate::Exit;
 use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
@@ -70,7 +72,8 @@ pub enum ItemKind {
     /// file (`why`), so the link leads nowhere. Not recorded for the hook.
     NoSharedBody { why: String },
     /// A report on a project item or root (`crate::project::sync`): `what`
-    /// names the report in the recorded set; `attention` makes it exit 3.
+    /// names the report in the recorded set, with what it says when its path
+    /// is its scope; `attention` makes it exit 3.
     Project {
         what: &'static str,
         message: String,
@@ -155,14 +158,21 @@ pub fn occupied(name: &str, path: &Path, target: &Path) -> ItemKind {
 impl Item {
     /// What identifies the item in the recorded set.
     pub fn id(&self) -> String {
-        let kind = match self.kind {
+        let kind = match &self.kind {
             ItemKind::Foreign { .. } => "foreign",
             ItemKind::Occupied { .. } => "occupied",
             ItemKind::InvalidSkillFolder { .. } => "invalid-skill-folder",
             ItemKind::RefusedLocation => "refused-location",
             ItemKind::NoSharedBody { .. } => "no-shared-body",
-            ItemKind::Project { what, .. } => {
-                return format!("project-{what} {}", self.path.display());
+            ItemKind::Project { what, message, .. } => {
+                let id = format!("project-{what} {}", self.path.display());
+                // A report on its whole scope (one line naming many items) is
+                // new whenever what it says is: the items it names change.
+                if self.path.as_os_str() != self.scope.as_str() {
+                    return id;
+                }
+                let said = crate::tree::hex(&sha2::Sha256::digest(message.as_bytes()));
+                return format!("{id} {}", &said[..16]);
             }
             ItemKind::Linked { what, .. } => {
                 return format!("linked-{what} {}", self.path.display());

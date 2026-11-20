@@ -27,8 +27,12 @@ A global skill whose folder is outside the canon: a linked folder itself, or a c
 _Avoid_: referenced skill, shared skill, mounted skill
 
 **Upstream** (上游):
-The source a third-party skill came from (a git repo path, an archive, a local folder), pinned to a specific version.
-_Avoid_: origin, remote, source
+What a third-party skill came from (a git repository or a local folder), pinned to a specific version; its source says where to fetch it.
+_Avoid_: origin, remote
+
+**Source** (source):
+Where a third-party skill's upstream is fetched from, as `skiman add <source>` takes it: a git URL, a GitHub tree or blob URL, `<owner>/<repo>`, or a local folder. `skiman.toml` records it in `[skills.<name>.source]`. `skiman list` and `skiman overview` show it in their source column; for an own skill, `skiman overview` shows its origin there.
+_Avoid_: url, location
 
 **Upstream snapshot** (上游原样):
 An unmodified copy of a third-party skill's upstream at the pinned version, without the upstream's `.gitignore`, `.gitattributes` and `.gitmodules` files, kept read-only in the canon and never distributed.
@@ -38,6 +42,10 @@ _Avoid_: vendor copy, pristine copy, base
 The difference between a third-party skill as it is in the canon and its upstream snapshot.
 _Avoid_: patch, override, customization
 
+**Conflict record** (冲突记录):
+A file `skiman update` writes when conflict markers cannot express a conflict: `<path>.skiman-upstream` (upstream's version) or `<path>.skiman-upstream-deleted` (upstream deleted the file), next to the file or under `.skiman-conflicts/` when that path is taken. skiman refuses a commit while one remains.
+_Avoid_: conflict file, merge leftover
+
 **Global instruction file** (全局 instruction file):
 A user-level file an agent tool loads into every session automatically, such as `~/.claude/CLAUDE.md` or `~/.codex/AGENTS.md`.
 _Avoid_: system prompt, memory file, rules file
@@ -45,10 +53,6 @@ _Avoid_: system prompt, memory file, rules file
 **Shared body** (共享正文):
 The part of the global instructions that applies to every agent tool.
 _Avoid_: common rules, base file
-
-**Tool-specific addition** (专属补充):
-Global instructions that apply to one agent tool only and are combined with the shared body for that tool.
-_Avoid_: override, tool rules, extension
 
 **Summary** (用途):
 One line saying what a skill is for, written for a person: in `skiman.toml` for a skill in the canon, in the skill's own frontmatter (`metadata.summary`) for a linked skill. The frontmatter `description` stays the text an agent tool reads; its first sentence stands in, marked as a stand-in, for a linked skill without a summary.
@@ -59,8 +63,8 @@ A folder under `skills/` without a `SKILL.md` that holds the skill folders, or t
 _Avoid_: category, tag, bundle
 
 **Origin** (来历):
-Where an own skill came from (the setup it was adapted from, or that it was written here); a third-party skill's upstream already says it.
-_Avoid_: source, upstream, provenance
+Where an own skill came from (the setup it was adapted from, or that it was written here); a third-party skill's upstream already says it. `skiman overview` shows it in the Source column.
+_Avoid_: upstream, provenance
 
 ### Where things live
 
@@ -80,17 +84,37 @@ _Avoid_: client, host, agent, IDE
 A user-level directory an agent tool reads skills from, such as `~/.claude/skills` or `~/.agents/skills`.
 _Avoid_: target, skill path, install dir
 
+**Instruction location** (instruction 位置):
+Where an agent tool reads its global instruction file: `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`. skiman links each one to the shared body, `instructions/shared.md`.
+_Avoid_: instruction path, target
+
 **Link** (link):
-A symlink skiman makes, and makes again when it is missing. One in a tool directory, or where an agent tool looks for its global instruction file, points into the canon; the one the canon holds for a linked folder points to that folder.
+A symlink skiman makes, and makes again when it is missing. One in a tool directory or an instruction location points into the canon; the one the canon holds for a linked folder points to that folder.
 _Avoid_: shortcut, alias, pointer
 
 **Distribution** (分发):
-Making every tool directory and global instruction file location reflect the canon; the command that performs it is `skiman sync`.
+Making every tool directory and instruction location reflect the canon; the command that performs it is `skiman sync`.
 _Avoid_: publish, deploy
+
+**Session-start hook** (会话启动 hook):
+An entry in an agent tool's settings file (`~/.claude/settings.json`, `~/.gemini/config/hooks.json`) that makes the tool run `skiman sync --hook` when a session starts. `skiman init --session-hooks <ids>` adds it and `--session-hooks none` removes it; Codex gets none yet.
+_Avoid_: startup hook, git hook
 
 **Managed elsewhere** (别的管理器管的):
 Content in a tool directory that another manager owns (a plugin system, claude.ai sync, a tool's bundled skills); skiman never touches it.
 _Avoid_: system skill, protected entry
+
+**Machine state** (本机状态):
+`${XDG_STATE_HOME:-~/.local/state}/skiman/`, one per machine and outside the canon: backups, the upstream cache, the synced hashes, what sync last reported, notes of moves into a backup across filesystems, and the machine lock (each canon keeps its own lock in `.skiman/`). A re-clone of the canon or `git clean` does not touch it.
+_Avoid_: cache, state repo
+
+**Backup** (备份):
+`backups/<timestamp>/` in machine state: everything one command replaced or removed, each under a path that says where it was (`repo/` for the canon). skiman never deletes what a backup holds; remove old ones by hand.
+_Avoid_: trash, archive, snapshot
+
+**Tmp leftover** (临时残留):
+Anything an earlier command (killed, failed, or stopped by a concurrent change) left where commands stage content: `.skiman/tmp/` and `.skiman/swap/` in the canon, a `.skiman-swap-<timestamp>` folder in a project folder. `skiman doctor` lists it, and the next command that writes there moves it to a backup first. Not a leftover record: a record of a third-party skill whose folder is gone, which `skiman check` reports with exit 3.
+_Avoid_: temp file, debris
 
 ### Project scope
 
@@ -99,7 +123,7 @@ A folder registered in `skiman.toml` as `[projects.<id>]`; skiman discovers proj
 _Avoid_: local root, workspace, scan folder
 
 **Project instruction file** (项目 instruction file):
-A file an agent tool loads when it works inside a project folder, such as that folder's `AGENTS.md`, or a `.md` file under its `.claude/rules/`.
+A file an agent tool loads when it works inside a project folder, such as that folder's `AGENTS.md`, or a `.md` file under its `.claude/rules/` (a rules file).
 _Avoid_: local instruction file, project rules file
 
 **Project skill** (项目 skill):

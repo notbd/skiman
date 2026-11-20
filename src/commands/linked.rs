@@ -2,7 +2,6 @@
 //! outside the canon, or end a registration, then sync. Both run under the
 //! canon lock and exit with sync's status.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use saphyr::{AnnotatedMapping, LoadableYamlNode, MarkedYaml, Scalar, YamlData};
@@ -12,7 +11,7 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::{Failure, finish};
 use crate::fsutil::write_atomic;
-use crate::linked::{self, Folder, Holder, Linked, State, gitignore};
+use crate::linked::{self, Folder, Linked, State, gitignore};
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::root;
@@ -149,10 +148,7 @@ fn run_add(path: &Path, id: Option<String>) -> Result<Exit, Failure> {
             .map_err(|e| Failure::operational(format!("cannot write {}: {e}", file.display())))?;
         out!("registered linked folder {id}: {written}");
     }
-    describe(
-        folder,
-        &sync::kept_names(&paths, &repo, &candidate, &linked),
-    );
+    describe(folder);
     Ok(sync::run(&paths, &repo, &lock, Output::Normal))
 }
 
@@ -165,18 +161,18 @@ fn default_id(path: &Path) -> String {
     }
 }
 
-/// Prints the linked skills `folder` holds, read as sync reads them (`kept`
-/// from [`sync::kept_names`]), and for each without a usable
-/// `metadata.summary` what to add to its `SKILL.md`.
-fn describe(folder: &Folder, kept: &BTreeMap<String, Holder>) {
+/// Prints the linked skills `folder` holds, read as sync reads them, and
+/// for each without a usable `metadata.summary` what to add to its
+/// `SKILL.md`.
+fn describe(folder: &Folder) {
     let (State::Read(_), Some(path)) = (&folder.state, &folder.path) else {
         return;
     };
-    let skills = if Linked::is_single(folder, kept) {
+    let skills = if Linked::is_single(folder) {
         out!("it is one skill: {}", folder.id);
         vec![(folder.id.clone(), path.clone())]
     } else {
-        let names = Linked::skill_names(folder, kept);
+        let names = Linked::skill_names(folder);
         if names.is_empty() {
             out!("it holds no skill yet; the next sync links each skill added to it");
             return;

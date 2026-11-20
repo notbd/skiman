@@ -1,9 +1,7 @@
 //! `skiman init <path>`: create or reuse a canon, write the user config,
 //! then sync. When the user config pointed to another canon, that sync
-//! treats skiman's links into it as owned, and its registrations guard
-//! every write init makes outside the new canon. Before that sync it
-//! installs the git hooks, and finally it adds or removes the session-start
-//! hook entries.
+//! treats skiman's links into it as owned. Before that sync it installs the
+//! git hooks, and finally it adds or removes the session-start hook entries.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -57,8 +55,8 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     test_hook::at("init", "locking");
     let machine = CanonLock::machine(&paths)?;
     // Every command that changes `skiman.toml` holds the machine lock while
-    // it does, so the registrations read now hold through the closing sync;
-    // each session-hook write reads them again.
+    // it does, so the current canon's registrations read now still hold
+    // when the canon is made.
     let config = UserConfig::load(&paths).ok();
     let current = config
         .as_ref()
@@ -80,19 +78,14 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     }
     let repo = Canon::at(&place)?;
     let lock = CanonLock::of_init(machine, &repo)?;
-    // The canon switched away from: its registrations guard every write
-    // below, and its links are owned for the closing sync.
+    // The canon switched away from: its links are owned for the closing sync.
     let previous = config
         .map(|config| config.repo.canonicalize().unwrap_or(config.repo))
         .filter(|previous| previous != repo.root())
-        .map(|root| sync::PreviousCanon {
-            root,
-            linked: current.map(|(_, linked)| linked),
-        });
-    let previous_linked = previous.as_ref().and_then(|p| p.linked.as_ref());
+        .map(|root| sync::PreviousCanon { root });
     let mut guarded = Exit::Success;
     if target == Target::Reuse {
-        guarded = ignore_machine_state(&repo, paths.home(), previous_linked)?;
+        guarded = ignore_machine_state(&repo, paths.home())?;
     } else {
         write_layout(&repo, paths.home())
             .map_err(|e| Failure::operational(format!("cannot create the canon: {e}")))?;
@@ -131,7 +124,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     // Settings files are outside the canon: do not hold the canon lock
     // while the preview waits for an answer; each write takes it again.
     drop(lock);
-    let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks, previous.as_ref());
+    let hooks = install_session_hooks(&paths, &repo, &binary, session_hooks);
     Ok(guarded.combine(exit).combine(hooks))
 }
 
@@ -184,15 +177,12 @@ fn refuse_inside_linked(
 /// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag
 /// (only possible with a terminal) previews the entries and asks. Each
 /// settings file is written under the canon lock, and left alone when it
-/// resolves into a linked folder registered at that moment, in this canon
-/// or in the `previous` one (read again then, when it could be read before;
-/// left alone too when it cannot be read again).
+/// resolves into a linked folder registered at that moment.
 fn install_session_hooks(
     paths: &Paths,
     repo: &Canon,
     binary: &Path,
     session_hooks: Option<&str>,
-    previous: Option<&sync::PreviousCanon>,
 ) -> Exit {
     let request = match session_hooks {
         Some("none") => session_hooks::Request::Remove,
@@ -205,26 +195,7 @@ fn install_session_hooks(
     };
     let guard = |file: &Path, lands: &Path| -> Result<CanonLock, Failure> {
         let lock = CanonLock::wait(paths, repo)?;
-        let previous = previous
-            .filter(|p| p.linked.is_some())
-            .map(|p| {
-                let canon = Canon::at(&p.root);
-                canon.and_then(|c| Linked::load(paths.home(), &c)).map_err(|failure| {
-                    let manifest = p.root.join("skiman.toml");
-                    // The cause's first line, without the file it names again.
-                    let named = format!("{}: ", manifest.display());
-                    let why = failure.message.lines().next().unwrap_or_default();
-                    let why = why.strip_prefix(&named).unwrap_or(why);
-                    left(format!(
-                        "{} of the previous canon cannot be read ({why}), so whether {} lies inside one of its linked folders is unknown",
-                        manifest.display(),
-                        file.display()
-                    ))
-                })
-            })
-            .transpose()?;
-        let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?)
-            .guarding_also(previous.as_ref());
+        let linked = Linked::read(paths.home(), repo, &Manifest::load(repo)?);
         match linked.refusal(file, lands) {
             Some(message) => Err(left(message)),
             None => Ok(lock),
@@ -380,13 +351,8 @@ fn write_layout(repo: &Canon, home: &Path) -> std::io::Result<()> {
 /// it changes. The new content replaces the file in one step and keeps its
 /// mode. When `.gitignore` is a link (a repo managed with dotfiles), the
 /// file it points to is replaced and the link stays; a link to a missing
-/// file is refused, and so is one into a linked folder of this canon or the
-/// `previous` one.
-fn ignore_machine_state(
-    repo: &Canon,
-    home: &Path,
-    previous: Option<&Linked>,
-) -> Result<Exit, Failure> {
+/// file is refused, and so is one into a linked folder of this canon.
+fn ignore_machine_state(repo: &Canon, home: &Path) -> Result<Exit, Failure> {
     let path = repo.root().join(".gitignore");
     let cannot_read =
         |e: std::io::Error| Failure::operational(format!("cannot read {}: {e}", path.display()));
@@ -421,9 +387,7 @@ fn ignore_machine_state(
     // registrations cannot be read. `real` is what is written.
     if real != path {
         let refused = match Manifest::load(repo) {
-            Ok(manifest) => Linked::read(home, repo, &manifest)
-                .guarding_also(previous)
-                .refusal(&path, &real),
+            Ok(manifest) => Linked::read(home, repo, &manifest).refusal(&path, &real),
             Err(_) => Some(format!(
                 "{} is a link, and while skiman.toml cannot be read skiman cannot tell whether it leads into a linked folder",
                 path.display()

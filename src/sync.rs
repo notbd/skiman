@@ -17,10 +17,9 @@ use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
 use crate::failure::Failure;
 use crate::fsutil;
-use crate::layout::{Layout, Placed};
+use crate::layout::{Layout, SkillFolder, skill_folder};
 use crate::linked::{self, Holder, Linked, State};
 use crate::manifest::Manifest;
-use crate::names;
 use crate::ownership::{Entry, Ownership};
 use crate::paths::Paths;
 use crate::reported::Reported;
@@ -275,9 +274,6 @@ pub fn run(paths: &Paths, repo: &Canon, lock: &CanonLock, output: Output) -> Exi
 pub struct PreviousCanon {
     /// Its realpath: skiman's links into it count as owned for one sync.
     pub root: PathBuf,
-    /// Its registrations, when its `skiman.toml` can be read: they guard
-    /// every write that sync makes.
-    pub linked: Option<Linked>,
 }
 
 /// [`run`], also returning the report, after `init` switched away from
@@ -294,8 +290,7 @@ pub fn run_with(
 ) -> (Exit, Report) {
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
-            let linked = Linked::read(paths.home(), repo, &manifest)
-                .guarding_also(previous.and_then(|p| p.linked.as_ref()));
+            let linked = Linked::read(paths.home(), repo, &manifest);
             let previous_canon = previous.map(|p| p.root.clone());
             let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
             crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);
@@ -375,7 +370,7 @@ pub fn reconcile(
             .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
     }
     let kept = kept_names(paths, repo, manifest, linked);
-    linked::canon::report_folders(linked, &kept, &mut report);
+    linked::canon::report_folders(linked, &mut report);
     let offered = linked::canon::reconcile(linked, &mut report);
     let ownership = Ownership::new(paths, repo, previous_canon);
     let offers = |id: &str| offered.contains(id);
@@ -686,10 +681,8 @@ pub fn installed_tools<'a>(
 
 /// The names that links [`Linked::keeper`] keeps in the installed tool
 /// directories, with what keeps each: a transient read error never hands
-/// a name to another skill. A [`Holder::Single`] link in any tool
-/// directory decides the name, whatever the others hold. Reads the tool
-/// directories only while some link may be kept. Sync and every command
-/// that shows a winner use it.
+/// a name to another skill. Reads the tool directories only while some
+/// link may be kept. Sync and every command that shows a winner use it.
 pub fn kept_names(
     paths: &Paths,
     repo: &Canon,
@@ -713,9 +706,7 @@ pub fn kept_names(
             {
                 let name = fsutil::temporary_of(&name).unwrap_or(&name);
                 let name = name.to_string_lossy().into_owned();
-                if !matches!(kept.get(&name), Some(Holder::Single(_))) {
-                    kept.insert(name, holder);
-                }
+                kept.insert(name, holder);
             }
         }
     }
@@ -804,39 +795,6 @@ pub fn wanted_entries(
         });
     }
     Ok(wanted)
-}
-
-/// What sync makes of a skill folder under `skills/`
-/// ([`skill_folder`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkillFolder {
-    /// Not a real folder: sync leaves it to the rules, which report it.
-    NotAFolder,
-    /// An invalid skill folder, not distributed for this reason.
-    Invalid(&'static str),
-    /// Distributed while it is enabled and no kept link holds its name.
-    Distributable,
-}
-
-/// What sync makes of the skill folder `placed` of `layout`, at `dir`. A
-/// distributable one is a real folder whose name passes the regex, is not
-/// reserved and is in one place only, and that holds a `SKILL.md`. Sync,
-/// `check` and `doctor` all decide by it.
-pub fn skill_folder(layout: &Layout, placed: &Placed, dir: &Path) -> SkillFolder {
-    let name = &placed.name;
-    if !std::fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir()) {
-        SkillFolder::NotAFolder
-    } else if layout.all_of(name).len() > 1 {
-        SkillFolder::Invalid("its name is in more than one group folder")
-    } else if names::is_reserved(name) {
-        SkillFolder::Invalid("its name is reserved")
-    } else if !names::is_valid(name) {
-        SkillFolder::Invalid("its name is not a valid skill name")
-    } else if !dir.join("SKILL.md").is_file() {
-        SkillFolder::Invalid("it holds no SKILL.md")
-    } else {
-        SkillFolder::Distributable
-    }
 }
 
 /// The entries of `dir` with their own metadata (links not followed),

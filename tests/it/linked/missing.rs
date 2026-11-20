@@ -109,6 +109,10 @@ fn an_unreadable_folder_keeps_its_links_and_names_until_it_can_be_read() {
             "{stderr}"
         );
         assert!(stderr.contains("linked skill alpha in "), "{stderr}");
+        if mode == 0o000 {
+            // A folder that cannot be listed is named itself, not its SKILL.md.
+            assert!(stderr.contains("/company: "), "{stderr}");
+        }
         assert_eq!(std::fs::read_link(linked.join("company")).unwrap(), company);
         for tool in [Tool::ClaudeCode, Tool::Codex] {
             let dir = sandbox.tool_dir(tool);

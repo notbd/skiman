@@ -202,13 +202,12 @@ Not on this machine.
     assert_eq!(stdout[start..end], expected, "{stdout}");
 }
 
-/// While a single skill's top-level `SKILL.md` cannot be probed and the
-/// tool directories keep its link, `list`, `overview` and `doctor` all
-/// show it as the one skill it is, still distributed, and none of them or
-/// sync shows its sub-folders (`kid`, and `solo/solo`, whose summary is
-/// not the skill's).
+/// While a single skill's top-level `SKILL.md` cannot be probed, its
+/// folder is one that cannot be read: `list` and `overview` leave it out
+/// as for any such folder, and neither they nor `doctor` show its
+/// sub-folders (`kid`, and `solo/solo`, whose summary is not the skill's).
 #[test]
-fn a_single_skill_that_cannot_be_probed_shows_as_one_skill_everywhere() {
+fn a_single_skill_that_cannot_be_probed_is_left_out_like_a_folder_that_cannot_be_read() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let locked = super::unprobed_single(&sandbox);
@@ -223,39 +222,23 @@ fn a_single_skill_that_cannot_be_probed_shows_as_one_skill_everywhere() {
     let list = sandbox.skiman().arg("list").output().unwrap();
     let overview = sandbox.skiman().arg("overview").output().unwrap();
     let doctor = sandbox.skiman().arg("doctor").output().unwrap();
-    let sync = sandbox.skiman().arg("sync").output().unwrap();
     chmod(0o755).unwrap();
 
     let linked: Vec<Vec<String>> = cells(&list.stdout, &sandbox)
         .into_iter()
         .filter(|row| row.get(1).is_some_and(|kind| kind == "linked"))
         .collect();
-    assert_eq!(
-        linked,
-        [["solo", "linked", "solo (~/work/solo)", "-", "-", "-", "yes"].map(str::to_owned)]
-    );
+    assert_eq!(linked, Vec::<Vec<String>>::new());
     let overview = String::from_utf8(overview.stdout).unwrap();
-    assert!(
-        overview.contains("## Linked folder solo (1): `~/work/solo`\n"),
-        "{overview}"
-    );
-    assert!(overview.contains("| solo | - | yes |"), "{overview}");
-    assert!(!overview.contains("Not the skill"), "{overview}");
+    assert!(!overview.contains("Linked folder solo"), "{overview}");
     let doctor = String::from_utf8(doctor.stdout).unwrap();
     assert!(
-        doctor.contains(&format!(
-            "linked folder solo: {} (one skill)",
-            solo.display()
-        )),
+        doctor.contains("linked folder `solo` is not read ("),
         "{doctor}"
     );
-    let sync = String::from_utf8(sync.stderr).unwrap();
-    assert!(
-        sync.contains("linked skill solo of `solo` is not checked ("),
-        "{sync}"
-    );
-    for out in [&overview, &doctor, &sync] {
+    for out in [&overview, &doctor] {
         assert!(!out.contains("kid"), "{out}");
         assert!(!out.contains("solo/solo"), "{out}");
+        assert!(!out.contains("Not the skill"), "{out}");
     }
 }

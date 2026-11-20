@@ -200,9 +200,10 @@ fn doctor_suggests_no_restore_for_a_mirrored_item_inside_a_linked_folder() {
 }
 
 /// While a single skill's top-level `SKILL.md` cannot be probed, `doctor`
-/// still shows it as one skill, not its sub-folders, as sync and `list`.
+/// reports the folder as not read, as sync does, and shows neither a shape
+/// for it nor its sub-folders.
 #[test]
-fn doctor_shows_a_single_skill_that_cannot_be_probed_as_one_skill() {
+fn doctor_reports_a_single_skill_that_cannot_be_probed_as_not_read() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = Sandbox::new();
     let locked = super::unprobed_single(&sandbox);
@@ -213,10 +214,10 @@ fn doctor_shows_a_single_skill_that_cannot_be_probed_as_one_skill() {
     chmod(0o755).unwrap();
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let solo = sandbox.home().join("work/solo");
-    assert_line(
-        &stdout,
-        &format!("linked folder solo: {} (one skill)", solo.display()),
+    assert!(
+        stdout.contains("linked folder `solo` is not read ("),
+        "{stdout}"
     );
+    assert!(!stdout.contains("linked folder solo: "), "{stdout}");
     assert!(!stdout.contains("kid"), "{stdout}");
 }

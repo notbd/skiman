@@ -237,13 +237,12 @@ fn an_unreadable_sub_folder_keeps_its_link_and_needs_attention() {
     }
 }
 
-/// A top-level `SKILL.md` that cannot be probed, in a folder that can be
-/// listed, keeps only the single-skill shape's existing link and name
-/// (exit 3). The readable sub-folders of a folder of skills are read and
-/// synced as usual; those of a single skill, whose `<id>` link is kept,
-/// are no skills for that sync.
+/// A top-level `SKILL.md` that cannot be probed leaves the folder's shape
+/// unknown, so the whole id is in a read error (exit 3), whether it was a
+/// folder of skills or one skill: its links stay exactly as they are, and
+/// a rename or a new skill inside it is not followed until it can be read.
 #[test]
-fn a_top_level_skill_md_that_cannot_be_probed_freezes_only_the_single_skill_shape() {
+fn a_top_level_skill_md_that_cannot_be_probed_leaves_the_whole_id_unread() {
     use std::os::unix::fs::PermissionsExt;
     let sandbox = two_folders();
     sandbox.skiman().arg("sync").assert().code(0);
@@ -270,19 +269,24 @@ fn a_top_level_skill_md_that_cannot_be_probed_freezes_only_the_single_skill_shap
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let stderr = String::from_utf8(output.stderr).unwrap();
     for id in ["company", "solo"] {
-        let line = format!("linked skill {id} of `{id}` is not checked");
+        let line = format!(
+            "linked folder `{id}` is not read (cannot read {}: ",
+            work.join(id).join("SKILL.md").display()
+        );
         assert!(stderr.contains(&line), "{line}\n{stderr}");
     }
-    // The top-level `SKILL.md` is not also read as an entry of the folder.
-    assert_eq!(stderr.matches("is not checked").count(), 2, "{stderr}");
+    assert!(!stderr.contains("is not checked"), "{stderr}");
     let linked = sandbox.canon().join("linked");
     for tool in Tool::ALL {
         let dir = sandbox.tool_dir(tool);
-        assert!(!exists(dir.join("alpha")), "{}", dir.display());
-        for name in ["gamma", "beta"] {
-            assert!(dir.join(name).join("SKILL.md").is_file(), "{name}");
+        assert_eq!(
+            std::fs::read_link(dir.join("alpha")).unwrap(),
+            linked.join("company/alpha")
+        );
+        assert!(dir.join("beta/SKILL.md").is_file());
+        for name in ["gamma", "extra"] {
+            assert!(!exists(dir.join(name)), "{name}: {}", dir.display());
         }
-        assert!(!exists(dir.join("extra")), "{}", dir.display());
         assert_eq!(
             std::fs::read_link(dir.join("solo")).unwrap(),
             linked.join("solo")

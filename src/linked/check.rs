@@ -34,7 +34,7 @@ pub fn warnings(
         // What cannot be read now and the problems among its entries, as
         // sync and `doctor` say them.
         out.extend(
-            super::canon::folder_items(linked, folder, kept)
+            super::canon::folder_items(linked, folder)
                 .into_iter()
                 .filter_map(|item| match item.kind {
                     ItemKind::Linked {
@@ -45,7 +45,7 @@ pub fn warnings(
                     _ => None,
                 }),
         );
-        for name in Linked::skill_names(folder, kept) {
+        for name in Linked::skill_names(folder) {
             let path = folder.skill_dir(&name).join("SKILL.md");
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
@@ -94,7 +94,7 @@ pub fn warnings(
     );
     for name in manifest.skills().keys() {
         if layout.find(name).is_none()
-            && let Some((folder, _)) = linked.skill(name, kept)
+            && let Some((folder, _)) = linked.skill(name)
         {
             out.push(format!(
                 "[skills.{name}] in skiman.toml names linked skill {name} of linked folder `{}`; a linked skill has no table (its summary is `metadata.summary` in its own SKILL.md), so remove it",

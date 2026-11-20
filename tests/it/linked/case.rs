@@ -189,10 +189,10 @@ fn a_link_on_the_way_typed_in_another_case_breaks_the_rules_as_on_disk() {
 }
 
 /// A top-level `skill.md` is the folder's `SKILL.md` on such a volume: when
-/// it cannot be probed it is reported once, as the single-skill shape, and
-/// never also as an entry of the folder.
+/// it cannot be probed the folder's shape is unknown, so the whole id is
+/// reported once as not read, and no skill of it is linked.
 #[test]
-fn a_top_level_skill_md_in_another_case_is_not_an_entry() {
+fn a_top_level_skill_md_in_another_case_leaves_the_whole_id_unread() {
     use std::os::unix::fs::PermissionsExt;
     let Some(sandbox) = sandbox() else {
         return;
@@ -208,15 +208,13 @@ fn a_top_level_skill_md_in_another_case_is_not_an_entry() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert_eq!(code, 3, "{stderr}");
-    assert!(
-        stderr.contains("linked skill company of `company` is not checked"),
+    assert_eq!(
+        stderr
+            .matches("linked folder `company` is not read (")
+            .count(),
+        1,
         "{stderr}"
     );
-    assert_eq!(stderr.matches("is not checked").count(), 1, "{stderr}");
-    assert!(
-        sandbox
-            .tool_dir(Tool::ClaudeCode)
-            .join("alpha/SKILL.md")
-            .is_file()
-    );
+    assert!(!stderr.contains("is not checked"), "{stderr}");
+    assert!(std::fs::symlink_metadata(sandbox.tool_dir(Tool::ClaudeCode).join("alpha")).is_err());
 }

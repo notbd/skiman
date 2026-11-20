@@ -207,8 +207,8 @@ fn report_linked(
 ) -> std::io::Result<()> {
     for folder in &linked.folders {
         if let (State::Read(_), Some(path)) = (&folder.state, &folder.path) {
-            let names = Linked::skill_names(folder, kept);
-            let skills = if Linked::is_single(folder, kept) {
+            let names = Linked::skill_names(folder);
+            let skills = if Linked::is_single(folder) {
                 "one skill".to_owned()
             } else if names.is_empty() {
                 "no skills yet".to_owned()
@@ -217,7 +217,7 @@ fn report_linked(
             };
             out!("linked folder {}: {} ({skills})", folder.id, path.display());
         }
-        for item in linked::canon::folder_items(linked, folder, kept) {
+        for item in linked::canon::folder_items(linked, folder) {
             out!("{}", item.message());
         }
     }

@@ -159,7 +159,7 @@ fn linked_name(paths: &Paths, repo: &Canon, name: &str) -> Result<Option<LinkedN
     let manifest = Manifest::load(repo)?;
     let linked = Linked::read(paths.home(), repo, &manifest);
     let mut kept = sync::kept_names(paths, repo, &manifest, &linked);
-    if let Some((it, _)) = linked.described(name, &kept) {
+    if let Some((it, _)) = linked.described(name) {
         return Ok(Some(LinkedName::Skill(it)));
     }
     Ok(kept.remove(name).map(LinkedName::Kept))

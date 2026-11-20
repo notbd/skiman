@@ -1,6 +1,8 @@
 //! Reading one linked folder (spec "Reading a linked folder"): a folder
 //! whose top level holds a `SKILL.md` is one skill (listed, but its
-//! entries are not read); any other folder is read one level deep. One
+//! entries are not read); any other folder is read one level deep. A
+//! top-level `SKILL.md` that cannot be probed leaves the shape unknown: a
+//! read error of the whole id, like a folder that cannot be listed. One
 //! listing, one metadata call per entry, only links resolved and only
 //! candidate folders probed for a `SKILL.md`; no content is read, so
 //! `sync --hook` stays fast.
@@ -24,11 +26,6 @@ pub struct Contents {
     /// Entries whose `SKILL.md` cannot be probed (permissions, I/O), and the
     /// error: each keeps its existing link and its name (exit 3).
     pub unprobed: Vec<(String, String)>,
-    /// Why the folder's own top-level `SKILL.md` cannot be probed: the
-    /// single-skill shape keeps its existing link and name (exit 3), and
-    /// the folder is read one level deep as usual; its skills take part in
-    /// naming only when that link is not kept (`Linked::names`).
-    pub top_unprobed: Option<String>,
     /// The folder's own content problems: an invalid skill name, a dangling
     /// or looping child link, a child link that breaks the path rules. Each
     /// is reported and leaves the exit status unchanged.
@@ -55,15 +52,15 @@ pub fn read(
     let cannot = |what: &Path, e: io::Error| format!("cannot read {}: {e}", what.display());
     let mut contents = Contents::default();
     let top = dir.join("SKILL.md");
+    // Listed for a single skill too: a folder that cannot be listed is a
+    // read error of the whole id whatever its shape.
+    let listed = listings.list(dir).map_err(|e| cannot(dir, e))?.to_vec();
     match std::fs::metadata(&top) {
         Ok(meta) if meta.is_file() => contents.single = true,
         Ok(_) => {}
         Err(e) if path::is_missing(&e) => {}
-        Err(e) => contents.top_unprobed = Some(cannot(&top, e)),
+        Err(e) => return Err(cannot(&top, e)),
     }
-    // Listed for a single skill too: a folder that cannot be listed is a
-    // read error of the whole id whatever its shape.
-    let listed = listings.list(dir).map_err(|e| cannot(dir, e))?.to_vec();
     if contents.single {
         return Ok(contents);
     }

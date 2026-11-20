@@ -609,7 +609,8 @@ fn a_broken_canon_lock_refuses_the_import_before_anything_is_fetched() {
 
 /// Running the import again with one more skill rewrites `skiman.toml`; a
 /// skill the folder gives no table keeps what the canon records about it,
-/// and one the folder gives a table keeps the folder's table alone.
+/// and one the folder gives a table keeps the folder's table alone. The
+/// table of a skill the folder does not hold is not carried over.
 #[test]
 fn import_again_keeps_the_summary_origin_and_install_day_of_a_skill_without_a_table() {
     let sandbox = Sandbox::new();
@@ -629,9 +630,10 @@ fn import_again_keeps_the_summary_origin_and_install_day_of_a_skill_without_a_ta
     let manifest = sandbox.canon().join("skiman.toml");
     let notes = "[skills.notes]\nsummary = \"Keep notes\"\norigin = \"written here\"\ninstalled = 2026-11-14\n";
     let canon_more = "[skills.more]\nenabled = false\nsummary = \"The canon's\"\n";
+    let gone = "[skills.gone]\nsummary = \"Not in the folder\"\n";
     write(
         &manifest,
-        format!("{}\n{notes}\n{canon_more}", read(&manifest)),
+        format!("{}\n{notes}\n{canon_more}\n{gone}", read(&manifest)),
     );
     let folder_more = "[skills.more]\nsummary = \"The folder's\"\n";
     write(
@@ -646,6 +648,7 @@ fn import_again_keeps_the_summary_origin_and_install_day_of_a_skill_without_a_ta
     assert!(written.contains(folder_more), "{written}");
     assert!(!written.contains("The canon's"), "{written}");
     assert!(!written.contains("enabled = false"), "{written}");
+    assert!(!written.contains("[skills.gone]"), "{written}");
 }
 
 #[test]

@@ -170,9 +170,10 @@ skiman.toml:7: toml-value: `installed` in [skills.pdf] must be a date without a 
 
 /// git leaves an ignored file out of every commit, though the working tree
 /// holds it; an ignored folder is one line, and names the rules skip are
-/// not reported.
+/// not reported. A rule in the canon's own `.gitignore` was written there on
+/// purpose and gets no warning.
 #[test]
-fn a_managed_file_git_ignores_is_a_warning_with_its_rule() {
+fn a_managed_file_git_ignores_is_a_warning_with_its_rule_unless_the_canons_gitignore_has_it() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     sandbox
@@ -189,13 +190,44 @@ fn a_managed_file_git_ignores_is_a_warning_with_its_rule() {
     write(&sandbox, "skills/docs/pdf/.DS_Store", "");
     write(&sandbox, "skills/docs/pdf/cache/a.pyc", "");
     write(&sandbox, "skills/docs/pdf/cache/b.pyc", "");
-    append(&sandbox, ".gitignore", "notes.md\n.DS_Store\ncache/\n");
+    write(&sandbox, "skills/docs/pdf/__pycache__/m.pyc", "");
+    write(
+        &sandbox,
+        "skills/docs/pdf/.gitignore",
+        "notes.md\n.DS_Store\ncache/\n",
+    );
+    append(&sandbox, ".gitignore", "__pycache__/\n");
 
     check(&sandbox).code(0).stdout_eq("").stderr_eq(str![[r#"
-warning: git ignores skills/docs/pdf/cache/ (.gitignore:5:cache/), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`
-warning: git ignores skills/docs/pdf/notes.md (.gitignore:3:notes.md), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`
+warning: git ignores skills/docs/pdf/cache/ (skills/docs/pdf/.gitignore:3:cache/), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`
+warning: git ignores skills/docs/pdf/notes.md (skills/docs/pdf/.gitignore:1:notes.md), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`
 
 "#]]);
+}
+
+/// A canon in a subfolder of another git repo: git names its `.gitignore`
+/// `canon/.gitignore`, which gets no warning; the outer repo's own
+/// `.gitignore` does.
+#[test]
+fn in_a_canon_inside_another_repo_only_the_canons_gitignore_is_taken_as_meant() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    std::fs::remove_dir_all(sandbox.canon().join(".git")).unwrap();
+    sandbox.git(sandbox.root(), ["init", "-q"]);
+    std::fs::write(sandbox.root().join(".gitignore"), "skip.md\n").unwrap();
+    write(&sandbox, "skills/pdf/SKILL.md", skill_md("pdf"));
+    write(&sandbox, "skills/pdf/skip.md", "");
+    write(&sandbox, "skills/pdf/__pycache__/m.pyc", "");
+    append(&sandbox, ".gitignore", "__pycache__/\n");
+
+    let out = check(&sandbox).code(0).get_output().stderr.clone();
+
+    let stderr = String::from_utf8(out).unwrap();
+    assert!(
+        stderr.contains("git ignores skills/pdf/skip.md (.gitignore:1:skip.md)"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("__pycache__"), "{stderr}");
 }
 
 #[test]

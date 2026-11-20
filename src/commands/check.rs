@@ -2,12 +2,14 @@
 //! of the canon, or in its staged snapshot, on stdout, and warnings on
 //! stderr; on the working tree, also each skill that lacks a summary, a group
 //! folder or an origin, what is wrong with linked skills, and each managed
-//! file that git ignores, so a commit leaves it out (warnings). When
-//! the staged snapshot breaks a rule that the working tree passes, a hint
-//! says so and prints a line that stages the working tree, or names the
-//! ignored files the violations are about, which that line cannot stage.
+//! file that git ignores by a rule outside the canon's own `.gitignore`, so
+//! a commit leaves it out (warnings). When the staged snapshot breaks a
+//! rule that the working tree passes, a hint says so and prints a line that
+//! stages the working tree, or names the ignored files the violations are
+//! about, which that line cannot stage.
 //! Read-only; takes no lock.
 
+use std::cell::LazyCell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -79,7 +81,12 @@ fn check(staged: bool) -> Result<Exit, Failure> {
                 err!("warning: {warning}");
             }
         }
+        // A rule in the canon's own `.gitignore` was written there on purpose.
+        let own = LazyCell::new(|| format!("{}.gitignore:", git_prefix(repo.root())));
         for (path, rule) in ignored_managed(repo.root()) {
+            if rule.starts_with(own.as_str()) {
+                continue;
+            }
             err!(
                 "warning: git ignores {path} ({rule}), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`"
             );
@@ -171,6 +178,18 @@ fn ignored_managed(root: &Path) -> Vec<(String, String)> {
         .filter(|path| !path.is_empty() && !is_ignored(path))
         .collect();
     ignored(root, &paths)
+}
+
+/// Where the canon sits in its git repo (`git rev-parse --show-prefix`):
+/// empty at the top, `canon/` in a subfolder; empty when git cannot tell.
+fn git_prefix(root: &Path) -> String {
+    git::query_command(root)
+        .args(["rev-parse", "--show-prefix"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_owned())
+        .unwrap_or_default()
 }
 
 /// `linked` and every path under it in the git index: the staged snapshot

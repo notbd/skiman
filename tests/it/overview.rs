@@ -95,7 +95,7 @@ fn the_canon_comes_by_group_and_other_managers_skills_are_listed_once() {
     symlink(home.join("outside/escape"), plugin.join("extra")).unwrap();
     write(
         plugin.join(".claude-plugin/plugin.json"),
-        r#"{"name": "kit", "skills": ["./skills/eng/tdd", "../outside", "./extra"]}"#,
+        r#"{"name": "kit", "skills": ["./skills/eng/tdd", "../outside", "./extra", 5]}"#,
     );
     write(
         home.join(".claude/plugins/installed_plugins.json"),
@@ -168,6 +168,8 @@ skiman lists these here and never changes them.
 ## Notes
 
 - An installed day marked (git) is the day of the latest commit that added the skill's SKILL.md to the canon, which can be later than the real install; `installed = YYYY-MM-DD` in its [skills.<name>] table records the real day.
+- Claude Code plugin kit@market 1.0: `skills` in ~/.claude/plugins/cache/market/kit/1.0/.claude-plugin/plugin.json lists `5`, which is not a path.
+- Claude Code plugin kit@market 1.0: the skills path `../outside` does not exist.
 - Claude Code plugin kit@market 1.0: the skills path `./extra` leads outside the plugin.
 - `claude-code` also reads built-in skills that are not stored on disk; they are not listed.
 - `codex` also reads the skills of its plugins in `~/.codex/plugins`; they are not listed.
@@ -225,6 +227,29 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
             && stdout.contains(
                 "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/.claude/plugins/cache/market/kit/1.0/skills/tdd | claude-code |"
             ),
+        "{stdout}"
+    );
+
+    // Settings that cannot be read turn no plugin off, and say so.
+    write(
+        sandbox.home().join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"kit@market": false"#,
+    );
+    let stdout = overview();
+    assert!(
+        stdout.contains(
+            "- Cannot tell which plugins ~/.claude/settings.json turns off: it is not valid JSON: "
+        ) && stdout.contains("; no plugin is marked (disabled).\n")
+            && stdout.contains("| tdd | Claude Code plugin kit@market (project scope) | "),
+        "{stdout}"
+    );
+    // So do settings that are JSON but not an object.
+    write(sandbox.home().join(".claude/settings.json"), "[]");
+    let stdout = overview();
+    assert!(
+        stdout.contains(
+            "- Cannot tell which plugins ~/.claude/settings.json turns off: it is not a JSON object; no plugin is marked (disabled).\n"
+        ),
         "{stdout}"
     );
 }

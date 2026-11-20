@@ -574,6 +574,8 @@ fn fetch_sources(
 ) -> Result<Vec<Third>, Failure> {
     let manifest = Manifest::parse(manifest_text)
         .map_err(|e| Failure::refused(format!("skiman.toml: {e}")))?;
+    // Read before anything is fetched, so a broken lock is reported first.
+    let lock = Lockfile::load(repo)?;
     let mut thirds = Vec::new();
     for (name, source) in Folder::sources(&manifest) {
         let refuse = |why: &str| {
@@ -584,7 +586,7 @@ fn fetch_sources(
         };
         let url = &source.url;
         let kind = check_url(url).expect("check_folder refused an unsupported `url`");
-        if let Some(third) = fetched_before(paths, repo, &name, &source, prompts) {
+        if let Some(third) = fetched_before(paths, (repo, &lock), &name, &source, prompts) {
             thirds.push(third);
             continue;
         }
@@ -612,7 +614,7 @@ fn fetch_sources(
 
 /// The third-party skill `name` as the canon holds it, when an earlier
 /// run fetched it from a git upstream as `source` declares it: the repo's
-/// source table names the same `url`, `path` and `ref`, and its lock entry
+/// source table names the same `url`, `path` and `ref`, and its entry in `lock`
 /// has that `ref` and a commit. Its snapshot is `upstream/<name>` when that
 /// matches the entry, else the entry's commit read from the cache (fetched
 /// when the cache lacks it), for a run stopped before it wrote the
@@ -620,14 +622,14 @@ fn fetch_sources(
 /// moved since, and needs the network.
 fn fetched_before(
     paths: &Paths,
-    repo: &Canon,
+    (repo, lock): (&Canon, &Lockfile),
     name: &str,
     source: &SourceRecord,
     prompts: Prompts,
 ) -> Option<Third> {
     let manifest = Manifest::load(repo).ok()?;
     let recorded = manifest.source(name)?;
-    let entry = Lockfile::load(repo).ok()?.entry(name)?;
+    let entry = lock.entry(name)?;
     // A local folder has no commit: it is read again as it is now.
     let commit = entry.commit.clone()?;
     let same = (&recorded.url, &recorded.path, &recorded.git_ref)

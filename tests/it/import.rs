@@ -588,6 +588,25 @@ fn a_backup_folder_that_cannot_be_made_stops_the_import_before_anything_is_writt
     );
 }
 
+/// A canon `skiman.lock` that does not parse is reported before any
+/// upstream is fetched: here the upstream does not exist, and fetching it
+/// would fail first.
+#[test]
+fn a_broken_canon_lock_refuses_the_import_before_anything_is_fetched() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write(sandbox.canon().join("skiman.lock"), "version = [\n");
+    let folder = import_folder(
+        &sandbox,
+        &format!(
+            "{TOOLS}\n[skills.pdf.source]\nurl = \"https://github.com/acme/skills.git\"\npath = \"\"\n"
+        ),
+    );
+    write(folder.join("skills/pdf/SKILL.md"), skill_md("pdf"));
+
+    assert_refused(&sandbox, &folder, 1, &["skiman.lock: TOML parse error"]);
+}
+
 #[test]
 fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {

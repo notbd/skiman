@@ -481,6 +481,28 @@ skiman.toml:5: toml-value: `url` "~bob/skills" in [skills.pdf.source] is not an 
 "#]]);
 }
 
+/// `source.path` names a folder below the upstream's root; the message
+/// gives the spelling to write when there is one.
+#[test]
+fn a_source_path_that_is_absolute_or_has_a_dot_dot_part_is_reported() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    third_party(&sandbox, "pdf");
+    third_party(&sandbox, "docx");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("path = \"pdf\"", "path = \"/skills/pdf\"")
+        .replace("path = \"docx\"", "path = \"docx/../../docx\"");
+    std::fs::write(&manifest, text).unwrap();
+
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:6: toml-value: `path` "/skills/pdf" in [skills.pdf.source] must name a folder below the upstream's root, without a leading `/` or `..`: write "skills/pdf"
+skiman.toml:10: toml-value: `path` "docx/../../docx" in [skills.docx.source] must name a folder below the upstream's root, without a leading `/` or `..`, and leaves the upstream
+
+"#]]);
+}
+
 #[test]
 fn invalid_toml_is_reported_with_its_line() {
     let sandbox = Sandbox::new();

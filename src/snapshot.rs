@@ -391,17 +391,14 @@ impl Tree for LocalFolder {
 /// failing (a damaged cache) is an error with git's own message (exit 4).
 fn folder(cache: &Cache, commit: &str, path: &str) -> Result<String, Failure> {
     let treeish = treeish(commit, path);
-    // A `path` ending in `/` makes git list what is inside the folder, so
-    // ask without it, and take only a record of the folder itself.
-    let folder = path.trim_end_matches('/');
-    if folder.is_empty() {
+    if path.is_empty() {
         return Ok(treeish);
     }
     let url = cache.url();
     let mut ls = cache.git();
-    ls.args(["--literal-pathspecs", "ls-tree", "-z", commit, "--", folder]);
+    ls.args(["--literal-pathspecs", "ls-tree", "-z", commit, "--", path]);
     let entry = git::run(ls, &format!("listing {path} at {commit} of {url}"))?;
-    if entry.starts_with(b"040000 tree ") && entry.ends_with(format!("\t{folder}\0").as_bytes()) {
+    if entry.starts_with(b"040000 tree ") && entry.ends_with(format!("\t{path}\0").as_bytes()) {
         return Ok(treeish);
     }
     Err(Failure::refused(format!(

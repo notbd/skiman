@@ -10,7 +10,7 @@ use super::secrets::AllowEntry;
 use super::{Scope, Violation, rule};
 use crate::manifest::{LinkedProblem, REF_KINDS, enabled_tools, linked_problems, strings};
 use crate::project::root::is_path_form;
-use crate::source::check_url;
+use crate::source::{check_url, folder_path};
 use crate::tree::Tree;
 
 pub const MANIFEST: &str = "skiman.toml";
@@ -551,13 +551,17 @@ impl Records {
             ));
             return;
         };
-        if let Some(url) = source.get("url").and_then(Item::as_str)
-            && let Err(why) = check_url(url)
-        {
+        // What `update` and `import` refuse before they fetch.
+        let text = |key| source.get(key).and_then(Item::as_str);
+        let problems = [
+            text("url").and_then(|url| Some(("url", url, check_url(url).err()?))),
+            text("path").and_then(|path| Some(("path", path, folder_path(path).err()?))),
+        ];
+        for (key, text, why) in problems.into_iter().flatten() {
             out.insert(m.violation(
-                m.key_line(source, "url", line),
+                m.key_line(source, key, line),
                 rule::TOML_VALUE,
-                format!("`url` \"{url}\" in [skills.{name}.source] {why}"),
+                format!("`{key}` \"{text}\" in [skills.{name}.source] {why}"),
             ));
         }
         let source = m.section(source, format!("[skills.{name}.source]"), line);

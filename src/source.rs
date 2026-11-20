@@ -121,6 +121,31 @@ pub fn check_url(url: &str) -> Result<UrlKind, String> {
     )
 }
 
+/// A recorded `source.path`, the folder inside the upstream, as every reader
+/// takes it: `""` is the upstream's root, and empty and `.` parts (`./`,
+/// `//`, a trailing `/`) are dropped. Refused when it starts with `/` or has
+/// a `..` part, so it names a folder below the root; the error says why,
+/// with the spelling to write when it stays below the root.
+pub fn folder_path(path: &str) -> Result<String, String> {
+    let (mut parts, mut leaves) = (Vec::new(), false);
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => leaves |= parts.pop().is_none(),
+            part => parts.push(part),
+        }
+    }
+    let folder = parts.join("/");
+    if !path.starts_with('/') && !path.split('/').any(|part| part == "..") {
+        return Ok(folder);
+    }
+    let rule = "must name a folder below the upstream's root, without a leading `/` or `..`";
+    Err(match leaves {
+        true => format!("{rule}, and leaves the upstream"),
+        false => format!("{rule}: write \"{folder}\""),
+    })
+}
+
 /// Why a source that git would read as an option or a remote helper is
 /// refused, whatever its form.
 fn dangerous(spec: &str) -> Option<&'static str> {

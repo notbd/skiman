@@ -57,7 +57,7 @@ use crate::paths::Paths;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::skill_md::SkillMd;
 use crate::snapshot::Snapshot;
-use crate::source::{UrlKind, check_url};
+use crate::source::{UrlKind, check_url, folder_path};
 use crate::staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
@@ -207,10 +207,14 @@ impl Current {
                 "[skills.{name}.source] in skiman.toml has no `url`; run `skiman check`"
             )));
         }
-        if let Err(why) = check_url(&source.url) {
+        let url = check_url(&source.url)
+            .err()
+            .map(|why| ("url", &source.url, why));
+        let path = || folder_path(&source.path).err();
+        let problem = url.or_else(|| path().map(|why| ("path", &source.path, why)));
+        if let Some((key, text, why)) = problem {
             return Err(Failure::refused(format!(
-                "[skills.{name}.source] in skiman.toml: the `url` `{}` {why}; nothing was fetched",
-                source.url
+                "[skills.{name}.source] in skiman.toml: the `{key}` `{text}` {why}; nothing was fetched"
             )));
         }
         let entry = Lockfile::load(repo)?

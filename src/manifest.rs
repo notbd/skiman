@@ -96,8 +96,9 @@ impl Manifest {
     }
 
     /// The `[skills.<name>.source]` table, when there is one. Missing or
-    /// non-string `url` and `path` read as empty; a `ref_kind` other than
-    /// `branch`, `tag` or `commit` reads as absent.
+    /// non-string `url` and `path` read as empty; `path` reads as
+    /// [`crate::source::folder_path`] spells it, as written when it refuses
+    /// it; a `ref_kind` not in [`REF_KINDS`] reads as absent.
     pub fn source(&self, name: &str) -> Option<SourceRecord> {
         let source = self
             .doc
@@ -108,7 +109,9 @@ impl Manifest {
         let field = |key| source.get(key).and_then(Item::as_str).map(str::to_owned);
         Some(SourceRecord {
             url: field("url").unwrap_or_default(),
-            path: field("path").unwrap_or_default(),
+            path: field("path")
+                .map(|path| crate::source::folder_path(&path).unwrap_or(path))
+                .unwrap_or_default(),
             git_ref: field("ref"),
             ref_kind: field("ref_kind").and_then(|kind| REF_KINDS.into_iter().find(|k| *k == kind)),
         })

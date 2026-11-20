@@ -209,8 +209,9 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     write(
         &registry,
         format!(
-            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project"}}], "solo@market": [{{"installPath": "{}"}}]}}}}"#,
+            r#"{{"version": 2, "plugins": {{"bad@market": {{}}, "kit@market": [{{"installPath": "{}", "scope": "project", "projectPath": "{}"}}], "solo@market": [{{"installPath": "{}", "scope": "project", "projectPath": ""}}]}}}}"#,
             plugin.display(),
+            sandbox.home().join("work/app").display(),
             solo.display()
         ),
     );
@@ -222,10 +223,10 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     assert!(
         stdout.contains("The entry of plugin bad@market in ~/.claude/plugins/installed_plugins.json is not in a format")
             && stdout.contains(
-                "| solo | Claude Code plugin solo@market | ~/.claude/plugins/cache/market/solo/2.0 | claude-code |"
+                "| solo | Claude Code plugin solo@market (project scope) | ~/.claude/plugins/cache/market/solo/2.0 | claude-code |"
             )
             && stdout.contains(
-                "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/.claude/plugins/cache/market/kit/1.0/skills/tdd | claude-code |"
+                "| tdd | Claude Code plugin kit@market (project scope: ~/work/app) (disabled) | ~/.claude/plugins/cache/market/kit/1.0/skills/tdd | claude-code |"
             ),
         "{stdout}"
     );
@@ -240,7 +241,8 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
         stdout.contains(
             "- Cannot tell which plugins ~/.claude/settings.json turns off: it is not valid JSON: "
         ) && stdout.contains("; no plugin is marked (disabled).\n")
-            && stdout.contains("| tdd | Claude Code plugin kit@market (project scope) | "),
+            && stdout
+                .contains("| tdd | Claude Code plugin kit@market (project scope: ~/work/app) | "),
         "{stdout}"
     );
     // So do settings that are JSON but not an object.

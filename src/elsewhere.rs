@@ -271,7 +271,15 @@ fn plugin_skills(
             if let Some(scope) = install.get("scope").and_then(Value::as_str)
                 && scope != "user"
             {
-                owner.push_str(&format!(" ({scope} scope)"));
+                // Claude Code 2.1 records the project of a `project` install.
+                let project = install.get("projectPath").and_then(Value::as_str);
+                match project.filter(|p| !p.is_empty()) {
+                    Some(project) => owner.push_str(&format!(
+                        " ({scope} scope: {})",
+                        written_form(home, Path::new(project))
+                    )),
+                    None => owner.push_str(&format!(" ({scope} scope)")),
+                }
             }
             let off = turned_off.contains(plugin);
             if off {

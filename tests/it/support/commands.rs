@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use super::fs::write;
+
 use super::sandbox::Sandbox;
 
 /// `skiman init` of `sandbox.canon()` without session hooks; it must succeed.
@@ -41,4 +43,33 @@ pub fn only_backup(sandbox: &Sandbox) -> PathBuf {
         .try_into()
         .unwrap_or_else(|dirs| panic!("one backup folder: {dirs:?}"));
     dir
+}
+
+/// A `PATH` whose `git` logs each call's arguments, one line each, to the
+/// returned file, then runs the real git; an empty `PATH` would not do, since
+/// some commands go on whatever git does.
+pub fn logging_git(sandbox: &Sandbox) -> (String, PathBuf) {
+    let real = sandbox
+        .command("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    let bin = sandbox.root().join("logging-bin");
+    let log = sandbox.root().join("git-calls.log");
+    write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            real.trim()
+        ),
+    );
+    std::fs::set_permissions(
+        bin.join("git"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    (path, log)
 }

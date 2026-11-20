@@ -251,6 +251,82 @@ fn discovery_skips_git_dirs_node_modules_and_linked_worktrees() {
     assert_eq!(planned(&sandbox), set(&["app/AGENTS.md"]));
 }
 
+/// A folder tagged as a cache is not entered; a tag without the signature
+/// does not count, and the item's exact path still adopts it.
+#[test]
+fn discovery_skips_a_folder_tagged_as_a_cache() {
+    let sandbox = setup("");
+    let root = root(&sandbox);
+    let tag = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache\n";
+    write(root.join("app/target/CACHEDIR.TAG"), tag);
+    write(root.join("app/target/AGENTS.md"), "build output\n");
+    write(root.join("app/out/CACHEDIR.TAG"), "not a tag\n");
+    write(root.join("app/out/AGENTS.md"), "# out\n");
+
+    assert_eq!(planned(&sandbox), set(&["app/out/AGENTS.md"]));
+    let exact = root.join("app/target/AGENTS.md");
+    run(adopt(&sandbox, [&exact]).arg("--yes"), 0);
+    assert_eq!(
+        read(mirror(&sandbox, "app/target/AGENTS.md")),
+        "build output\n"
+    );
+}
+
+/// A folder given to adopt is walked from there: a folder elsewhere in the
+/// root that cannot be read is not reported. The folders on the way are
+/// judged as a walk of the whole root judges them, so a folder below one it
+/// never enters holds nothing to adopt.
+#[test]
+fn a_folder_adopt_walks_only_that_folder() {
+    let sandbox = setup("exclude = [\"old\"]");
+    let root = root(&sandbox);
+    write(root.join("tiny/AGENTS.md"), "# tiny\n");
+    write(root.join("big/AGENTS.md"), "# big\n");
+    write(root.join("locked/AGENTS.md"), "# locked\n");
+    write(
+        root.join("web/node_modules/pkg/AGENTS.md"),
+        "a dependency\n",
+    );
+    write(root.join("old/a/AGENTS.md"), "excluded\n");
+    let locked = root.join("locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (stdout, stderr) = run(adopt(&sandbox, [root.join("tiny"), "--dry-run".into()]), 0);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(
+        stdout,
+        format!("adopt {}\n", root.join("tiny/AGENTS.md").display())
+    );
+    assert_eq!(stderr, "");
+    for below_a_pass in ["web/node_modules/pkg", "old/a"] {
+        let (stdout, _) = run(
+            adopt(&sandbox, [root.join(below_a_pass), "--dry-run".into()]),
+            0,
+        );
+        assert_eq!(stdout, "nothing to adopt\n", "{below_a_pass}");
+    }
+}
+
+/// A folder given in another case than it has on disk (on a volume that
+/// ignores case) is not walked: the walk of the whole root never meets that
+/// spelling, and its items would be mirrored under it.
+#[test]
+fn a_folder_adopt_given_in_another_case_adopts_nothing() {
+    let sandbox = setup("");
+    let root = root(&sandbox);
+    write(root.join("MyApp/AGENTS.md"), "# app\n");
+    if std::fs::symlink_metadata(root.join("myapp")).is_err() {
+        return;
+    }
+    let before = world(&sandbox);
+
+    let (stdout, stderr) = run(adopt(&sandbox, [root.join("myapp"), "--yes".into()]), 0);
+
+    assert_eq!(stdout, "nothing to adopt\n", "{stderr}");
+    assert_eq!(world(&sandbox).0, before.0, "the canon is unchanged");
+}
+
 #[test]
 fn exclude_by_name_matches_at_any_depth_and_by_path_only_under_that_path() {
     let sandbox = setup("exclude = [\"_archive\", \"a/old\"]");
@@ -325,6 +401,30 @@ fn items_a_project_repo_tracks_are_skipped_and_its_untracked_items_are_adopted()
         .assert()
         .code(1);
     assert!(!exists(mirror(&sandbox, "app/AGENTS.md")));
+}
+
+/// A folder whose name git would read as pathspec magic (`:x`) or a glob
+/// is asked about as the literal path: its tracked item is skipped.
+#[test]
+fn an_item_tracked_in_a_folder_named_like_a_pathspec_is_skipped() {
+    let sandbox = setup("");
+    let repo = root(&sandbox).join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    sandbox.git(&repo, ["init", "--quiet"]);
+    write(repo.join(":example/AGENTS.md"), "# tracked\n");
+    write(repo.join("[ab]/AGENTS.md"), "# tracked\n");
+    write(repo.join("a/AGENTS.md"), "# untracked\n");
+    sandbox.git(
+        &repo,
+        [
+            "--literal-pathspecs",
+            "add",
+            ":example/AGENTS.md",
+            "[ab]/AGENTS.md",
+        ],
+    );
+
+    assert_eq!(planned(&sandbox), set(&["app/a/AGENTS.md"]));
 }
 
 #[test]

@@ -227,6 +227,70 @@ fn restore_over_a_file_on_a_volume_without_hard_links_fails_and_leaves_the_file_
     assert!(swaps.is_empty(), "{swaps:?}");
 }
 
+/// `project adopt` that cannot write the mirror (a canon on exFAT) fails
+/// with exit 4, leaves the mirror as it was, and the closing sync does not
+/// send the user back to the adopt that failed. The mirror is put there by
+/// hand: adopt itself cannot write it on this volume.
+#[cfg(target_os = "macos")]
+#[test]
+fn adopt_into_a_canon_on_a_volume_without_hard_links_fails_and_leaves_the_mirror() {
+    let sandbox = Sandbox::new();
+    let Some(disk) = attached(DiskImage::attach(&sandbox, "ExFAT", "canon")) else {
+        return;
+    };
+    let canon = disk.mount.join("canon");
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&canon)
+        .assert()
+        .code(0);
+    let project = sandbox.home().join("work/proj");
+    let agents = project.join("AGENTS.md");
+    write(&agents, "v1\n");
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(project.parent().unwrap())
+        .assert()
+        .code(0);
+    let mirror = canon.join("projects/work/proj/AGENTS.md");
+    write(&mirror, "v1\n");
+    sandbox.skiman().arg("sync").assert().code(0);
+    std::fs::write(&agents, "project edit\n").unwrap();
+    std::fs::write(&mirror, "mirror edit\n").unwrap();
+    let conflict = sandbox
+        .skiman()
+        .arg("sync")
+        .assert()
+        .code(3)
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("skiman project adopt"));
+
+    let output = sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .arg(&agents)
+        .assert()
+        .code(4)
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&mirror).unwrap(),
+        "mirror edit\n",
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("this volume cannot put a file in place without replacing what is there ("),
+        "{stderr}"
+    );
+    // The closing sync does not send the user back to the adopt that failed.
+    assert!(!stderr.contains("skiman project adopt"), "{stderr}");
+}
+
 #[test]
 fn restore_moves_the_replaced_version_into_a_backup_on_another_filesystem() {
     let sandbox = Sandbox::new();

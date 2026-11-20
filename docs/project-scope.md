@@ -166,11 +166,16 @@ conflicts, and items missing on disk show as row 9.
 
 Walks each root with `read_dir` and `lstat`, never following a directory
 symlink. It never enters `.git`, `node_modules`, a linked git worktree (a
-folder whose `.git` is a file pointing into `…/worktrees/`), an `exclude`
-entry, a `.skiman-swap-*` folder, the canon or skiman's state
-directory. Skill folders are not entered. A symlink at an item location (an alias such
+folder whose `.git` is a file pointing into `…/worktrees/`), a cache folder
+(one holding a `CACHEDIR.TAG` that starts with the signature of the [Cache
+Directory Tagging Specification](https://bford.info/cachedir/), such as Rust's
+`target/`), an `exclude` entry, a `.skiman-swap-*` folder, the canon or
+skiman's state directory. Skill folders are not entered. A symlink at an item location (an alias such
 as `CLAUDE.md -> AGENTS.md`, a link to a global skill) is not a candidate
-and is not reported.
+and is not reported. `adopt <folder>` walks from that folder only; each
+folder on the way to it must be one the whole-root walk enters, under the
+name it has on disk: a folder given in another spelling (another case, on a
+volume that ignores case) is not entered.
 
 ### Gates (why `adopt` skips a candidate)
 
@@ -199,7 +204,7 @@ roots.
 | 1 | The canon is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned; a `.git` file is followed to the worktree's git dir) | skip every project item; one notice | 0 |
 | 2 | Root fails validation or its folder is absent | skip the root; one warning | 0 |
 | 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path has no item shape (one copied from a folder a retired `skill_dirs` key named, say; shape only: a skill folder that lost its `SKILL.md` still has the shape and falls to row 5) | skip, drop its S (`check` reports the path) | 0 |
-| 4 | M absent, S set, D is not a regular item of its kind | drop S | 0 |
+| 4 | M absent, S set, D is not a regular item of its kind | nothing; keep S, so a side that comes back is judged against it (an item created in the project later is row 11, one back in the mirror is row 10; `eject` drops S) | 0 |
 | 5 | M exists but is not a regular file / folder of the item's kind, or is a skill folder without `SKILL.md` | report "mirror invalid" | 3 |
 | 6 | Anchor absent, S set | report "project gone", once per anchor | 0 |
 | 7 | Anchor absent, S none | silent (not on this machine; `doctor` counts) | 0 |
@@ -415,7 +420,7 @@ locks, staging, backups under machine state.
 
 1. `project add` and root validation: every refusal, also for a hand-edited
    `skiman.toml`.
-2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, `exclude` (name, path),
+2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, a `CACHEDIR.TAG` cache, `exclude` (name, path),
    canon and state dir skipped; alias links ignored.
 3. Gates: tracked file, skill with one tracked file, git failure, secret,
    symlink inside a skill, missing `SKILL.md`, git conflict markers; a skill

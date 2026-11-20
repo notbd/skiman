@@ -3,7 +3,9 @@
 //! (the canon mid-operation, an unusable root, a mirror path with no item
 //! shape) are decided by the callers before an item is classified. Sync,
 //! `adopt`, `restore` and `doctor` all call [`classify`], so every command
-//! agrees on what an item's state is and how to settle it.
+//! agrees on what an item's state is. What `adopt` and `restore` do with
+//! each state comes only from [`Evaluated::action`]; which of them
+//! [`Evaluated::fix`] names is tied to that table by a unit test.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -21,8 +23,6 @@ use crate::tree::{Overlay, WorkingTree};
 /// One row of the state table, or one of the two states outside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    /// Row 4: the mirror is gone and the project holds no item: forget the synced hash.
-    Forgotten,
     /// Row 5: the mirror entry cannot be used as it is: why.
     MirrorInvalid(String),
     /// Row 6: the item's project folder is gone.
@@ -49,7 +49,8 @@ pub enum State {
     Conflict,
     /// On disk only, never adopted: a candidate for `adopt`.
     New,
-    /// On neither side, nothing recorded.
+    /// On neither side (row 4, which keeps any synced hash: a side that
+    /// comes back is then judged against it).
     Nothing,
 }
 
@@ -86,9 +87,50 @@ impl State {
             }
             State::InSync => "both sides are equal".to_owned(),
             State::New => "it is not adopted yet".to_owned(),
-            State::Forgotten | State::Nothing => "there is nothing on either side".to_owned(),
+            State::Nothing => "there is nothing on either side".to_owned(),
         }
     }
+}
+
+/// The two commands that write one side of an item: `adopt` the mirror,
+/// `restore` the project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Adopt,
+    Restore,
+}
+
+impl Verb {
+    pub fn word(self) -> &'static str {
+        match self {
+            Verb::Adopt => "adopt",
+            Verb::Restore => "restore",
+        }
+    }
+
+    pub fn done(self) -> &'static str {
+        match self {
+            Verb::Adopt => "adopted",
+            Verb::Restore => "restored",
+        }
+    }
+}
+
+/// What `adopt` or `restore` does with an item in a state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Writes it, named exactly or under a folder; what the plan line says.
+    Write(&'static str),
+    /// Writes it named exactly: it replaces content or undoes a deletion,
+    /// which a folder never does, so a folder names the exact path to give.
+    Exact(&'static str),
+    /// Nothing to write: both sides are equal, or sync copies the project in.
+    Settled,
+    /// Named exactly, skipped with its state; a folder passes it in
+    /// silence: it is the other command's, or nothing is on this machine.
+    Elsewhere,
+    /// Skipped with its state, also under a folder: it needs fixing first.
+    Skip,
 }
 
 /// An item's state, with what was read on the way.
@@ -96,12 +138,63 @@ impl State {
 pub struct Evaluated {
     pub state: State,
     /// The project side, when it was read.
-    pub disk: Option<Content>,
-    pub disk_hash: Option<String>,
-    pub mirror_hash: Option<String>,
+    pub disk: Option<Hashed>,
+    /// The mirror side, when it is a regular item of its kind.
+    pub mirror: Option<Hashed>,
+}
+
+/// One side of an item and its hash, computed once when it is read.
+#[derive(Debug, Clone)]
+pub struct Hashed {
+    pub content: Content,
+    pub hash: String,
+}
+
+impl Hashed {
+    fn of(content: Content) -> Hashed {
+        let hash = content.hash();
+        Hashed { content, hash }
+    }
 }
 
 impl Evaluated {
+    /// The state table's column for `verb`.
+    pub fn action(&self, verb: Verb) -> Action {
+        use Action::*;
+        match (verb, &self.state) {
+            (_, State::InSync) | (Verb::Adopt, State::ProjectChanged) => Settled,
+            (Verb::Adopt, State::New) => Write("adopt"),
+            (Verb::Adopt, State::DeletedInMirror | State::MirrorChanged | State::Conflict) => {
+                Exact("keep the project's version of")
+            }
+            (
+                Verb::Adopt,
+                State::NotOnMachine
+                | State::DeletedInProject
+                | State::NotHere
+                | State::ProjectGone
+                | State::Nothing,
+            ) => Elsewhere,
+            (Verb::Restore, State::NotOnMachine) => Write("write"),
+            (Verb::Restore, State::DeletedInProject | State::MirrorChanged | State::Conflict) => {
+                Exact("write the mirror's version over")
+            }
+            (Verb::Restore, State::Blocked(_)) if self.mirror.is_some() => {
+                Exact("write the mirror's version over")
+            }
+            (Verb::Restore, State::New | State::NotHere | State::Nothing) => Elsewhere,
+            _ => Skip,
+        }
+    }
+
+    /// What `verb` writes: the project side for `adopt`, the mirror for `restore`.
+    pub fn source(&self, verb: Verb) -> Option<&Hashed> {
+        match verb {
+            Verb::Adopt => self.disk.as_ref(),
+            Verb::Restore => self.mirror.as_ref(),
+        }
+    }
+
     /// The commands that settle the item, paste-ready; `None` when it
     /// needs nothing.
     pub fn fix(&self, root: &Root, item: &Item) -> Option<String> {
@@ -128,7 +221,7 @@ impl Evaluated {
                 cmd("adopt"),
                 cmd("restore")
             ),
-            State::Blocked(_) if self.mirror_hash.is_some() => format!(
+            State::Blocked(_) if self.action(Verb::Restore) != Action::Skip => format!(
                 "fix it in the project, or bring back the mirror's version: {}",
                 cmd("restore")
             ),
@@ -167,8 +260,8 @@ pub fn classify(
 ) -> std::io::Result<Evaluated> {
     let mut evaluated = evaluate(root, item, repo.root(), synced)?;
     if evaluated.state == State::ProjectChanged
-        && let Some(content) = &evaluated.disk
-        && let Err(violations) = check_rules(repo, item, content)
+        && let Some(disk) = &evaluated.disk
+        && let Err(violations) = check_rules(repo, item, &disk.content)
     {
         let mut why: Vec<String> = violations.iter().map(ToString::to_string).collect();
         if let Some(hint) = rules::allow_hint(&violations) {
@@ -235,75 +328,76 @@ pub fn evaluate(
         Some(why) => Side::Unsafe(why),
         None => content::read(&mirror_path, item.kind)?,
     };
-    let mirror_hash = match &mirror {
-        Side::Present(c) => Some(c.hash()),
-        _ => None,
+    let (mirror, invalid) = match mirror {
+        Side::Present(content) => (Some(Hashed::of(content)), None),
+        Side::Absent => (None, None),
+        Side::WrongKind => (None, Some("it is not a regular file or folder".to_owned())),
+        Side::Unsafe(why) => (None, Some(why)),
     };
+    let (state, disk) = judge(root, item, mirror.as_ref(), invalid, synced)?;
+    Ok(Evaluated {
+        state,
+        disk,
+        mirror,
+    })
+}
+
+/// The state of `item` given its mirror side (`invalid`: why it cannot be
+/// used), and the project side when it was read.
+fn judge(
+    root: &Root,
+    item: &Item,
+    mirror: Option<&Hashed>,
+    invalid: Option<String>,
+    synced: Option<&str>,
+) -> std::io::Result<(State, Option<Hashed>)> {
     let disk = read_disk(root, item)?;
-    let done = |state: State, disk: Option<Content>| {
-        let disk_hash = disk.as_ref().map(Content::hash);
-        Ok(Evaluated {
-            state,
-            disk,
-            disk_hash,
-            mirror_hash: mirror_hash.clone(),
-        })
-    };
     let disk_is_item = matches!(
         disk,
         Disk::Side(Side::Present(_)) | Disk::Side(Side::Unsafe(_))
     );
-    if mirror == Side::Absent && synced.is_some() && !disk_is_item {
-        return done(State::Forgotten, None);
+    // Row 4: checked before row 6, which a gone anchor would match.
+    if mirror.is_none() && invalid.is_none() && synced.is_some() && !disk_is_item {
+        return Ok((State::Nothing, None));
     }
-    match &mirror {
-        Side::WrongKind => {
-            return done(
-                State::MirrorInvalid("it is not a regular file or folder".to_owned()),
-                None,
-            );
-        }
-        Side::Unsafe(why) => return done(State::MirrorInvalid(why.clone()), None),
-        _ => {}
+    if let Some(why) = invalid {
+        return Ok((State::MirrorInvalid(why), None));
     }
     let disk = match disk {
-        Disk::NoAnchor if synced.is_some() => return done(State::ProjectGone, None),
-        Disk::NoAnchor => return done(State::NotHere, None),
-        Disk::Occupied(what) => return done(State::Occupied(what), None),
+        Disk::NoAnchor if synced.is_some() => return Ok((State::ProjectGone, None)),
+        Disk::NoAnchor => return Ok((State::NotHere, None)),
+        Disk::Occupied(what) => return Ok((State::Occupied(what), None)),
         Disk::Side(Side::WrongKind) => {
             let what = match item.kind {
                 Kind::File => "regular file",
                 Kind::Skill => "real folder",
             };
-            return done(
-                State::Occupied(format!("{} is not a {what}", item.disk(root).display())),
-                None,
-            );
+            let what = format!("{} is not a {what}", item.disk(root).display());
+            return Ok((State::Occupied(what), None));
         }
-        Disk::Side(Side::Unsafe(why)) => return done(State::Blocked(why), None),
+        Disk::Side(Side::Unsafe(why)) => return Ok((State::Blocked(why), None)),
         Disk::Side(Side::Absent) => None,
-        Disk::Side(Side::Present(content)) => Some(content),
+        Disk::Side(Side::Present(content)) => Some(Hashed::of(content)),
     };
-    let state = match (&disk, &mirror_hash, synced) {
+    let state = match (&disk, mirror, synced) {
         (None, Some(_), None) => State::NotOnMachine,
         (None, Some(_), Some(_)) => State::DeletedInProject,
         (None, None, _) => State::Nothing,
         (Some(_), None, Some(_)) => State::DeletedInMirror,
         (Some(_), None, None) => State::New,
         (Some(d), Some(m), s) => {
-            let d = d.hash();
-            if &d == m {
+            if d.hash == m.hash {
                 State::InSync
-            } else if s == Some(m.as_str()) {
+            } else if s == Some(m.hash.as_str()) {
                 State::ProjectChanged
-            } else if s == Some(d.as_str()) {
+            } else if s == Some(d.hash.as_str()) {
                 State::MirrorChanged
             } else {
                 State::Conflict
             }
         }
     };
-    done(state, disk)
+    Ok((state, disk))
 }
 
 /// The project side of an item, as far as the state table needs it.
@@ -325,4 +419,58 @@ fn read_disk(root: &Root, item: &Item) -> std::io::Result<Disk> {
     }
     // A missing intermediate folder means the item is absent.
     Ok(Disk::Side(content::read(&disk, item.kind)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    /// What sync and doctor tell the user to run is what the table lets that
+    /// command do: `fix` names `adopt` or `restore` exactly when the item,
+    /// named exactly, is one that command writes. `New` is left out: sync
+    /// never reports it.
+    #[test]
+    fn fix_names_only_the_commands_the_table_lets_write_the_item() {
+        let root = Root {
+            id: "w".to_owned(),
+            written: "/w".to_owned(),
+            dir: PathBuf::from("/w"),
+            exclude: Vec::new(),
+        };
+        let item = Item::at(&root, "AGENTS.md", false).expect("an item path");
+        let side = || Some(Hashed::of(Content::File(b"x\n".to_vec())));
+        let why = || "why".to_owned();
+        let states = [
+            State::MirrorInvalid(why()),
+            State::ProjectGone,
+            State::NotHere,
+            State::Occupied(why()),
+            State::NotOnMachine,
+            State::DeletedInProject,
+            State::DeletedInMirror,
+            State::InSync,
+            State::ProjectChanged,
+            State::Blocked(why()),
+            State::MirrorChanged,
+            State::Conflict,
+            State::Nothing,
+        ];
+        for state in states {
+            for mirror in [None, side()] {
+                let eval = Evaluated {
+                    state: state.clone(),
+                    disk: side(),
+                    mirror,
+                };
+                let fix = eval.fix(&root, &item).unwrap_or_default();
+                for verb in [Verb::Adopt, Verb::Restore] {
+                    let writes = matches!(eval.action(verb), Action::Write(_) | Action::Exact(_));
+                    let named = fix.contains(&format!("skiman project {} ", verb.word()));
+                    assert_eq!(named, writes, "{state:?}, {verb:?}: {fix}");
+                }
+            }
+        }
+    }
 }

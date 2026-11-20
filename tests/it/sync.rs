@@ -8,7 +8,7 @@ use snapbox::str;
 
 use crate::support::{
     Sandbox, Tool, ToolSetup, assert_each_kill_finishes, assert_symlink, exists, init, killed_at,
-    moved_note, tree, write,
+    logging_git, moved_note, tree, write,
 };
 
 fn write_skill(dir: &std::path::Path, name: &str) {
@@ -925,28 +925,7 @@ fn sync_hook_spawns_no_git_while_it_relinks_and_mirrors() {
         std::fs::remove_file(sandbox.tool_dir(tool).join("notes")).unwrap();
     }
     write(work.join("proj/AGENTS.md"), "v2\n");
-    let real = sandbox
-        .command("sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .unwrap();
-    let real = String::from_utf8(real.stdout).unwrap();
-    let bin = sandbox.root().join("logging-bin");
-    let log = sandbox.root().join("git-calls.log");
-    write(
-        bin.join("git"),
-        format!(
-            "#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
-            log.display(),
-            real.trim()
-        ),
-    );
-    std::fs::set_permissions(
-        bin.join("git"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let (path, log) = logging_git(&sandbox);
 
     sandbox
         .skiman()

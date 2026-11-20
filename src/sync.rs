@@ -813,17 +813,17 @@ fn guarded(
     };
     let canons = || {
         let shown = path.display();
+        let (is, into) = if target == canon {
+            ("is the canon", "which is the canon")
+        } else {
+            ("is inside the canon", "inside the canon")
+        };
         // No link on the way: the canon sits in the tool's own folder.
         if path == target {
             return format!(
-                "{shown} is inside the canon, so skiman writes nothing there; keep the canon in a folder of its own"
+                "{shown} {is}, so skiman writes nothing there; keep the canon in a folder of its own"
             );
         }
-        let into = if target == canon {
-            "which is the canon"
-        } else {
-            "inside the canon"
-        };
         format!(
             "{shown} resolves to {}, {into}, so skiman writes nothing there; point it elsewhere, then run the command again",
             target.display()

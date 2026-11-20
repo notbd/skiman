@@ -248,4 +248,4 @@ may hold only skills the import folder holds too, with the same content.
 - `skiman doctor`: locations, hooks, foreign skills, occupied paths, linked
   folders, project roots and items, and other problems, and each link or
   mirror write the next `skiman sync` makes. It writes nothing, and exits 3
-  when something needs you, 4 when something cannot be read.
+  when something needs you, 4 when something cannot be read or used.

@@ -49,10 +49,11 @@ fn code_list(items: &[&str]) -> String {
 /// or its content differs), read-only. Fails, naming the path, when a
 /// folder on the way is not a real folder (a link there could lead the
 /// write out of the repo) or `SKILL.md` itself is a folder; a link to a
-/// folder is replaced, as any other entry there. Its one read is the one `materialise` makes anyway, so a sync whose
-/// manual is current reads nothing more; it never waits for a writer (a
-/// FIFO there reads as empty, so it is replaced), and reads no more than one
-/// byte past the manual (`/dev/zero` ends too).
+/// folder is replaced, as any other entry there. Its one read is the one
+/// `materialise` makes anyway, so a sync whose manual is current reads
+/// nothing more; it never waits for a writer (a FIFO there reads as empty,
+/// so it is replaced), and reads no more than one byte past the manual
+/// (`/dev/zero` ends too).
 pub fn needs_write(repo: &Canon) -> io::Result<bool> {
     use std::io::Read;
     use std::os::unix::fs::OpenOptionsExt;

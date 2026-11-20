@@ -144,3 +144,33 @@ fn skiman_manual_covers_every_everyday_operation() {
         .collect();
     assert!(missing.is_empty(), "missing: {missing:#?}");
 }
+
+/// The manual's folder is a link: `skiman sync` cannot write the manual and
+/// names the folder once (exit 4); doctor says the same line.
+#[test]
+fn a_manual_that_cannot_be_written_is_named_once() {
+    let sandbox = Sandbox::new();
+    materialised(&sandbox);
+    let manual = sandbox.canon().join(".skiman/skiman-manual");
+    std::fs::remove_dir_all(&manual).unwrap();
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &manual).unwrap();
+    let line = format!(
+        "cannot write skiman-manual: {} is not a real folder (a link or a file is in the way)",
+        manual.display()
+    );
+
+    let sync = sandbox.skiman().arg("sync").output().unwrap();
+    let doctor = sandbox.skiman().arg("doctor").output().unwrap();
+
+    assert_eq!(sync.status.code(), Some(4), "{sync:?}");
+    let stderr = String::from_utf8(sync.stderr).unwrap();
+    assert!(
+        stderr.lines().any(|l| l == format!("error: {line}")),
+        "{stderr}"
+    );
+    assert_eq!(doctor.status.code(), Some(4), "{doctor:?}");
+    let stdout = String::from_utf8(doctor.stdout).unwrap();
+    assert!(stdout.lines().any(|l| l == line), "{stdout}");
+}

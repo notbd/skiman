@@ -349,6 +349,17 @@ pub fn rewrite_atomic(
     replace_atomic(path, contents, 0o600, Some(permissions), true)
 }
 
+/// Creates the link `at` to `target`, never replacing: `Ok(false)` when an
+/// entry is already there. Runs the test hook `sync:link:<shown>` first
+/// (`shown` is `at` as messages spell it).
+pub fn link_new(target: &Path, at: &Path, shown: &Path) -> io::Result<bool> {
+    test_hook::at("sync", &format!("link:{}", shown.display()));
+    match std::os::unix::fs::symlink(target, at) {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        made => made.map(|()| true),
+    }
+}
+
 /// Takes skiman's own link at `link` (in the folder whose realpath is
 /// `real_dir`, pointing at `was`) away, and nothing else, then links `link`
 /// to `to` when given. With `to`, a new link swaps places with it in one

@@ -50,6 +50,17 @@ pub enum Swap {
     Changed(PathBuf),
 }
 
+/// Why no staging can be made in `parent` (inside `root`), read-only: a
+/// folder on the way is not a real folder. What [`Staging::open`] refuses
+/// before it writes, in its words; a plan asks the same.
+pub fn blocked(parent: &Path, root: &Path) -> Option<String> {
+    let why = fsutil::broken_chain(root, &parent.join("new"))?;
+    Some(format!(
+        "cannot create a folder in {}: {why}",
+        parent.display()
+    ))
+}
+
 impl Staging {
     /// The command's staging in `.skiman/tmp/`, after its tmp leftovers went
     /// to `backups` ([`Staging::open`]), printing where; a leftover that
@@ -106,8 +117,8 @@ impl Staging {
                 parent.display()
             ))
         };
-        if let Some(why) = fsutil::broken_chain(root, &parent.join("new")) {
-            return Err(cannot(why));
+        if let Some(why) = blocked(parent, root) {
+            return Err(Failure::operational(why));
         }
         let dir =
             backup::fresh_named_dir(parent, prefix, 0o777).map_err(|e| cannot(e.to_string()))?;

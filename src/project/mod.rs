@@ -30,6 +30,25 @@ pub fn command(verb: &str, paths: &[PathBuf]) -> String {
     format!("skiman project {verb} {}", quoted.join(" "))
 }
 
+/// What the canon is in the middle of (`the canon <op>`), when a git
+/// operation runs there: project sync pauses, project commands refuse.
+pub fn operation(repo: &crate::canon::Canon) -> Option<String> {
+    git::operation_in_progress(repo.root()).map(|op| format!("the canon {op}"))
+}
+
+/// Why no project item can be changed now: a linked folder cannot be read,
+/// so which items overlap it is unknown, or [`operation`]. `adopt`,
+/// `restore` and doctor ask.
+pub fn paused_by(repo: &crate::canon::Canon, linked: &crate::linked::Linked) -> Option<String> {
+    let unreadable = linked.unreadable().map(|folder| {
+        format!(
+            "linked folder `{}` cannot be read, so which project items overlap it is unknown",
+            folder.id
+        )
+    });
+    unreadable.or_else(|| operation(repo))
+}
+
 pub fn shell_quote(text: &str) -> String {
     let plain = |b: u8| !b.is_ascii() || b.is_ascii_alphanumeric() || b"/._-~+,@%=".contains(&b);
     if !text.is_empty() && text.bytes().all(plain) {

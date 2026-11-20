@@ -503,7 +503,10 @@ retargeted [..]/home/.codex/AGENTS.md
 retargeted [..]/home/.gemini/GEMINI.md
 
 "#]])
-        .stderr_eq("");
+        .stderr_eq(str![[r#"
+warning: the shared body [..]/canon/instructions/shared.md is missing, so every instruction file linked to it leads nowhere; make it a file (it may be empty)
+
+"#]]);
 
     let pdf = second.join("skills/pdf");
     let manual = second.join(".skiman/skiman-manual");
@@ -556,6 +559,7 @@ fn init_with_a_foreign_skill_points_to_adopt_when_the_canon_has_skills() {
         .code(0)
         .stderr_eq(str![[r#"
 warning: foreign skill [..]/home/.claude/skills/theirs is not managed by skiman; bring it in with `skiman adopt theirs --from claude-code`
+warning: the shared body [..]/canon/instructions/shared.md is missing, so every instruction file linked to it leads nowhere; make it a file (it may be empty)
 hint: the tool directories hold foreign skills; bring each one into the canon with `skiman adopt <name> --from <tool id>`
 
 "#]]);
@@ -593,4 +597,167 @@ fn a_relative_link_to_the_skill_is_owned_and_resolves_against_the_real_tool_dire
         .stdout_eq("")
         .stderr_eq("");
     assert_eq!(tree(sandbox.home()), before);
+}
+
+/// The sync warning and doctor line for `path`, which resolves to `target`
+/// in the canon (`into`: "inside the canon" or "which is the canon").
+fn guarded_line(path: &Path, target: &Path, into: &str) -> String {
+    format!(
+        "{} resolves to {}, {into}, so skiman writes nothing there; point it elsewhere, then run the command again",
+        path.display(),
+        target.display()
+    )
+}
+
+/// Runs `skiman sync` (exit 3, the one warning `line`) and doctor (exit 3,
+/// the same line).
+fn assert_guarded(sandbox: &Sandbox, line: &str) {
+    let sync = sandbox.skiman().arg("sync").assert().code(3);
+    let stderr = String::from_utf8(sync.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.lines().any(|l| l == format!("warning: {line}")),
+        "{stderr}"
+    );
+    let doctor = sandbox.skiman().arg("doctor").assert().code(3);
+    let stdout = String::from_utf8(doctor.get_output().stdout.clone()).unwrap();
+    assert!(stdout.lines().any(|l| l == line), "{stdout}");
+}
+
+/// A tool directory that resolves into the canon gets no link
+/// and no "move it away" for the canon's own skills; nor does one in the
+/// canon's git folder.
+#[test]
+fn sync_writes_nothing_into_a_tool_directory_that_resolves_into_the_canon() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write_skill(&sandbox.canon().join("skills"), "notes");
+    sandbox.skiman().arg("sync").assert().code(0);
+    let dir = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&dir).unwrap();
+    for into in ["skills", ".git/hooks"] {
+        let target = sandbox.canon().join(into);
+        let _ = std::fs::remove_file(&dir);
+        std::os::unix::fs::symlink(&target, &dir).unwrap();
+        let before = tree(&target);
+
+        assert_guarded(&sandbox, &guarded_line(&dir, &target, "inside the canon"));
+
+        assert_eq!(tree(&target), before, "{into}");
+    }
+}
+
+/// `~/.claude` a link to the canon: no `CLAUDE.md` lands beside
+/// `skiman.toml`. `~/.claude` a link to a folder in the canon that the canon
+/// does not use (dotfiles kept in the canon) works as usual.
+#[test]
+fn sync_writes_no_instruction_link_beside_the_canons_records() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let claude = sandbox.presence_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&claude).unwrap();
+    let canon = sandbox.canon();
+    std::os::unix::fs::symlink(&canon, &claude).unwrap();
+
+    let file = sandbox.instruction_file(Tool::ClaudeCode);
+    let line = guarded_line(&file, &canon.join("CLAUDE.md"), "inside the canon");
+    assert_guarded(&sandbox, &line);
+    assert!(std::fs::symlink_metadata(canon.join("CLAUDE.md")).is_err());
+
+    std::fs::remove_file(&claude).unwrap();
+    std::fs::create_dir_all(canon.join(".claude/skills")).unwrap();
+    std::os::unix::fs::symlink(canon.join(".claude"), &claude).unwrap();
+    sandbox.skiman().arg("sync").assert().code(0).stderr_eq("");
+    let shared = canon.join("instructions/shared.md");
+    assert_symlink(canon.join(".claude/CLAUDE.md"), &shared, &shared);
+}
+
+/// The canon made in a tool's own folder (`skiman init ~/.agents`): sync
+/// writes nothing into it and says to keep the canon in a folder of its own,
+/// not to point a link elsewhere, since there is none. A tool directory
+/// that is a link into that folder (`~/.gemini/config/skills ->
+/// ~/.agents/skills`) is not served through it while `skills/` is missing:
+/// sync never makes a folder it refuses, so doctor and sync both say the
+/// link leads nowhere.
+#[test]
+fn a_canon_in_a_tool_directory_is_refused_in_its_own_words() {
+    let sandbox = Sandbox::new();
+    let agents = sandbox.home().join(".agents");
+    let gemini = sandbox.tool_dir(Tool::Antigravity);
+    std::fs::remove_dir_all(&agents).unwrap();
+    std::fs::remove_dir_all(&gemini).unwrap();
+    std::os::unix::fs::symlink(agents.join("skills"), &gemini).unwrap();
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&agents)
+        .assert()
+        .code(3);
+    // A canon cloned before it held a skill has no `skills/`.
+    std::fs::remove_dir(agents.join("skills")).unwrap();
+    let dir = sandbox.tool_dir(Tool::Codex);
+    let line = format!(
+        "{} is inside the canon, so skiman writes nothing there; keep the canon in a folder of its own",
+        dir.display()
+    );
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == line), "{out}");
+    let nowhere = format!("cannot use {} as a tool directory", gemini.display());
+    assert!(out.contains(&nowhere), "{out}");
+}
+
+/// A canon made right in a tool directory is named as the canon, not as a
+/// path that resolves into it.
+#[test]
+fn a_canon_made_in_a_tool_directory_says_it_is_the_canon() {
+    let sandbox = Sandbox::new();
+    let dir = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&dir).unwrap();
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&dir)
+        .assert()
+        .code(3);
+    let line = format!(
+        "{} is the canon, so skiman writes nothing there; keep the canon in a folder of its own",
+        dir.display()
+    );
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == line), "{out}");
+}
+
+/// A tool directory made between sync's first look and its write is read,
+/// not taken as empty: a skill someone put there is reported as foreign.
+#[test]
+fn a_tool_directory_made_while_sync_looks_is_read() {
+    let sandbox = Sandbox::builder()
+        .tool(Tool::Codex, crate::support::ToolSetup::PresenceOnly)
+        .build();
+    init(&sandbox);
+    let dir = sandbox.tool_dir(Tool::Codex);
+    let _ = std::fs::remove_dir_all(&dir);
+    let theirs = dir.join("theirs");
+    let run = format!(
+        "mkdir -p '{}' && printf -- '---\\nname: theirs\\ndescription: d\\n---\\n' > '{}/SKILL.md'",
+        theirs.display(),
+        theirs.display()
+    );
+
+    let sync = sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", format!("sync:create:{}", dir.display()))
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&sync.stderr);
+    assert!(
+        stderr.contains(&format!("foreign skill {}", theirs.display())),
+        "{sync:?}"
+    );
 }

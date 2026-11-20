@@ -125,7 +125,7 @@ fn sync_hook_does_not_write_skiman_manual_through_a_linked_folder_and_names_it()
     );
     assert_eq!(std::fs::read_link(&materialised).unwrap(), foreign);
     assert.code(0).stdout_eq("").stderr_eq(str![[r#"
-error: cannot write [..]/canon/.skiman/skiman-manual: [..]/canon/.skiman/skiman-manual is not a real folder (a link or a file is in the way)
+error: cannot write skiman-manual: [..]/canon/.skiman/skiman-manual is not a real folder (a link or a file is in the way)
 
 "#]]);
 }
@@ -205,6 +205,89 @@ fn the_first_sync_after_the_rename_gives_managing_skills_to_a_linked_skill() {
     }
     assert!(!exists(&old), "the old manual folder is left");
     assert_doctor_quiet_about_the_manual(&sandbox);
+}
+
+/// The doctor line for a removal of `path` the next sync makes.
+fn removes(path: &Path) -> String {
+    format!("{}: the next `skiman sync` removes it", path.display())
+}
+
+/// doctor foresees the first sync after the rename: it names the old
+/// manual's folder and links as removed and the new links as made, and
+/// leaves the old folder there; the sync then does exactly that.
+#[test]
+fn doctor_foresees_the_first_sync_after_the_rename() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == removes(&old)), "{out}");
+    for tool in Tool::ALL {
+        let link = sandbox.tool_dir(tool).join("managing-skills");
+        assert!(out.lines().any(|l| l == removes(&link)), "{out}");
+    }
+    assert!(!exists(&old), "the old manual folder is left");
+}
+
+/// The new manual's folder is a link: the manual cannot be written, so the
+/// old one stays too, and doctor says what sync says.
+#[test]
+fn the_old_manual_stays_while_the_new_one_cannot_be_written() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    let manual = sandbox.canon().join(".skiman/skiman-manual");
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &manual).unwrap();
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(
+        out.contains(&format!("cannot write skiman-manual: {}", manual.display())),
+        "{out}"
+    );
+    assert!(!out.lines().any(|l| l == removes(&old)), "{out}");
+    assert!(exists(old.join("SKILL.md")), "the old manual folder went");
+}
+
+/// A linked skill named `managing-skills` takes the old manual's name in
+/// the first sync after the rename; doctor foresees each retarget.
+#[test]
+fn doctor_foresees_a_linked_skill_taking_the_old_manuals_name() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    write_skill(&sandbox.home().join("work/company"), "managing-skills");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let text = format!("{text}\n[linked.company]\npath = \"~/work/company\"\n");
+    std::fs::write(&manifest, text).unwrap();
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == removes(&old)), "{out}");
+    for tool in Tool::ALL {
+        let link = sandbox.tool_dir(tool).join("managing-skills");
+        let line = format!("{}: the next `skiman sync` retargets it", link.display());
+        assert!(out.lines().any(|l| l == line), "{out}");
+    }
+}
+
+/// The old manual's place holds a link: sync removes the link, not what
+/// it leads to.
+#[test]
+fn the_old_manual_as_a_link_goes_without_what_it_leads_to() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    let kept = sandbox.root().join("kept");
+    std::fs::rename(&old, &kept).unwrap();
+    std::os::unix::fs::symlink(&kept, &old).unwrap();
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == removes(&old)), "{out}");
+    assert!(std::fs::symlink_metadata(&old).is_err());
+    assert!(exists(kept.join("SKILL.md")), "what the link led to went");
 }
 
 #[test]
@@ -807,4 +890,80 @@ fn a_command_that_waited_while_the_canon_was_switched_writes_nothing() {
         "{stderr}"
     );
     assert!(!sandbox.canon().join("skills/pdf").exists());
+}
+
+/// `sync --hook` spawns no `git` (spec "Performance"), also when it has work:
+/// it relinks a skill in every tool directory and mirrors a project item of
+/// a root that is a git repo. A `git` first on the `PATH` logs each call and
+/// runs the real one; an empty `PATH` would not do, since the hook exits 0
+/// whatever fails.
+#[test]
+fn sync_hook_spawns_no_git_while_it_relinks_and_mirrors() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    write_skill(&sandbox.canon().join("skills"), "notes");
+    let work = sandbox.home().join("work");
+    write(work.join("proj/AGENTS.md"), "v1\n");
+    sandbox
+        .command("git")
+        .args(["init", "-q"])
+        .current_dir(&work)
+        .assert()
+        .success();
+    sandbox
+        .skiman()
+        .args(["project", "add", "--id", "work"])
+        .arg(&work)
+        .assert()
+        .code(0);
+    sandbox
+        .skiman()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
+    for tool in Tool::ALL {
+        std::fs::remove_file(sandbox.tool_dir(tool).join("notes")).unwrap();
+    }
+    write(work.join("proj/AGENTS.md"), "v2\n");
+    let real = sandbox
+        .command("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    let bin = sandbox.root().join("logging-bin");
+    let log = sandbox.root().join("git-calls.log");
+    write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            real.trim()
+        ),
+    );
+    std::fs::set_permissions(
+        bin.join("git"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+
+    sandbox
+        .skiman()
+        .env("PATH", path)
+        .args(["sync", "--hook"])
+        .assert()
+        .code(0);
+
+    for tool in Tool::ALL {
+        let target = sandbox.canon().join("skills/notes");
+        assert_symlink(sandbox.tool_dir(tool).join("notes"), &target, &target);
+    }
+    let mirrored = sandbox.canon().join("projects/work/proj/AGENTS.md");
+    assert_eq!(std::fs::read_to_string(mirrored).unwrap(), "v2\n");
+    assert!(
+        !exists(&log),
+        "sync --hook ran git: {}",
+        std::fs::read_to_string(&log).unwrap()
+    );
 }

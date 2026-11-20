@@ -18,7 +18,7 @@ use crate::paths::Paths;
 use crate::project::command;
 use crate::project::content::{self, Content, Side};
 use crate::project::discover::{discover, never_entered};
-use crate::project::git::{ignored, operation_in_progress, tracking_repos};
+use crate::project::git::{ignored, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
 use crate::project::state::{Evaluated, State, check_rules, classify};
@@ -126,9 +126,9 @@ impl Context {
         let paths = Paths::from_env()?;
         let repo = Canon::from_config(&paths)?;
         let lock = CanonLock::wait(&paths, &repo)?;
-        if let Some(operation) = operation_in_progress(repo.root()) {
+        if let Some(operation) = crate::project::operation(&repo) {
             return Err(Failure::operational(format!(
-                "the canon {operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
+                "{operation}; finish that first, so nothing is written into an old checkout or a half-merged tree"
             )));
         }
         let manifest = Manifest::load(&repo)?;
@@ -471,15 +471,13 @@ impl<'a> Plan<'a> {
 
 /// Refuses (exit 3) to change project items while a linked folder of
 /// `linked` cannot be read: its child links, and so what overlaps it, are
-/// unknown.
-fn refuse_while_unreadable(linked: &Linked, verb: &str) -> Result<(), Failure> {
-    match linked.unreadable() {
-        Some(folder) => Err(Failure {
+/// unknown. A git operation, the other reason of `paused_by`, never gets
+/// here: [`Context::open`] refuses it first.
+fn refuse_while_unreadable(repo: &Canon, linked: &Linked, verb: &str) -> Result<(), Failure> {
+    match crate::project::paused_by(repo, linked) {
+        Some(why) => Err(Failure {
             exit: Exit::NeedsAttention,
-            message: format!(
-                "linked folder `{}` cannot be read, so which project items overlap it is unknown; nothing was {verb}, run this again once it can be read",
-                folder.id
-            ),
+            message: format!("{why}; nothing was {verb}, run this again once it can be read"),
         }),
         None => Ok(()),
     }
@@ -490,7 +488,7 @@ fn refuse_while_unreadable(linked: &Linked, verb: &str) -> Result<(), Failure> {
 /// hand edit. Refuses as [`refuse_while_unreadable`] does.
 fn linked_after_answer(ctx: &Context, verb: &str) -> Result<Linked, Failure> {
     let linked = Linked::load(ctx.paths.home(), &ctx.repo)?;
-    refuse_while_unreadable(&linked, verb)?;
+    refuse_while_unreadable(&ctx.repo, &linked, verb)?;
     Ok(linked)
 }
 
@@ -556,7 +554,7 @@ pub fn adopt(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
-    refuse_while_unreadable(&ctx.linked, "adopted")?;
+    refuse_while_unreadable(&ctx.repo, &ctx.linked, "adopted")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let mut plan = Plan::default();
@@ -719,7 +717,7 @@ pub fn restore(paths: Vec<PathBuf>, dry_run: bool, yes: bool) -> Exit {
 fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Failure> {
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
-    refuse_while_unreadable(&ctx.linked, "restored")?;
+    refuse_while_unreadable(&ctx.repo, &ctx.linked, "restored")?;
     let mut synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let tree = WorkingTree::new(ctx.repo.root());

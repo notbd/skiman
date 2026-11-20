@@ -373,7 +373,8 @@ locks, staging, backups under machine state.
   candidates are not adopted yet, how many items exist only in the mirror
   (row 7), leftover staging folders, mirror paths git ignores, and whether
   `projects/` has uncommitted changes (skiman never commits; mirror changes
-  are committed by the user like any other change).
+  are committed by the user like any other change). While a git operation
+  in the canon pauses sync, doctor still reports each item.
 - `skiman-manual`: project items are real files, edit them in place; after
   creating a project `AGENTS.md`, rules file or project skill under a root,
   run `skiman project adopt <path>`; edits made in the mirror reach the

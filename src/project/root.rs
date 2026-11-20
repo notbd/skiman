@@ -27,9 +27,33 @@ pub struct Root {
 pub struct Problem {
     pub id: String,
     pub message: String,
+    pub kind: Kind,
+}
+
+impl Problem {
+    /// What sync and doctor say about the root.
+    pub fn skipped(&self) -> String {
+        let fix = match self.kind {
+            Kind::Invalid => format!("; fix [projects.{}] in skiman.toml", self.id),
+            Kind::Absent | Kind::Unreadable => String::new(),
+        };
+        format!(
+            "project root `{}` is skipped: {}{fix}",
+            self.id, self.message
+        )
+    }
+}
+
+/// Why a root cannot be used.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
     /// The folder simply is not on this machine (the configuration may be
     /// right for another one).
-    pub absent: bool,
+    Absent,
+    /// The configuration is wrong wherever it is read.
+    Invalid,
+    /// The path to the folder cannot be read on this machine.
+    Unreadable,
 }
 
 /// Whether `path` has the form `skiman.toml` requires of a project root's
@@ -98,7 +122,7 @@ pub fn resolve(home: &Path, repo: &Canon, manifest: &Manifest) -> Vec<Result<Roo
             Ok(root) => Some(root.dir.clone()),
             // Resolved as far as it exists, so a link on the way (a linked
             // HOME, a synced folder) compares like the usable roots' realpaths.
-            Err(problem) if problem.absent => entry
+            Err(problem) if matches!(problem.kind, Kind::Absent | Kind::Unreadable) => entry
                 .path
                 .as_deref()
                 .and_then(|p| expand(home, p))
@@ -119,7 +143,7 @@ pub fn resolve(home: &Path, repo: &Canon, manifest: &Manifest) -> Vec<Result<Roo
             });
             match overlap {
                 Some((j, _)) => Err(Problem {
-                    absent: false,
+                    kind: Kind::Invalid,
                     message: format!(
                         "it overlaps project root `{}`; roots must not contain each other",
                         entries[j].id
@@ -136,7 +160,7 @@ fn check_one(home: &Path, repo: &Canon, entry: &ProjectEntry) -> Result<Root, Pr
     let problem = |message: String| Problem {
         id: entry.id.clone(),
         message,
-        absent: false,
+        kind: Kind::Invalid,
     };
     if !names::is_valid(&entry.id) {
         return Err(problem(format!(
@@ -155,10 +179,20 @@ fn check_one(home: &Path, repo: &Canon, entry: &ProjectEntry) -> Result<Root, Pr
     let dir = match path.canonicalize() {
         Ok(dir) if dir.is_dir() => dir,
         Ok(_) => return Err(problem(format!("{} is not a folder", path.display()))),
-        Err(_) => {
+        Err(e) if e.kind() == std::io::ErrorKind::NotADirectory => {
+            let path = path.display();
+            return Err(problem(format!("a part of {path} is not a folder")));
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Err(Problem {
-                absent: true,
+                kind: Kind::Absent,
                 ..problem(format!("{} is not on this machine", path.display()))
+            });
+        }
+        Err(e) => {
+            return Err(Problem {
+                kind: Kind::Unreadable,
+                ..problem(format!("{} cannot be read ({e})", path.display()))
             });
         }
     };

@@ -251,6 +251,27 @@ fn discovery_skips_git_dirs_node_modules_and_linked_worktrees() {
     assert_eq!(planned(&sandbox), set(&["app/AGENTS.md"]));
 }
 
+/// A folder tagged as a cache is not entered; a tag without the signature
+/// does not count, and the item's exact path still adopts it.
+#[test]
+fn discovery_skips_a_folder_tagged_as_a_cache() {
+    let sandbox = setup("");
+    let root = root(&sandbox);
+    let tag = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache\n";
+    write(root.join("app/target/CACHEDIR.TAG"), tag);
+    write(root.join("app/target/AGENTS.md"), "build output\n");
+    write(root.join("app/out/CACHEDIR.TAG"), "not a tag\n");
+    write(root.join("app/out/AGENTS.md"), "# out\n");
+
+    assert_eq!(planned(&sandbox), set(&["app/out/AGENTS.md"]));
+    let exact = root.join("app/target/AGENTS.md");
+    run(adopt(&sandbox, [&exact]).arg("--yes"), 0);
+    assert_eq!(
+        read(mirror(&sandbox, "app/target/AGENTS.md")),
+        "build output\n"
+    );
+}
+
 #[test]
 fn exclude_by_name_matches_at_any_depth_and_by_path_only_under_that_path() {
     let sandbox = setup("exclude = [\"_archive\", \"a/old\"]");

@@ -166,9 +166,11 @@ conflicts, and items missing on disk show as row 9.
 
 Walks each root with `read_dir` and `lstat`, never following a directory
 symlink. It never enters `.git`, `node_modules`, a linked git worktree (a
-folder whose `.git` is a file pointing into `…/worktrees/`), an `exclude`
-entry, a `.skiman-swap-*` folder, the canon or skiman's state
-directory. Skill folders are not entered. A symlink at an item location (an alias such
+folder whose `.git` is a file pointing into `…/worktrees/`), a cache folder
+(one holding a `CACHEDIR.TAG` that starts with the signature of the [Cache
+Directory Tagging Specification](https://bford.info/cachedir/), such as Rust's
+`target/`), an `exclude` entry, a `.skiman-swap-*` folder, the canon or
+skiman's state directory. Skill folders are not entered. A symlink at an item location (an alias such
 as `CLAUDE.md -> AGENTS.md`, a link to a global skill) is not a candidate
 and is not reported.
 
@@ -415,7 +417,7 @@ locks, staging, backups under machine state.
 
 1. `project add` and root validation: every refusal, also for a hand-edited
    `skiman.toml`.
-2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, `exclude` (name, path),
+2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, a `CACHEDIR.TAG` cache, `exclude` (name, path),
    canon and state dir skipped; alias links ignored.
 3. Gates: tracked file, skill with one tracked file, git failure, secret,
    symlink inside a skill, missing `SKILL.md`, git conflict markers; a skill

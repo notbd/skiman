@@ -16,6 +16,9 @@ use crate::staging::PROJECT_PREFIX;
 /// Folder names discovery never enters, at any depth.
 const SKIPPED_NAMES: &[&str] = &[".git", "node_modules"];
 
+/// How a cache folder's `CACHEDIR.TAG` starts (<https://bford.info/cachedir/>).
+const CACHE_SIGNATURE: &[u8] = b"Signature: 8a477f597d28d172789f06886806bc55";
+
 #[derive(Debug, Default)]
 pub struct Discovery {
     /// Items found on disk: regular files and real skill folders, in path order.
@@ -122,9 +125,19 @@ fn walk(root: &Root, dir: &Path, rel: &str, skip: &[PathBuf], found: &mut Discov
                     found.items.push(item);
                 }
             }
+            _ if is_cache(&path) => {}
             _ => walk(root, &path, &child, skip, found),
         }
     }
+}
+
+/// Whether `dir` is tagged as a cache (build output, such as Rust's
+/// `target/`): its `CACHEDIR.TAG` starts with the signature.
+fn is_cache(dir: &Path) -> bool {
+    let mut head = [0; CACHE_SIGNATURE.len()];
+    std::fs::File::open(dir.join("CACHEDIR.TAG"))
+        .and_then(|mut tag| std::io::Read::read_exact(&mut tag, &mut head))
+        .is_ok_and(|()| head == CACHE_SIGNATURE)
 }
 
 #[cfg(test)]

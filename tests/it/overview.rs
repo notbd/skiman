@@ -198,10 +198,11 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     );
 
     // An unreadable entry is named; the others are still listed.
-    let plugin = sandbox.home().join("kit");
+    let cache = sandbox.home().join(".claude/plugins/cache/market");
+    let plugin = cache.join("kit/1.0");
     write(plugin.join("skills/tdd/SKILL.md"), skill_md("tdd"));
     // A plugin that is one skill: SKILL.md at its root, nothing listed.
-    let solo = sandbox.home().join("solo/2.0");
+    let solo = cache.join("solo/2.0");
     write(solo.join("SKILL.md"), skill_md("solo"));
     write(
         &registry,
@@ -218,10 +219,103 @@ fn a_registry_in_an_unknown_format_is_a_note_not_a_failure() {
     let stdout = overview();
     assert!(
         stdout.contains("The entry of plugin bad@market in ")
-            && stdout.contains("| solo | Claude Code plugin solo@market | ~/solo/2.0 | claude-code |")
             && stdout.contains(
-                "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/kit/skills/tdd | claude-code |"
+                "| solo | Claude Code plugin solo@market | ~/.claude/plugins/cache/market/solo/2.0 | claude-code |"
+            )
+            && stdout.contains(
+                "| tdd | Claude Code plugin kit@market (project scope) (disabled) | ~/.claude/plugins/cache/market/kit/1.0/skills/tdd | claude-code |"
             ),
+        "{stdout}"
+    );
+}
+
+/// A plugin installed outside `~/.claude/plugins` is not one sync leaves
+/// to Claude Code: a link to its skill is one skiman did not make, in the
+/// overview as in sync, and the plugin is a note.
+#[test]
+fn a_plugin_outside_the_plugins_folder_is_shown_as_sync_treats_it() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let plugin = home.join("local-plugin");
+    write(
+        plugin.join(".claude-plugin/plugin.json"),
+        r#"{"name": "local"}"#,
+    );
+    write(plugin.join("skills/notes/SKILL.md"), skill_md("notes"));
+    // Registered through a link: the note names where it really is.
+    let registered = home.join("plugin-link");
+    symlink(&plugin, &registered).unwrap();
+    // Turned off: Claude Code does not read its skills.
+    let off = home.join("off-plugin");
+    write(off.join("skills/old/SKILL.md"), skill_md("old"));
+    write(
+        home.join(".claude/plugins/installed_plugins.json"),
+        format!(
+            r#"{{"version": 2, "plugins": {{"local@fixture": [{{"installPath": "{}"}}], "off@fixture": [{{"installPath": "{}"}}]}}}}"#,
+            registered.display(),
+            off.display()
+        ),
+    );
+    write(
+        home.join(".claude/settings.json"),
+        r#"{"enabledPlugins": {"off@fixture": false}}"#,
+    );
+    let link = home.join(".agents/skills/notes");
+    symlink(plugin.join("skills/notes"), &link).unwrap();
+
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains(
+            "| notes | unknown: a link skiman did not make | ~/local-plugin/skills/notes | codex |"
+        ) && stdout.contains(&format!(
+            "- Claude Code plugin local@fixture is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed, and Claude Code still reads them.",
+            plugin.display()
+        )) && stdout.contains(&format!(
+            "- Claude Code plugin off@fixture (disabled) is installed at {}, outside the folders skiman leaves to other managers; its skills are not listed.\n",
+            off.display()
+        )),
+        "{stdout}"
+    );
+    let sync = sandbox.skiman().arg("sync").assert().code(0);
+    let stderr = String::from_utf8(sync.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains(&format!("foreign skill {} is not managed", link.display())),
+        "{stderr}"
+    );
+}
+
+/// A plugin cache moved to another disk and linked back is still Claude
+/// Code's: its plugins are registered in the registry's folder, and their
+/// skills are listed where they really are.
+#[test]
+fn a_plugin_in_a_cache_linked_elsewhere_is_listed() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let home = sandbox.home();
+    let disk = home.join("bigdisk/claude-cache");
+    write(
+        disk.join("market/kit/1.0/skills/tdd/SKILL.md"),
+        skill_md("tdd"),
+    );
+    let cache = home.join(".claude/plugins/cache");
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    symlink(&disk, &cache).unwrap();
+    write(
+        home.join(".claude/plugins/installed_plugins.json"),
+        format!(
+            r#"{{"version": 2, "plugins": {{"kit@market": [{{"installPath": "{}"}}]}}}}"#,
+            cache.join("market/kit/1.0").display()
+        ),
+    );
+
+    let output = sandbox.skiman().arg("overview").assert().code(0);
+    let stdout = String::from_utf8(output.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains(
+            "| tdd | Claude Code plugin kit@market | ~/bigdisk/claude-cache/market/kit/1.0/skills/tdd | claude-code |"
+        ),
         "{stdout}"
     );
 }

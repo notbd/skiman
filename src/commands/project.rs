@@ -630,7 +630,6 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                     | State::DeletedInProject
                     | State::NotHere
                     | State::ProjectGone
-                    | State::Forgotten
                     | State::Nothing,
                     false,
                 ) => continue,
@@ -773,7 +772,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     plan.needs_exact(&disk, state, Verb::Restore);
                     continue;
                 }
-                (State::New | State::NotHere | State::Nothing | State::Forgotten, false) => {
+                (State::New | State::NotHere | State::Nothing, false) => {
                     continue;
                 }
                 (state, _) => {

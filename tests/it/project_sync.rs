@@ -440,30 +440,80 @@ fn an_item_deleted_in_the_mirror_is_reported_and_not_copied_back() {
 
 // ------------------------------------------------------------ row 4
 
+/// While both sides are gone (here the mirror only for a moment, as a
+/// checkout without `projects/` leaves it; the project file deleted, or its
+/// whole folder), the synced hash stays and sync says nothing: the
+/// project's deletion is still known when the mirror comes back, so a
+/// folder restore leaves it, as for any item deleted in the project. Gone
+/// from both sides for good, a new file at its path is then "deleted in the
+/// mirror", not a new candidate.
 #[test]
-fn an_item_gone_from_both_sides_has_its_synced_hash_dropped() {
+fn an_item_gone_from_both_sides_keeps_its_synced_hash() {
     let sandbox = Sandbox::new();
-    let dir = adopted_file(&sandbox);
-    assert!(read(synced_file(&sandbox)).contains("proj/AGENTS.md"));
+    init(&sandbox);
+    let dir = root(&sandbox);
+    write(dir.join("proj/AGENTS.md"), "v1\n");
+    write(dir.join("gone/AGENTS.md"), "v1\n");
+    register(&sandbox, &dir);
+    adopt_all(&sandbox);
     std::fs::remove_file(dir.join("proj/AGENTS.md")).unwrap();
-    std::fs::remove_file(mirror(&sandbox, "proj/AGENTS.md")).unwrap();
+    std::fs::remove_dir_all(dir.join("gone")).unwrap();
+    let (projects, aside) = (
+        sandbox.canon().join("projects"),
+        sandbox.root().join("aside"),
+    );
+    std::fs::rename(&projects, &aside).unwrap();
 
     let out = sync(&sandbox);
 
-    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(out.status.code(), Some(0), "{}", stderr_of(&out));
     assert_eq!(stdout_of(&out), "");
     assert_eq!(stderr_of(&out), "");
+    let recorded = read(synced_file(&sandbox));
     assert!(
-        !read(synced_file(&sandbox)).contains("proj/AGENTS.md"),
-        "{}",
-        read(synced_file(&sandbox))
+        recorded.contains("proj/AGENTS.md") && recorded.contains("gone/AGENTS.md"),
+        "{recorded}"
     );
-    // A file created there later is a new candidate, not "deleted in the mirror".
-    write(dir.join("proj/AGENTS.md"), "fresh\n");
+    // Folder commands pass by an item gone from both sides in silence.
+    for verb in ["restore", "adopt"] {
+        let out = sandbox
+            .skiman()
+            .args(["project", verb, "--dry-run"])
+            .arg(&dir)
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(0), "{verb}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), format!("nothing to {verb}\n"), "{verb}");
+        assert_eq!(stderr_of(&out), "", "{verb}");
+    }
+    std::fs::rename(&aside, &projects).unwrap();
+    let restore = sandbox
+        .skiman()
+        .args(["project", "restore", "--yes"])
+        .arg(&dir)
+        .output()
+        .unwrap();
+    assert_eq!(restore.status.code(), Some(0), "{}", stderr_of(&restore));
+    let item = dir.join("proj/AGENTS.md");
+    assert!(
+        stderr_of(&restore).contains(&format!(
+            "skip {}: it was deleted in the project; to settle it, give its exact path",
+            item.display()
+        )),
+        "{}",
+        stderr_of(&restore)
+    );
+    assert_sides(&sandbox, &dir, "proj/AGENTS.md", None, Some("v1\n"));
+
+    std::fs::remove_file(mirror(&sandbox, "proj/AGENTS.md")).unwrap();
+    write(&item, "fresh\n");
     let later = sync(&sandbox);
-    assert_eq!(later.status.code(), Some(0), "{}", stderr_of(&later));
-    assert_eq!(stderr_of(&later), "");
-    assert!(!exists(mirror(&sandbox, "proj/AGENTS.md")));
+    assert_eq!(later.status.code(), Some(3), "{}", stderr_of(&later));
+    assert!(
+        stderr_of(&later).contains(&format!("{}: it was deleted in the mirror", item.display())),
+        "{}",
+        stderr_of(&later)
+    );
 }
 
 // ------------------------------------------------------------ row 6

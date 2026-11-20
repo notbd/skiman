@@ -21,8 +21,6 @@ use crate::tree::{Overlay, WorkingTree};
 /// One row of the state table, or one of the two states outside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum State {
-    /// Row 4: the mirror is gone and the project holds no item: forget the synced hash.
-    Forgotten,
     /// Row 5: the mirror entry cannot be used as it is: why.
     MirrorInvalid(String),
     /// Row 6: the item's project folder is gone.
@@ -49,7 +47,8 @@ pub enum State {
     Conflict,
     /// On disk only, never adopted: a candidate for `adopt`.
     New,
-    /// On neither side, nothing recorded.
+    /// On neither side (row 4, which keeps any synced hash: a side that
+    /// comes back is then judged against it).
     Nothing,
 }
 
@@ -86,7 +85,7 @@ impl State {
             }
             State::InSync => "both sides are equal".to_owned(),
             State::New => "it is not adopted yet".to_owned(),
-            State::Forgotten | State::Nothing => "there is nothing on either side".to_owned(),
+            State::Nothing => "there is nothing on either side".to_owned(),
         }
     }
 }
@@ -253,8 +252,9 @@ pub fn evaluate(
         disk,
         Disk::Side(Side::Present(_)) | Disk::Side(Side::Unsafe(_))
     );
+    // Row 4: checked before row 6, which a gone anchor would match.
     if mirror == Side::Absent && synced.is_some() && !disk_is_item {
-        return done(State::Forgotten, None);
+        return done(State::Nothing, None);
     }
     match &mirror {
         Side::WrongKind => {

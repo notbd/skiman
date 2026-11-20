@@ -217,7 +217,6 @@ fn reconcile_root(
             ));
         };
         match &evaluated.state {
-            State::Forgotten => synced.remove(root, &item.rel),
             State::NotHere => pending.away += 1,
             State::Nothing | State::New => {}
             State::InSync => {

@@ -199,7 +199,7 @@ roots.
 | 1 | The canon is mid-operation: `HEAD` detached, or `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, `rebase-merge/` or `rebase-apply/` in its git dir (read as files, no git spawned; a `.git` file is followed to the worktree's git dir) | skip every project item; one notice | 0 |
 | 2 | Root fails validation or its folder is absent | skip the root; one warning | 0 |
 | 3 | `projects/<id>` has no `[projects.<id>]`, or a mirror path has no item shape (one copied from a folder a retired `skill_dirs` key named, say; shape only: a skill folder that lost its `SKILL.md` still has the shape and falls to row 5) | skip, drop its S (`check` reports the path) | 0 |
-| 4 | M absent, S set, D is not a regular item of its kind | drop S | 0 |
+| 4 | M absent, S set, D is not a regular item of its kind | nothing; keep S, so a side that comes back is judged against it (an item created in the project later is row 11, one back in the mirror is row 10; `eject` drops S) | 0 |
 | 5 | M exists but is not a regular file / folder of the item's kind, or is a skill folder without `SKILL.md` | report "mirror invalid" | 3 |
 | 6 | Anchor absent, S set | report "project gone", once per anchor | 0 |
 | 7 | Anchor absent, S none | silent (not on this machine; `doctor` counts) | 0 |

@@ -95,9 +95,23 @@ impl State {
 pub struct Evaluated {
     pub state: State,
     /// The project side, when it was read.
-    pub disk: Option<Content>,
-    pub disk_hash: Option<String>,
-    pub mirror_hash: Option<String>,
+    pub disk: Option<Hashed>,
+    /// The mirror side, when it is a regular item of its kind.
+    pub mirror: Option<Hashed>,
+}
+
+/// One side of an item and its hash, computed once when it is read.
+#[derive(Debug, Clone)]
+pub struct Hashed {
+    pub content: Content,
+    pub hash: String,
+}
+
+impl Hashed {
+    fn of(content: Content) -> Hashed {
+        let hash = content.hash();
+        Hashed { content, hash }
+    }
 }
 
 impl Evaluated {
@@ -127,7 +141,7 @@ impl Evaluated {
                 cmd("adopt"),
                 cmd("restore")
             ),
-            State::Blocked(_) if self.mirror_hash.is_some() => format!(
+            State::Blocked(_) if self.mirror.is_some() => format!(
                 "fix it in the project, or bring back the mirror's version: {}",
                 cmd("restore")
             ),
@@ -166,8 +180,8 @@ pub fn classify(
 ) -> std::io::Result<Evaluated> {
     let mut evaluated = evaluate(root, item, repo.root(), synced)?;
     if evaluated.state == State::ProjectChanged
-        && let Some(content) = &evaluated.disk
-        && let Err(violations) = check_rules(repo, item, content)
+        && let Some(disk) = &evaluated.disk
+        && let Err(violations) = check_rules(repo, item, &disk.content)
     {
         let mut why: Vec<String> = violations.iter().map(ToString::to_string).collect();
         if let Some(hint) = rules::allow_hint(&violations) {
@@ -234,76 +248,76 @@ pub fn evaluate(
         Some(why) => Side::Unsafe(why),
         None => content::read(&mirror_path, item.kind)?,
     };
-    let mirror_hash = match &mirror {
-        Side::Present(c) => Some(c.hash()),
-        _ => None,
+    let (mirror, invalid) = match mirror {
+        Side::Present(content) => (Some(Hashed::of(content)), None),
+        Side::Absent => (None, None),
+        Side::WrongKind => (None, Some("it is not a regular file or folder".to_owned())),
+        Side::Unsafe(why) => (None, Some(why)),
     };
+    let (state, disk) = judge(root, item, mirror.as_ref(), invalid, synced)?;
+    Ok(Evaluated {
+        state,
+        disk,
+        mirror,
+    })
+}
+
+/// The state of `item` given its mirror side (`invalid`: why it cannot be
+/// used), and the project side when it was read.
+fn judge(
+    root: &Root,
+    item: &Item,
+    mirror: Option<&Hashed>,
+    invalid: Option<String>,
+    synced: Option<&str>,
+) -> std::io::Result<(State, Option<Hashed>)> {
     let disk = read_disk(root, item)?;
-    let done = |state: State, disk: Option<Content>| {
-        let disk_hash = disk.as_ref().map(Content::hash);
-        Ok(Evaluated {
-            state,
-            disk,
-            disk_hash,
-            mirror_hash: mirror_hash.clone(),
-        })
-    };
     let disk_is_item = matches!(
         disk,
         Disk::Side(Side::Present(_)) | Disk::Side(Side::Unsafe(_))
     );
     // Row 4: checked before row 6, which a gone anchor would match.
-    if mirror == Side::Absent && synced.is_some() && !disk_is_item {
-        return done(State::Nothing, None);
+    if mirror.is_none() && invalid.is_none() && synced.is_some() && !disk_is_item {
+        return Ok((State::Nothing, None));
     }
-    match &mirror {
-        Side::WrongKind => {
-            return done(
-                State::MirrorInvalid("it is not a regular file or folder".to_owned()),
-                None,
-            );
-        }
-        Side::Unsafe(why) => return done(State::MirrorInvalid(why.clone()), None),
-        _ => {}
+    if let Some(why) = invalid {
+        return Ok((State::MirrorInvalid(why), None));
     }
     let disk = match disk {
-        Disk::NoAnchor if synced.is_some() => return done(State::ProjectGone, None),
-        Disk::NoAnchor => return done(State::NotHere, None),
-        Disk::Occupied(what) => return done(State::Occupied(what), None),
+        Disk::NoAnchor if synced.is_some() => return Ok((State::ProjectGone, None)),
+        Disk::NoAnchor => return Ok((State::NotHere, None)),
+        Disk::Occupied(what) => return Ok((State::Occupied(what), None)),
         Disk::Side(Side::WrongKind) => {
             let what = match item.kind {
                 Kind::File => "regular file",
                 Kind::Skill => "real folder",
             };
-            return done(
-                State::Occupied(format!("{} is not a {what}", item.disk(root).display())),
-                None,
-            );
+            let what = format!("{} is not a {what}", item.disk(root).display());
+            return Ok((State::Occupied(what), None));
         }
-        Disk::Side(Side::Unsafe(why)) => return done(State::Blocked(why), None),
+        Disk::Side(Side::Unsafe(why)) => return Ok((State::Blocked(why), None)),
         Disk::Side(Side::Absent) => None,
-        Disk::Side(Side::Present(content)) => Some(content),
+        Disk::Side(Side::Present(content)) => Some(Hashed::of(content)),
     };
-    let state = match (&disk, &mirror_hash, synced) {
+    let state = match (&disk, mirror, synced) {
         (None, Some(_), None) => State::NotOnMachine,
         (None, Some(_), Some(_)) => State::DeletedInProject,
         (None, None, _) => State::Nothing,
         (Some(_), None, Some(_)) => State::DeletedInMirror,
         (Some(_), None, None) => State::New,
         (Some(d), Some(m), s) => {
-            let d = d.hash();
-            if &d == m {
+            if d.hash == m.hash {
                 State::InSync
-            } else if s == Some(m.as_str()) {
+            } else if s == Some(m.hash.as_str()) {
                 State::ProjectChanged
-            } else if s == Some(d.as_str()) {
+            } else if s == Some(d.hash.as_str()) {
                 State::MirrorChanged
             } else {
                 State::Conflict
             }
         }
     };
-    done(state, disk)
+    Ok((state, disk))
 }
 
 /// The project side of an item, as far as the state table needs it.

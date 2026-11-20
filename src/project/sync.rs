@@ -7,10 +7,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::command;
-use super::content::Content;
 use super::item::{Item, MIRROR_DIR, managed};
 use super::root::{self, Root};
-use super::state::{State, classify};
+use super::state::{Hashed, State, classify};
 use super::swap::{Expect, Outcome, Previous, Replace};
 use super::synced::Synced;
 use crate::backup::Backups;
@@ -220,8 +219,8 @@ fn reconcile_root(
             State::NotHere => pending.away += 1,
             State::Nothing | State::New => {}
             State::InSync => {
-                if let Some(hash) = &evaluated.disk_hash {
-                    synced.set(root, &item.rel, item.kind, hash);
+                if let Some(disk) = &evaluated.disk {
+                    synced.set(root, &item.rel, item.kind, &disk.hash);
                 }
             }
             State::NotOnMachine => pending.not_here += 1,
@@ -262,15 +261,9 @@ fn reconcile_root(
                 }
             }
             State::ProjectChanged => {
-                if let Some(content) = &evaluated.disk {
-                    writer.mirror(
-                        root,
-                        item,
-                        content,
-                        evaluated.mirror_hash.as_deref(),
-                        synced,
-                        report,
-                    );
+                if let Some(disk) = &evaluated.disk {
+                    let expected = evaluated.mirror.as_ref().map(|m| m.hash.as_str());
+                    writer.mirror(root, item, disk, expected, synced, report);
                 }
             }
         }
@@ -346,7 +339,7 @@ impl Writer<'_> {
         &mut self,
         root: &Root,
         item: &Item,
-        content: &Content,
+        new: &Hashed,
         expected: Option<&str>,
         synced: &mut Synced,
         report: &mut SyncReport,
@@ -372,7 +365,7 @@ impl Writer<'_> {
             dest: &dest,
             kind: item.kind,
             expected: &Expect::from_hash(expected),
-            new: content,
+            new: &new.content,
             backup_rel: &Path::new("repo").join(item.mirror_rel()),
         }
         .run(&staging, &mut self.backups);
@@ -381,7 +374,7 @@ impl Writer<'_> {
                 previous,
                 late_write,
             }) => {
-                synced.set(root, &item.rel, item.kind, &content.hash());
+                synced.set(root, &item.rel, item.kind, &new.hash);
                 report.changes.push((Change::Mirrored, disk.clone()));
                 match previous {
                     Previous::At(backup) if late_write => report.items.push(note(

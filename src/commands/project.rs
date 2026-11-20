@@ -16,12 +16,11 @@ use crate::linked::Linked;
 use crate::manifest::{self, Manifest};
 use crate::paths::Paths;
 use crate::project::command;
-use crate::project::content::{self, Content, Side};
 use crate::project::discover::{discover, never_entered};
 use crate::project::git::{ignored, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
-use crate::project::state::{Evaluated, State, check_rules, classify};
+use crate::project::state::{Evaluated, Hashed, State, check_rules, classify};
 use crate::project::swap::{Expect, Outcome, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
@@ -334,7 +333,7 @@ struct Planned<'a> {
     eval: Evaluated,
     /// The content to write, read once when the plan is made: the rules
     /// check exactly what is written, and the live source is not re-read.
-    new: Option<Content>,
+    new: Option<Hashed>,
     /// What the plan line says is done to the item.
     what: &'static str,
 }
@@ -415,7 +414,7 @@ impl<'a> Plan<'a> {
                 ));
                 return false;
             };
-            match check_rules(repo, &p.item, new) {
+            match check_rules(repo, &p.item, &new.content) {
                 Ok(()) => true,
                 Err(violations) => {
                     let mut lines = vec![format!(
@@ -683,8 +682,8 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
         let replace = Replace {
             dest: &dest,
             kind: p.item.kind,
-            expected: &Expect::from_hash(p.eval.mirror_hash.as_deref()),
-            new: content,
+            expected: &Expect::from_hash(p.eval.mirror.as_ref().map(|m| m.hash.as_str())),
+            new: &content.content,
             backup_rel: &Path::new("repo").join(&rel),
         };
         // A staging that cannot be opened fails this item only.
@@ -695,7 +694,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             failed.push(p.item.disk(p.root));
         }
         if placed {
-            synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
+            synced.set(p.root, &p.item.rel, p.item.kind, &content.hash);
             written.push(rel);
         }
     }
@@ -760,7 +759,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     | State::MirrorChanged
                     | State::Conflict,
                     true,
-                ) if eval.mirror_hash.is_some() => "write the mirror's version over",
+                ) if eval.mirror.is_some() => "write the mirror's version over",
                 (State::InSync, _) => continue,
                 (
                     state @ (State::DeletedInProject
@@ -768,7 +767,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     | State::MirrorChanged
                     | State::Conflict),
                     false,
-                ) if eval.mirror_hash.is_some() => {
+                ) if eval.mirror.is_some() => {
                     plan.needs_exact(&disk, state, Verb::Restore);
                     continue;
                 }
@@ -783,10 +782,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                     continue;
                 }
             };
-            let new = match content::read(&ctx.repo.root().join(item.mirror_rel()), item.kind) {
-                Ok(Side::Present(content)) => Some(content),
-                _ => None,
-            };
+            let new = eval.mirror.clone();
             plan.writes.push(Planned {
                 root: target.root,
                 item,
@@ -821,15 +817,15 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             .new
             .as_ref()
             .expect("drop_breaking keeps only readable writes");
-        let expected = match (&p.eval.state, &p.eval.disk_hash) {
+        let expected = match (&p.eval.state, &p.eval.disk) {
             (State::Blocked(_), None) => Expect::Present,
-            (_, hash) => Expect::from_hash(hash.as_deref()),
+            (_, disk) => Expect::from_hash(disk.as_ref().map(|d| d.hash.as_str())),
         };
         let replace = Replace {
             dest: &disk,
             kind: p.item.kind,
             expected: &expected,
-            new: content,
+            new: &content.content,
             backup_rel: &Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.rel),
         };
         let outcome = staging.and_then(|staging| replace.run(&staging, &mut backups));
@@ -839,7 +835,7 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
             failed.push(disk.clone());
         }
         if placed {
-            synced.set(p.root, &p.item.rel, p.item.kind, &content.hash());
+            synced.set(p.root, &p.item.rel, p.item.kind, &content.hash);
         }
     }
     ctx.finish(&mut synced, &backups, exit, &failed)

@@ -55,7 +55,7 @@ fn remove_of_an_own_skill_moves_its_folder_to_a_backup_and_removes_its_links() {
     std::fs::write(repo.join("skills/notes/draft.md"), "not committed\n").unwrap();
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["remove", "notes", "--yes"])
         .assert()
         .code(0)

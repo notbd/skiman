@@ -128,7 +128,7 @@ fn import_brings_a_messy_setup_in_and_keeps_every_original_in_the_backup() {
     let synced_before = tree(sandbox.tool_dir(Tool::ClaudeCode).join("synced"));
 
     let output = sandbox
-        .skiman()
+        .skiman_confined()
         .arg("import")
         .arg(&folder)
         .arg("--yes")

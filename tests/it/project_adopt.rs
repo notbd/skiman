@@ -572,7 +572,11 @@ fn adopt_copies_byte_identical_mirrors_and_leaves_the_project_untouched() {
     three_items(&sandbox);
     let project_before = tree(root(&sandbox));
 
-    adopt(&sandbox, ["--yes"]).assert().code(0);
+    sandbox
+        .skiman_confined()
+        .args(["project", "adopt", "--yes"])
+        .assert()
+        .code(0);
 
     assert_eq!(
         tree(root(&sandbox)),

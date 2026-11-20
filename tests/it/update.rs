@@ -59,7 +59,7 @@ fn a_clean_merge_keeps_committed_and_uncommitted_local_edits_and_applies_the_ups
     let commit = up.commit("v2");
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["update", "pdf"])
         .assert()
         .code(0)

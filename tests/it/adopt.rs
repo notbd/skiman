@@ -61,7 +61,7 @@ fn adopt_of_a_foreign_folder_copies_it_backs_up_the_original_and_links_the_copy(
     let original_tree = tree(&original);
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["adopt", "notes", "--from", "claude-code", "--yes"])
         .assert()
         .code(0)

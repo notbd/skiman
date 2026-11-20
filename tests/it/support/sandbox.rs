@@ -223,16 +223,20 @@ impl Sandbox {
 
     /// `program` under macOS `sandbox-exec`: network access fails, and any
     /// write outside the sandbox root (and `/dev`) kills the process with
-    /// SIGKILL, so the command cannot succeed after an escaped write. Other
-    /// systems have no such tool on every machine: there `program` runs
-    /// like `command()`, and the macOS run is the one that proves it.
+    /// SIGKILL, so the command cannot succeed after an escaped write. One
+    /// write outside is allowed: Apple's `/usr/bin/git` is an xcrun shim
+    /// that, on its first run under a `HOME`, creates an `xcrun_db-*` cache
+    /// in the user's temp folder (`DARWIN_USER_TEMP_DIR`, not `TMPDIR`).
+    /// Other systems have no such tool on every machine: there `program`
+    /// runs like `command()`, and the macOS run is the one that proves it.
     pub fn confined(&self, program: impl AsRef<OsStr>) -> Command {
         if cfg!(not(target_os = "macos")) {
             return self.command(program);
         }
         let profile = format!(
             "(version 1)(allow default)(deny network*)\
-             (deny file-write* (with send-signal SIGKILL) (require-not (require-any (subpath \"{}\") (subpath \"/dev\"))))",
+             (deny file-write* (with send-signal SIGKILL) (require-not (require-any (subpath \"{}\") (subpath \"/dev\") \
+             (regex #\"^/private/var/folders/[^/]+/[^/]+/T/xcrun_db\"))))",
             self.root.display()
         );
         self.command("/usr/bin/sandbox-exec")

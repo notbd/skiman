@@ -83,7 +83,7 @@ fn mv_of_an_own_skill_renames_the_folder_name_table_and_secret_exemption() {
     check_is_clean(&sandbox);
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["mv", "notes", "memo"])
         .assert()
         .code(0)

@@ -15,7 +15,7 @@ fn init_on_a_missing_path_creates_the_canon_layout_and_the_user_config() {
     let repo = sandbox.canon();
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["init", "--session-hooks", "none"])
         .arg(&repo)
         .assert()

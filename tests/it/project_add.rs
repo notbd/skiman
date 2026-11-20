@@ -84,7 +84,7 @@ fn add_writes_a_tilde_path_and_an_id_from_the_folder_name() {
 
     // A relative path is taken from the working directory (HOME here).
     let assert = sandbox
-        .skiman()
+        .skiman_confined()
         .args(["project", "add", "Work/Acme-Corp"])
         .assert()
         .code(0);

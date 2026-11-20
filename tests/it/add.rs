@@ -47,7 +47,7 @@ fn add_installs_a_single_skill_records_it_and_links_it() {
     let repo = sandbox.canon();
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["add", "acme/pdf", "--yes"])
         .assert()
         .code(0)

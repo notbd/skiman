@@ -303,7 +303,7 @@ fn linked_remove_leaves_no_link_behind() {
     let before = contents(&[&sandbox.home().join("work")]);
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["linked", "remove", "company"])
         .assert()
         .code(0)

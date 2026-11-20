@@ -596,7 +596,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                 vec![item.clone()]
             }
             None => {
-                let found = discover(target.root, &ctx.skip, &ctx.linked);
+                let found = discover(target.root, &ctx.skip, &ctx.linked, &target.rel);
                 for (item, why) in found
                     .skipped
                     .iter()

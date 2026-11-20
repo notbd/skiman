@@ -458,7 +458,7 @@ fn report_projects(
             .map(|i| i.disk(root))
             .filter(|d| linked.item_overlap(d).is_none() && std::fs::symlink_metadata(d).is_ok())
             .collect();
-        let found = discover::discover(root, &skip, linked);
+        let found = discover::discover(root, &skip, linked, "");
         let adopted = |rel: &str| items.iter().any(|m| m.rel == rel);
         let candidates: Vec<PathBuf> = found
             .items

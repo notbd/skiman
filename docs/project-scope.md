@@ -172,7 +172,10 @@ Directory Tagging Specification](https://bford.info/cachedir/), such as Rust's
 `target/`), an `exclude` entry, a `.skiman-swap-*` folder, the canon or
 skiman's state directory. Skill folders are not entered. A symlink at an item location (an alias such
 as `CLAUDE.md -> AGENTS.md`, a link to a global skill) is not a candidate
-and is not reported.
+and is not reported. `adopt <folder>` walks from that folder only; each
+folder on the way to it must be one the whole-root walk enters, under the
+name it has on disk: a folder given in another spelling (another case, on a
+volume that ignores case) is not entered.
 
 ### Gates (why `adopt` skips a candidate)
 

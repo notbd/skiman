@@ -3,7 +3,9 @@
 //! (the canon mid-operation, an unusable root, a mirror path with no item
 //! shape) are decided by the callers before an item is classified. Sync,
 //! `adopt`, `restore` and `doctor` all call [`classify`], so every command
-//! agrees on what an item's state is and how to settle it.
+//! agrees on what an item's state is. What `adopt` and `restore` do with
+//! each state comes only from [`Evaluated::action`]; which of them
+//! [`Evaluated::fix`] names is tied to that table by a unit test.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -90,6 +92,47 @@ impl State {
     }
 }
 
+/// The two commands that write one side of an item: `adopt` the mirror,
+/// `restore` the project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verb {
+    Adopt,
+    Restore,
+}
+
+impl Verb {
+    pub fn word(self) -> &'static str {
+        match self {
+            Verb::Adopt => "adopt",
+            Verb::Restore => "restore",
+        }
+    }
+
+    pub fn done(self) -> &'static str {
+        match self {
+            Verb::Adopt => "adopted",
+            Verb::Restore => "restored",
+        }
+    }
+}
+
+/// What `adopt` or `restore` does with an item in a state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    /// Writes it, named exactly or under a folder; what the plan line says.
+    Write(&'static str),
+    /// Writes it named exactly: it replaces content or undoes a deletion,
+    /// which a folder never does, so a folder names the exact path to give.
+    Exact(&'static str),
+    /// Nothing to write: both sides are equal, or sync copies the project in.
+    Settled,
+    /// Named exactly, skipped with its state; a folder passes it in
+    /// silence: it is the other command's, or nothing is on this machine.
+    Elsewhere,
+    /// Skipped with its state, also under a folder: it needs fixing first.
+    Skip,
+}
+
 /// An item's state, with what was read on the way.
 #[derive(Debug, Clone)]
 pub struct Evaluated {
@@ -115,6 +158,43 @@ impl Hashed {
 }
 
 impl Evaluated {
+    /// The state table's column for `verb`.
+    pub fn action(&self, verb: Verb) -> Action {
+        use Action::*;
+        match (verb, &self.state) {
+            (_, State::InSync) | (Verb::Adopt, State::ProjectChanged) => Settled,
+            (Verb::Adopt, State::New) => Write("adopt"),
+            (Verb::Adopt, State::DeletedInMirror | State::MirrorChanged | State::Conflict) => {
+                Exact("keep the project's version of")
+            }
+            (
+                Verb::Adopt,
+                State::NotOnMachine
+                | State::DeletedInProject
+                | State::NotHere
+                | State::ProjectGone
+                | State::Nothing,
+            ) => Elsewhere,
+            (Verb::Restore, State::NotOnMachine) => Write("write"),
+            (Verb::Restore, State::DeletedInProject | State::MirrorChanged | State::Conflict) => {
+                Exact("write the mirror's version over")
+            }
+            (Verb::Restore, State::Blocked(_)) if self.mirror.is_some() => {
+                Exact("write the mirror's version over")
+            }
+            (Verb::Restore, State::New | State::NotHere | State::Nothing) => Elsewhere,
+            _ => Skip,
+        }
+    }
+
+    /// What `verb` writes: the project side for `adopt`, the mirror for `restore`.
+    pub fn source(&self, verb: Verb) -> Option<&Hashed> {
+        match verb {
+            Verb::Adopt => self.disk.as_ref(),
+            Verb::Restore => self.mirror.as_ref(),
+        }
+    }
+
     /// The commands that settle the item, paste-ready; `None` when it
     /// needs nothing.
     pub fn fix(&self, root: &Root, item: &Item) -> Option<String> {
@@ -141,7 +221,7 @@ impl Evaluated {
                 cmd("adopt"),
                 cmd("restore")
             ),
-            State::Blocked(_) if self.mirror.is_some() => format!(
+            State::Blocked(_) if self.action(Verb::Restore) != Action::Skip => format!(
                 "fix it in the project, or bring back the mirror's version: {}",
                 cmd("restore")
             ),
@@ -339,4 +419,58 @@ fn read_disk(root: &Root, item: &Item) -> std::io::Result<Disk> {
     }
     // A missing intermediate folder means the item is absent.
     Ok(Disk::Side(content::read(&disk, item.kind)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    /// What sync and doctor tell the user to run is what the table lets that
+    /// command do: `fix` names `adopt` or `restore` exactly when the item,
+    /// named exactly, is one that command writes. `New` is left out: sync
+    /// never reports it.
+    #[test]
+    fn fix_names_only_the_commands_the_table_lets_write_the_item() {
+        let root = Root {
+            id: "w".to_owned(),
+            written: "/w".to_owned(),
+            dir: PathBuf::from("/w"),
+            exclude: Vec::new(),
+        };
+        let item = Item::at(&root, "AGENTS.md", false).expect("an item path");
+        let side = || Some(Hashed::of(Content::File(b"x\n".to_vec())));
+        let why = || "why".to_owned();
+        let states = [
+            State::MirrorInvalid(why()),
+            State::ProjectGone,
+            State::NotHere,
+            State::Occupied(why()),
+            State::NotOnMachine,
+            State::DeletedInProject,
+            State::DeletedInMirror,
+            State::InSync,
+            State::ProjectChanged,
+            State::Blocked(why()),
+            State::MirrorChanged,
+            State::Conflict,
+            State::Nothing,
+        ];
+        for state in states {
+            for mirror in [None, side()] {
+                let eval = Evaluated {
+                    state: state.clone(),
+                    disk: side(),
+                    mirror,
+                };
+                let fix = eval.fix(&root, &item).unwrap_or_default();
+                for verb in [Verb::Adopt, Verb::Restore] {
+                    let writes = matches!(eval.action(verb), Action::Write(_) | Action::Exact(_));
+                    let named = fix.contains(&format!("skiman project {} ", verb.word()));
+                    assert_eq!(named, writes, "{state:?}, {verb:?}: {fix}");
+                }
+            }
+        }
+    }
 }

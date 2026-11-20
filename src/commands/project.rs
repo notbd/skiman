@@ -20,7 +20,7 @@ use crate::project::discover::{discover, never_entered};
 use crate::project::git::{ignored, tracking_repos};
 use crate::project::item::{Item, MIRROR_DIR, managed, read_mirror_of};
 use crate::project::root::{self, Root};
-use crate::project::state::{Evaluated, Hashed, State, check_rules, classify};
+use crate::project::state::{Action, Evaluated, State, Verb, check_rules, classify};
 use crate::project::swap::{Expect, Outcome, Previous, Replace};
 use crate::project::sync::swap_parent;
 use crate::project::synced::Synced;
@@ -296,33 +296,10 @@ fn need_yes(yes: bool, dry_run: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-/// The two write commands, for their plan and messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verb {
-    Adopt,
-    Restore,
-}
-
-impl Verb {
-    fn word(self) -> &'static str {
-        match self {
-            Verb::Adopt => "adopt",
-            Verb::Restore => "restore",
-        }
-    }
-
-    fn done(self) -> &'static str {
-        match self {
-            Verb::Adopt => "adopted",
-            Verb::Restore => "restored",
-        }
-    }
-
-    fn question(self, count: usize) -> String {
-        match self {
-            Verb::Adopt => format!("Adopt {count} item(s)? [y/N] "),
-            Verb::Restore => format!("Restore {count} item(s)? [y/N] "),
-        }
+fn question(verb: Verb, count: usize) -> String {
+    match verb {
+        Verb::Adopt => format!("Adopt {count} item(s)? [y/N] "),
+        Verb::Restore => format!("Restore {count} item(s)? [y/N] "),
     }
 }
 
@@ -330,39 +307,89 @@ impl Verb {
 struct Planned<'a> {
     root: &'a Root,
     item: Item,
+    /// Read once when the plan is made: the rules check exactly what is
+    /// written ([`Evaluated::source`]), and the live source is not re-read.
     eval: Evaluated,
-    /// The content to write, read once when the plan is made: the rules
-    /// check exactly what is written, and the live source is not re-read.
-    new: Option<Hashed>,
     /// What the plan line says is done to the item.
     what: &'static str,
 }
 
 /// The plan of a write command: the writes, and what is skipped and why.
-#[derive(Default)]
 struct Plan<'a> {
+    verb: Verb,
     writes: Vec<Planned<'a>>,
     skips: Vec<String>,
     /// Paths the user named exactly.
     named: BTreeSet<PathBuf>,
     /// An item named exactly was skipped (exit 1).
     named_skipped: bool,
+    /// The items already taken, so two given paths do not plan one twice.
+    seen: BTreeSet<(String, String)>,
 }
 
 impl<'a> Plan<'a> {
+    fn new(verb: Verb) -> Plan<'a> {
+        Plan {
+            verb,
+            writes: Vec::new(),
+            skips: Vec::new(),
+            named: BTreeSet::new(),
+            named_skipped: false,
+            seen: BTreeSet::new(),
+        }
+    }
+
     fn skip(&mut self, disk: &Path, line: String) {
         self.named_skipped |= self.named.contains(disk);
         self.skips.push(line);
     }
 
-    /// A folder command leaves `state` alone: settling it needs the exact path.
-    fn needs_exact(&mut self, disk: &Path, state: &State, verb: Verb) {
-        self.skips.push(format!(
-            "skip {}: {}; to settle it, give its exact path: {}",
-            disk.display(),
-            state.describe(),
-            command(verb.word(), &[disk.to_path_buf()])
-        ));
+    /// Plans `items` of `target` by their state ([`Evaluated::action`]).
+    fn take(
+        &mut self,
+        ctx: &Context,
+        synced: &Synced,
+        target: &Target<'a>,
+        items: Vec<Item>,
+    ) -> Result<(), Failure> {
+        let exact = target.exact.is_some();
+        for item in items {
+            if !self.seen.insert((item.root.clone(), item.rel.clone())) {
+                continue;
+            }
+            let disk = item.disk(target.root);
+            if let Some(why) = ctx.linked.item_overlap(&disk) {
+                self.skip(&disk, format!("skip {}: {why}", disk.display()));
+                continue;
+            }
+            let eval = ctx.classify(synced, target.root, &item)?;
+            let what = match (eval.action(self.verb), exact) {
+                (Action::Write(what), _) | (Action::Exact(what), true) => what,
+                (Action::Exact(_), false) => {
+                    // A folder command leaves it alone: settling it needs the exact path.
+                    self.skips.push(format!(
+                        "skip {}: {}; to settle it, give its exact path: {}",
+                        disk.display(),
+                        eval.state.describe(),
+                        command(self.verb.word(), std::slice::from_ref(&disk))
+                    ));
+                    continue;
+                }
+                (Action::Settled, _) | (Action::Elsewhere, false) => continue,
+                (Action::Elsewhere | Action::Skip, _) => {
+                    let line = format!("skip {}: {}", disk.display(), eval.state.describe());
+                    self.skip(&disk, line);
+                    continue;
+                }
+            };
+            self.writes.push(Planned {
+                root: target.root,
+                item,
+                eval,
+                what,
+            });
+        }
+        Ok(())
     }
 
     /// Gate 1: drops every write a project's own git repo tracks, or whose
@@ -401,13 +428,18 @@ impl<'a> Plan<'a> {
         }
     }
 
-    /// Drops every write whose new content (the `source`: "the project's
-    /// version", "its mirror") cannot be read or breaks the safety rules.
-    fn drop_breaking(&mut self, repo: &Canon, source: &str) {
+    /// Drops every write whose new content cannot be read or breaks the
+    /// safety rules.
+    fn drop_breaking(&mut self, repo: &Canon) {
+        let source = match self.verb {
+            Verb::Adopt => "the project's version",
+            Verb::Restore => "its mirror",
+        };
         let mut skipped = Vec::new();
+        let verb = self.verb;
         self.writes.retain(|p| {
             let disk = p.item.disk(p.root);
-            let Some(new) = &p.new else {
+            let Some(new) = p.eval.source(verb) else {
                 skipped.push((
                     disk.clone(),
                     vec![format!("skip {}: {source} cannot be read", disk.display())],
@@ -436,7 +468,7 @@ impl<'a> Plan<'a> {
 
     /// Prints the plan and the skips, and asks unless `yes`. `false` when
     /// there is nothing to write or it is a dry run.
-    fn confirm(&self, verb: Verb, yes: bool, dry_run: bool) -> Result<bool, Failure> {
+    fn confirm(&self, yes: bool, dry_run: bool) -> Result<bool, Failure> {
         for p in &self.writes {
             out!("{} {}", p.what, p.item.disk(p.root).display());
         }
@@ -444,16 +476,16 @@ impl<'a> Plan<'a> {
             err!("{line}");
         }
         if self.writes.is_empty() {
-            out!("nothing to {}", verb.word());
+            out!("nothing to {}", self.verb.word());
             return Ok(false);
         }
         if dry_run {
             return Ok(false);
         }
-        if !yes && !confirm(&verb.question(self.writes.len()))? {
+        if !yes && !confirm(&question(self.verb, self.writes.len()))? {
             return Err(Failure::refused(format!(
                 "not {}; nothing was changed",
-                verb.done()
+                self.verb.done()
             )));
         }
         Ok(true)
@@ -554,10 +586,9 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
     refuse_while_unreadable(&ctx.repo, &ctx.linked, "adopted")?;
-    let mut synced = Synced::load(&ctx.paths);
+    let synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
-    let mut plan = Plan::default();
-    let mut seen = BTreeSet::new();
+    let mut plan = Plan::new(Verb::Adopt);
     for target in &targets {
         let candidates: Vec<Item> = match &target.exact {
             Some(item) => {
@@ -573,7 +604,7 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
                 {
                     let disk = item.disk(target.root);
                     plan.skip(&disk, format!("skip {}: {why}", disk.display()));
-                    seen.insert((item.root.clone(), item.rel.clone()));
+                    plan.seen.insert((item.root.clone(), item.rel.clone()));
                 }
                 for e in found.errors {
                     err!("warning: {e}");
@@ -598,112 +629,9 @@ fn run_adopt(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fail
             }
         };
         refuse_missing(target, candidates.is_empty())?;
-        for item in candidates {
-            if !seen.insert((item.root.clone(), item.rel.clone())) {
-                continue;
-            }
-            let exact = target.exact.is_some();
-            let disk = item.disk(target.root);
-            if let Some(why) = ctx.linked.item_overlap(&disk) {
-                plan.skip(&disk, format!("skip {}: {why}", disk.display()));
-                continue;
-            }
-            let eval = ctx.classify(&synced, target.root, &item)?;
-            let what = match (&eval.state, exact) {
-                (State::New, _) => "adopt",
-                (State::DeletedInMirror | State::MirrorChanged | State::Conflict, true) => {
-                    "keep the project's version of"
-                }
-                // Sync, which ends every adopt, copies a project change in.
-                (State::InSync | State::ProjectChanged, _) => continue,
-                (
-                    state @ (State::DeletedInMirror | State::MirrorChanged | State::Conflict),
-                    false,
-                ) => {
-                    plan.needs_exact(&disk, state, Verb::Adopt);
-                    continue;
-                }
-                // Folder adopt is about the project side; restore handles these.
-                (
-                    State::NotOnMachine
-                    | State::DeletedInProject
-                    | State::NotHere
-                    | State::ProjectGone
-                    | State::Nothing,
-                    false,
-                ) => continue,
-                (state, _) => {
-                    plan.skip(
-                        &disk,
-                        format!("skip {}: {}", disk.display(), state.describe()),
-                    );
-                    continue;
-                }
-            };
-            let new = eval.disk.clone();
-            plan.writes.push(Planned {
-                root: target.root,
-                item,
-                eval,
-                new,
-                what,
-            });
-        }
+        plan.take(&ctx, &synced, target, candidates)?;
     }
-    plan.drop_tracked();
-    plan.drop_breaking(&ctx.repo, "the project's version");
-    let own = plan.own_exit();
-    if !plan.confirm(Verb::Adopt, yes, dry_run)? {
-        return Ok(if dry_run {
-            own
-        } else {
-            own.combine(ctx.sync())
-        });
-    }
-    let linked = linked_after_answer(&ctx, "adopted")?;
-    let mut backups = ctx.backups();
-    let mut exit = own;
-    let mut written = Vec::new();
-    let mut failed = Vec::new();
-    let (swap, saved) = swap_parent(&ctx.repo);
-    for p in &plan.writes {
-        if let Some(refused) = skip_overlapping(&linked, &plan, &p.item.disk(p.root)) {
-            exit = exit.combine(refused);
-            continue;
-        }
-        let content = p
-            .new
-            .as_ref()
-            .expect("drop_breaking keeps only readable writes");
-        let (rel, say) = (p.item.mirror_rel(), |l| out!("{l}"));
-        let dest = ctx.repo.root().join(&rel);
-        // One staging per replace, so a command killed between two leaves none.
-        let staging = Staging::open(&swap, "", ctx.repo.root(), &mut backups, saved, say);
-        let replace = Replace {
-            dest: &dest,
-            kind: p.item.kind,
-            expected: &Expect::from_hash(p.eval.mirror.as_ref().map(|m| m.hash.as_str())),
-            new: &content.content,
-            backup_rel: &Path::new("repo").join(&rel),
-        };
-        // A staging that cannot be opened fails this item only.
-        let outcome = staging.and_then(|staging| replace.run(&staging, &mut backups));
-        let (placed, more) = report_outcome(outcome, Verb::Adopt, &p.item.disk(p.root));
-        exit = exit.combine(more);
-        if more == Exit::OperationalError {
-            failed.push(p.item.disk(p.root));
-        }
-        if placed {
-            synced.set(p.root, &p.item.rel, p.item.kind, &content.hash);
-            written.push(rel);
-        }
-    }
-    for (path, rule) in ignored(ctx.repo.root(), &written) {
-        err!(
-            "warning: git ignores {path} in the canon ({rule}), so it never gets history; change that rule"
-        );
-    }
-    ctx.finish(&mut synced, &backups, exit, &failed)
+    write(&ctx, plan, synced, yes, dry_run)
 }
 
 // ---------------------------------------------------------------- restore
@@ -716,11 +644,10 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
     need_yes(yes, dry_run)?;
     let ctx = Context::open()?;
     refuse_while_unreadable(&ctx.repo, &ctx.linked, "restored")?;
-    let mut synced = Synced::load(&ctx.paths);
+    let synced = Synced::load(&ctx.paths);
     let targets = targets(&ctx, &given)?;
     let tree = WorkingTree::new(ctx.repo.root());
-    let mut plan = Plan::default();
-    let mut seen = BTreeSet::new();
+    let mut plan = Plan::new(Verb::Restore);
     for target in &targets {
         let items: Vec<Item> = managed(&tree, target.root, &synced)
             .map_err(io_failure)?
@@ -740,102 +667,103 @@ fn run_restore(given: Vec<PathBuf>, dry_run: bool, yes: bool) -> Result<Exit, Fa
                 )));
             }
         }
-        for item in items {
-            if !seen.insert((item.root.clone(), item.rel.clone())) {
-                continue;
-            }
-            let exact = target.exact.is_some();
-            let disk = item.disk(target.root);
-            if let Some(why) = ctx.linked.item_overlap(&disk) {
-                plan.skip(&disk, format!("skip {}: {why}", disk.display()));
-                continue;
-            }
-            let eval = ctx.classify(&synced, target.root, &item)?;
-            let what = match (&eval.state, exact) {
-                (State::NotOnMachine, _) => "write",
-                (
-                    State::DeletedInProject
-                    | State::Blocked(_)
-                    | State::MirrorChanged
-                    | State::Conflict,
-                    true,
-                ) if eval.mirror.is_some() => "write the mirror's version over",
-                (State::InSync, _) => continue,
-                (
-                    state @ (State::DeletedInProject
-                    | State::Blocked(_)
-                    | State::MirrorChanged
-                    | State::Conflict),
-                    false,
-                ) if eval.mirror.is_some() => {
-                    plan.needs_exact(&disk, state, Verb::Restore);
-                    continue;
-                }
-                (State::New | State::NotHere | State::Nothing, false) => {
-                    continue;
-                }
-                (state, _) => {
-                    plan.skip(
-                        &disk,
-                        format!("skip {}: {}", disk.display(), state.describe()),
-                    );
-                    continue;
-                }
-            };
-            let new = eval.mirror.clone();
-            plan.writes.push(Planned {
-                root: target.root,
-                item,
-                eval,
-                new,
-                what,
-            });
-        }
+        plan.take(&ctx, &synced, target, items)?;
     }
+    write(&ctx, plan, synced, yes, dry_run)
+}
+
+// ---------------------------------------------------------------- write
+
+/// Gates `plan`, prints it, asks, and writes each item: `adopt` into the
+/// mirror, `restore` into the project. Records each written item's synced
+/// hash and ends with sync; `adopt` also when nothing is written, unless it
+/// is a dry run.
+fn write(
+    ctx: &Context,
+    mut plan: Plan,
+    mut synced: Synced,
+    yes: bool,
+    dry_run: bool,
+) -> Result<Exit, Failure> {
+    let verb = plan.verb;
     plan.drop_tracked();
-    plan.drop_breaking(&ctx.repo, "its mirror");
-    let own = plan.own_exit();
-    if !plan.confirm(Verb::Restore, yes, dry_run)? {
-        return Ok(own);
+    plan.drop_breaking(&ctx.repo);
+    let mut exit = plan.own_exit();
+    if !plan.confirm(yes, dry_run)? {
+        return Ok(match verb {
+            Verb::Adopt if !dry_run => exit.combine(ctx.sync()),
+            _ => exit,
+        });
     }
-    let linked = linked_after_answer(&ctx, "restored")?;
+    let linked = linked_after_answer(ctx, verb.done())?;
     let mut backups = ctx.backups();
-    let mut exit = own;
-    let mut failed = Vec::new();
+    let (mut written, mut failed) = (Vec::new(), Vec::new());
+    let (swap, saved) = swap_parent(&ctx.repo);
     for p in &plan.writes {
         let disk = p.item.disk(p.root);
         if let Some(refused) = skip_overlapping(&linked, &plan, &disk) {
             exit = exit.combine(refused);
             continue;
         }
-        // Its tmp leftovers go where the anchor's items go in the backup.
-        let saved = Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.anchor);
-        let anchor = p.item.anchor_dir(p.root);
-        let (root, say) = (p.root.dir.as_path(), |l| out!("{l}"));
-        let staging = Staging::open(&anchor, PROJECT_PREFIX, root, &mut backups, &saved, say);
-        let content = p
-            .new
-            .as_ref()
+        let new = p
+            .eval
+            .source(verb)
             .expect("drop_breaking keeps only readable writes");
-        let expected = match (&p.eval.state, &p.eval.disk) {
-            (State::Blocked(_), None) => Expect::Present,
-            (_, disk) => Expect::from_hash(disk.as_ref().map(|d| d.hash.as_str())),
+        let say = |l| out!("{l}");
+        // One staging per replace, so a command killed between two leaves none.
+        let (dest, staging, expected, backup_rel) = match verb {
+            Verb::Adopt => {
+                let rel = p.item.mirror_rel();
+                let root = ctx.repo.root();
+                let mirror = p.eval.mirror.as_ref().map(|m| m.hash.as_str());
+                (
+                    root.join(&rel),
+                    Staging::open(&swap, "", root, &mut backups, saved, say),
+                    Expect::from_hash(mirror),
+                    Path::new("repo").join(&rel),
+                )
+            }
+            Verb::Restore => {
+                // Its tmp leftovers go where the anchor's items go in the backup.
+                let items = Path::new(MIRROR_DIR).join(&p.root.id);
+                let (anchor, root) = (p.item.anchor_dir(p.root), &p.root.dir);
+                let saved = items.join(&p.item.anchor);
+                let expected = match (&p.eval.state, &p.eval.disk) {
+                    (State::Blocked(_), None) => Expect::Present,
+                    (_, disk) => Expect::from_hash(disk.as_ref().map(|d| d.hash.as_str())),
+                };
+                (
+                    disk.clone(),
+                    Staging::open(&anchor, PROJECT_PREFIX, root, &mut backups, &saved, say),
+                    expected,
+                    items.join(&p.item.rel),
+                )
+            }
         };
         let replace = Replace {
-            dest: &disk,
+            dest: &dest,
             kind: p.item.kind,
             expected: &expected,
-            new: &content.content,
-            backup_rel: &Path::new(MIRROR_DIR).join(&p.root.id).join(&p.item.rel),
+            new: &new.content,
+            backup_rel: &backup_rel,
         };
+        // A staging that cannot be opened fails this item only.
         let outcome = staging.and_then(|staging| replace.run(&staging, &mut backups));
-        let (placed, more) = report_outcome(outcome, Verb::Restore, &disk);
+        let (placed, more) = report_outcome(outcome, verb, &disk);
         exit = exit.combine(more);
         if more == Exit::OperationalError {
-            failed.push(disk.clone());
+            failed.push(disk);
         }
         if placed {
-            synced.set(p.root, &p.item.rel, p.item.kind, &content.hash);
+            synced.set(p.root, &p.item.rel, p.item.kind, &new.hash);
+            written.push(p.item.mirror_rel());
+        }
+    }
+    if verb == Verb::Adopt {
+        for (path, rule) in ignored(ctx.repo.root(), &written) {
+            err!(
+                "warning: git ignores {path} in the canon ({rule}), so it never gets history; change that rule"
+            );
         }
     }
     ctx.finish(&mut synced, &backups, exit, &failed)

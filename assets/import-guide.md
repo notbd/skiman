@@ -117,7 +117,7 @@ installed = 2026-01-31      # optional: the day it was installed
 
 [skills.pdf.source]         # a third-party skill
 url = "https://github.com/anthropics/skills.git"  # https or ssh git URL, or a local absolute or ~ path
-path = "skills/pdf"         # required: folder inside the upstream; "" for its root
+path = "skills/pdf"         # required: folder below the upstream's root, without a leading / or ..; "" for the root
 ref = "<40-hex sha>"        # the commit the user's copy came from
 
 [[secrets.allow]]           # only for a secret that must stay
@@ -298,6 +298,21 @@ import writes it, writes the rest, and moves each original still in place.
   folders stay, and so do the `summary`, `origin` and `installed` of a
   skill the folder gives no table), the old ones go to the backup, and the
   preview shows it.
+- An import that changes a source's `url` or `path` and is interrupted
+  can leave the new value in the canon's `skiman.toml` while its
+  `skiman.lock` and `upstream/<name>` still hold the old source's version.
+  Running it again then finds the whole import in place and fetches
+  nothing, and prints what a finished import prints. When the `url`
+  changed to another repository, the sign is that skill's `commit` in the
+  canon's `skiman.lock`: it is not a commit of the new source. After a
+  `path` change, a `url` change to a fork of the old source, or a change
+  from a local-folder source (its `skiman.lock` entry has no `commit`),
+  `skiman.lock` shows no sign: when such an import was interrupted, take
+  the next step anyway. Delete that skill's `[skills.<name>]` table from
+  the canon's `skiman.lock`, then run the import again: it fetches the new
+  source. Do this only for an import that was interrupted: after one that
+  finished, it can record a newer upstream commit for the skill while the
+  skill's files stay as they are.
 - A skill in the canon that changed since the import wrote it (for
   example through its link in a session), or one the import folder does not
   hold, is refused and named with the two ways to go on.

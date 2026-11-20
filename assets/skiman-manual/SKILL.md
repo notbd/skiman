@@ -52,6 +52,19 @@ hold links to the canon.
   you run the same command again. If running it again is refused because
   its canon part is done, `skiman sync` finishes it. After an update
   finished that way, look at the skill's diff before you commit it.
+  A `skiman init` that stopped while switching to another canon is the
+  exception: run `skiman init` for the previous canon (ask the user for its
+  path if you do not know it), then run the init that stopped once more,
+  both with the same `--session-hooks` value. Do not adopt or register
+  what the first init, `skiman sync` or `skiman doctor` reports in
+  between: they can name the previous canon's own links as foreign skills.
+  When the previous canon's folder is gone (moved to the new path, say),
+  the first init creates an empty canon there: if it printed
+  `created canon <previous path>` and that folder was not there before the
+  first init, delete it once the second init is done. If a link named
+  `.<name>.skiman-tmp-<number>` is still left in a tool directory or beside
+  a global instruction file, check its target with `readlink`, and delete
+  that link only when it points into the previous canon.
 - After editing files by hand, run `skiman check`. It reports every rule
   violation with file and line. A skill needs `SKILL.md` with YAML frontmatter
   from line 1 holding `name` (lowercase letters, digits and single hyphens, at
@@ -59,6 +72,12 @@ hold links to the canon.
   characters), and no symlinks or secrets inside. While Antigravity is
   enabled, it also warns about a body over 24000 bytes, which Antigravity
   cuts without a message.
+- When other machines use the canon, each needs the new skiman version
+  before you commit what it adds: keys and tables of `skiman.toml` (such as
+  `summary` or `[linked.<id>]`), which older versions report as unknown, or
+  group folders under `skills/`, which older versions read as skill folders
+  without a `SKILL.md`. The pre-commit hook of an older version then
+  refuses commits. Tell the user before such a change.
 
 ## Create a skill
 
@@ -155,7 +174,12 @@ reports the size limit of the enabled agent tools.
    `--dry-run` first shows each new version, the files it would change
    (scripts and executables flagged) and any conflicts, and changes nothing
    in the canon; show that to the user before updating a skill they
-   have not reviewed.
+   have not reviewed. The branch can move on after the dry run: for a git
+   upstream, `skiman update <name> --ref <commit>` with the full commit the
+   dry run showed applies that version and pins the skill to it. While it
+   is pinned, `skiman update` reports it up to date; `skiman list` shows
+   the pin. `--ref <branch>` follows the branch again and applies its
+   newest version at once, so dry-run that first.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
    it in `{{CANON}}/skills/<name>/`:
    - Text between `<<<<<<< local (skiman)`, `=======` and
@@ -169,6 +193,12 @@ reports the size limit of the enabled agent tools.
      `.skiman-conflicts/`; delete that folder once they are resolved.
 3. Run `skiman check` until it reports no unresolved conflicts. Until then
    skiman refuses commits and further updates of that skill.
+
+If an update stopped part-way after it wrote conflicts, running it again is
+refused until they are resolved. Resolve them and run the update again: it
+may write the same conflicts again, because `skiman.lock` still records the
+old version. Resolve those too, and look at the skill's diff before you
+commit.
 
 ## Describe a skill
 
@@ -207,8 +237,12 @@ installed = 2026-01-31           # optional: the day it was installed
 
 ## Project instruction files and project skills
 
-The user registers project roots (`[projects.<id>]` in `skiman.toml`).
-Under them, project instruction files ({{PROJECT_INSTRUCTION_FILES}}) and
+The user registers project roots (`[projects.<id>]` in `skiman.toml`) with
+`skiman project add <path>`; `--id <id>` sets the root's id instead of one
+made from the folder's name. Then
+`skiman project adopt <path> --dry-run` lists the items under it, and
+`--yes` adopts them.
+Under the roots, project instruction files ({{PROJECT_INSTRUCTION_FILES}}) and
 project skills (a folder in {{PROJECT_SKILL_DIRS}}) stay real files in the
 project.
 skiman keeps a copy of each in `{{CANON}}/projects/<id>/<same path>` and
@@ -218,8 +252,10 @@ copies every change made in the project into it at each sync.
   under `projects/`: a change there reaches the project only through
   `skiman project restore <item path> --yes`.
 - After creating a project `AGENTS.md`, rules file or project skill under a
-  project root, run `skiman project adopt <its path> --yes`. Files a
-  project's own git repo tracks are left to that repo.
+  project root, run `skiman project adopt <its path> --dry-run`, then the
+  same with `--yes`. If the plan says `keep the project's version of`, the
+  mirror already holds another version: ask the user first (see below).
+  Files a project's own git repo tracks are left to that repo.
 - To compare the two sides, use `diff` or `git diff`; do not open files under
   `projects/` (an agent tool that reads a file in a folder loads that
   folder's instructions).
@@ -227,8 +263,31 @@ copies every change made in the project into it at each sync.
   run: `skiman project adopt <item path> --yes` keeps the project's version,
   `skiman project restore <item path> --yes` the mirror's; the other goes to
   a backup. Only the exact path of one item settles a conflict.
+- When both sides of an item changed (`it and its mirror both changed`),
+  the choice is the user's: show the user the difference and run the
+  command for the version the user keeps.
+- `its project folder is gone`: if the folder moved, adopt the item at its
+  new path, then forget the old one: run the
+  `skiman project eject <old folder>` the message names, with `--yes`. To
+  bring the item back from the mirror instead, create the folder again;
+  the next `skiman sync` reports the item as deleted in the project, with
+  the `skiman project restore <item path> --yes` that writes it.
 - `skiman project eject <path> --yes` stops managing what is under `<path>`;
-  the project files stay.
+  the project files stay. When another machine pulls the eject of a path
+  inside a project root, its sync reports each ejected item as deleted in
+  the mirror: run the eject for that path there too, which only forgets them.
+
+## Bring in a foreign skill
+
+A foreign skill is a skill folder in a tool directory that skiman does not
+own and that is not managed elsewhere; `skiman sync` and `skiman doctor`
+name each one and its tool id. `skiman adopt <name> --from <tool id> --yes`
+(`--group <group>` puts it in a group) copies it into the canon as an own
+skill, moves the original to a backup and links the copy into every
+enabled agent tool. When two tool directories hold a foreign skill of the
+same name, ask the user which one to keep before you adopt either. The
+other one stays where it is, and that tool gets the adopted copy only
+after the other one is moved away and `skiman sync` runs.
 
 ## Import an existing setup
 

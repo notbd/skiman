@@ -343,6 +343,12 @@ locks, staging, backups under machine state.
 - **Another machine**: sync there copies nothing into the project; `restore
   <root>` writes every item whose project folder exists and whose file is
   missing; differing files show as conflicts, never overwritten.
+- **A project folder that Dropbox, OneDrive or iCloud syncs between
+  machines**: an edit reaches the second machine's project before the
+  canon's push does, so its sync copies the same change into its mirror,
+  and `git pull` there refuses ("Your local changes to the following files
+  would be overwritten by merge"). Commit first, then `git pull --rebase`:
+  git skips the local commit as already applied.
 - **An item later committed to a project's own git repo**: `doctor` reruns
   gate 1 on managed items and reports "now tracked by <repo>; eject it".
 

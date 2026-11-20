@@ -1,7 +1,8 @@
 //! `skiman check [--staged]`: report every rule violation in the working tree
 //! of the canon, or in its staged snapshot, on stdout, and warnings on
 //! stderr; on the working tree, also each skill that lacks a summary, a group
-//! folder or an origin, and what is wrong with linked skills (warnings). When
+//! folder or an origin, what is wrong with linked skills, and each managed
+//! file that git ignores, so a commit leaves it out (warnings). When
 //! the staged snapshot breaks a rule that the working tree passes, a hint
 //! says so and prints a line that stages the working tree.
 //! Read-only; takes no lock.
@@ -12,14 +13,16 @@ use std::process::Command;
 use crate::Exit;
 use crate::canon::Canon;
 use crate::failure::{Failure, finish};
+use crate::git;
 use crate::git_hooks::shell_quote;
 use crate::linked::{self, LINKED_DIR, Linked, gitignore};
 use crate::manifest::Manifest;
 use crate::paths::Paths;
+use crate::project::git::ignored;
 use crate::rules;
 use crate::staged::{self, StagedTree};
 use crate::sync;
-use crate::tree::{Kind, Tree, WorkingTree};
+use crate::tree::{Kind, Tree, WorkingTree, is_ignored};
 
 pub fn run(staged: bool) -> Exit {
     finish(check(staged))
@@ -74,6 +77,11 @@ fn check(staged: bool) -> Result<Exit, Failure> {
             if let Some(warning) = linked_not_ignored(&repo, manifest) {
                 err!("warning: {warning}");
             }
+        }
+        for (path, rule) in ignored_managed(repo.root()) {
+            err!(
+                "warning: git ignores {path} ({rule}), so a commit leaves it out; if it belongs in the canon, change that rule or stage it with `git add -f`"
+            );
         }
     }
     // Staging the working tree cannot take a path out of the index.
@@ -136,6 +144,32 @@ fn linked_not_ignored(repo: &Canon, manifest: &Manifest) -> Option<String> {
     Some(format!(
         "git does not ignore `linked/`, so the links in it could be committed; {fix}"
     ))
+}
+
+/// Each file under [`rules::TOP_LEVEL_PATHS`] that git ignores and the
+/// repo's own index does not hold, with the rule that ignores it: a commit
+/// leaves it out. An ignored folder (`__pycache__/`) is one entry, with a
+/// trailing slash. Names the rules skip (`.DS_Store`) are left out. Empty
+/// when git cannot tell (the canon is not a git repo, git fails).
+fn ignored_managed(root: &Path) -> Vec<(String, String)> {
+    let Ok(output) = git::query_command(root)
+        .args(["--literal-pathspecs", "ls-files", "-z", "--others"])
+        .args(["--ignored", "--exclude-standard", "--directory", "--"])
+        .args(rules::TOP_LEVEL_PATHS)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let paths: Vec<String> = output
+        .stdout
+        .split(|b| *b == 0)
+        .map(|path| String::from_utf8_lossy(path).into_owned())
+        .filter(|path| !path.is_empty() && !is_ignored(path))
+        .collect();
+    ignored(root, &paths)
 }
 
 /// `linked` and every path under it in the git index: the staged snapshot

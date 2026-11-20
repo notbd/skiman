@@ -1,9 +1,7 @@
 //! `skiman init <path>`: create or reuse a canon, write the user config,
 //! then sync. When the user config pointed to another canon, that sync
-//! treats skiman's links into it as owned, and its registrations guard
-//! every write init makes outside the new canon. Before that sync it
-//! installs the git hooks, and finally it adds or removes the session-start
-//! hook entries.
+//! treats skiman's links into it as owned. Before that sync it installs the
+//! git hooks, and finally it adds or removes the session-start hook entries.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;

@@ -207,8 +207,12 @@ installed = 2026-01-31           # optional: the day it was installed
 
 ## Project instruction files and project skills
 
-The user registers project roots (`[projects.<id>]` in `skiman.toml`).
-Under them, project instruction files ({{PROJECT_INSTRUCTION_FILES}}) and
+The user registers project roots (`[projects.<id>]` in `skiman.toml`) with
+`skiman project add <path>`; `--id <id>` sets the root's id instead of one
+made from the folder's name. Then
+`skiman project adopt <path> --dry-run` lists the items under it, and
+`--yes` adopts them.
+Under the roots, project instruction files ({{PROJECT_INSTRUCTION_FILES}}) and
 project skills (a folder in {{PROJECT_SKILL_DIRS}}) stay real files in the
 project.
 skiman keeps a copy of each in `{{CANON}}/projects/<id>/<same path>` and
@@ -229,6 +233,18 @@ copies every change made in the project into it at each sync.
   a backup. Only the exact path of one item settles a conflict.
 - `skiman project eject <path> --yes` stops managing what is under `<path>`;
   the project files stay.
+
+## Bring in a foreign skill
+
+A foreign skill is a skill folder in a tool directory that skiman does not
+own and that is not managed elsewhere; `skiman sync` and `skiman doctor`
+name each one and its tool id. `skiman adopt <name> --from <tool id> --yes`
+(`--group <group>` puts it in a group) copies it into the canon as an own
+skill, moves the original to a backup and links the copy into every
+enabled agent tool. When two tool directories hold a foreign skill of the
+same name, ask the user which one to keep before you adopt either. The
+other one stays where it is, and that tool gets the adopted copy only
+after the other one is moved away and `skiman sync` runs.
 
 ## Import an existing setup
 

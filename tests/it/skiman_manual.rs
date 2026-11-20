@@ -102,6 +102,14 @@ fn skiman_manual_covers_every_everyday_operation() {
         ("disable", "enabled = false".to_owned()),
         ("shared body", format!("{repo}/instructions/shared.md")),
         ("import", "skiman import --guide".to_owned()),
+        (
+            "adopt a foreign skill",
+            "skiman adopt <name> --from <tool id> --yes".to_owned(),
+        ),
+        (
+            "register a project root",
+            "skiman project add <path>".to_owned(),
+        ),
         ("tool directories", "~/.claude/skills".to_owned()),
         ("tool directories", "~/.agents/skills".to_owned()),
         ("tool directories", "~/.gemini/config/skills".to_owned()),

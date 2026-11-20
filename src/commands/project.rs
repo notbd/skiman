@@ -323,6 +323,8 @@ struct Plan<'a> {
     named: BTreeSet<PathBuf>,
     /// An item named exactly was skipped (exit 1).
     named_skipped: bool,
+    /// An item under a folder could not be read, and was skipped (exit 4).
+    unreadable: bool,
     /// The items already taken, so two given paths do not plan one twice.
     seen: BTreeSet<(String, String)>,
 }
@@ -335,6 +337,7 @@ impl<'a> Plan<'a> {
             skips: Vec::new(),
             named: BTreeSet::new(),
             named_skipped: false,
+            unreadable: false,
             seen: BTreeSet::new(),
         }
     }
@@ -362,7 +365,16 @@ impl<'a> Plan<'a> {
                 self.skip(&disk, format!("skip {}: {why}", disk.display()));
                 continue;
             }
-            let eval = ctx.classify(synced, target.root, &item)?;
+            let eval = match ctx.classify(synced, target.root, &item) {
+                Ok(eval) => eval,
+                // Named exactly, it stops the command; under a folder the rest go on.
+                Err(failure) if exact => return Err(failure),
+                Err(failure) => {
+                    self.skips.push(failure.message);
+                    self.unreadable = true;
+                    continue;
+                }
+            };
             let what = match (eval.action(self.verb), exact) {
                 (Action::Write(what), _) | (Action::Exact(what), true) => what,
                 (Action::Exact(_), false) => {
@@ -492,7 +504,9 @@ impl<'a> Plan<'a> {
     }
 
     fn own_exit(&self) -> Exit {
-        if self.named_skipped {
+        if self.unreadable {
+            Exit::OperationalError
+        } else if self.named_skipped {
             Exit::Refused
         } else {
             Exit::Success

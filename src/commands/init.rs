@@ -2,6 +2,8 @@
 //! then sync. When the user config pointed to another canon, that sync
 //! treats skiman's links into it as owned. Before that sync it installs the
 //! git hooks, and finally it adds or removes the session-start hook entries.
+//! It refuses, before it writes anything, a canon in an installed tool's
+//! directory or inside it.
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
@@ -70,6 +72,7 @@ fn init(path: &Path, session_hooks: Option<&str>) -> Result<Exit, Failure> {
     // link on `path` again, which may change meanwhile.
     let place = linked::written_through(&path);
     refuse_inside_linked(current.as_ref(), &path, &place)?;
+    refuse_in_tool_directory(paths.home(), &path, &place)?;
     test_hook::at("init", "checked");
     let target = inspect(&place)?;
 
@@ -164,6 +167,39 @@ fn refuse_inside_linked(
     Ok(())
 }
 
+/// Refuses a canon at `path`, which lands at `target`, when `target` is, or
+/// lies inside, the tool directory of an installed tool: sync writes
+/// nothing into the canon, so that tool would get no skills, and a canon
+/// inside would sit among its skill folders. `path` naming the tool
+/// directory itself is refused even when it is a link; a canon that a
+/// tool directory links to is not: re-pointing the link fixes it, as sync
+/// says.
+fn refuse_in_tool_directory(home: &Path, path: &Path, target: &Path) -> Result<(), Failure> {
+    for tool in TOOLS.iter().filter(|tool| tool.is_present(home)) {
+        let dir = tool.tool_dir(home);
+        let real = linked::written_through(&dir);
+        let at = linked::location(&dir);
+        let message = if target == at || linked::location(path) == at {
+            // What sync says of a canon there.
+            format!(
+                "{} is the canon, so skiman writes nothing there; keep the canon in a folder of its own",
+                dir.display()
+            )
+        } else if target.starts_with(&real) && target != real {
+            format!(
+                "{} lies inside {}, the tool directory of {}; keep the canon in a folder of its own",
+                path.display(),
+                dir.display(),
+                tool.id
+            )
+        } else {
+            continue;
+        };
+        return Err(Failure::refused(message));
+    }
+    Ok(())
+}
+
 /// `--session-hooks <ids>` adds entries, `none` removes skiman's, and no flag
 /// (only possible with a terminal) previews the entries and asks. Each
 /// settings file is written under the canon lock, and left alone when it
@@ -248,12 +284,18 @@ fn install_git_hooks(repo: &Canon, binary: &Path) -> Result<(), Failure> {
             git_hooks::line_to_add(&name, binary)
         );
     }
-    if let Some(dir) = &installed.hooks_path_elsewhere {
+    if let Some((dir, lacking)) = &installed.hooks_path_elsewhere
+        && !lacking.is_empty()
+    {
+        let what = match lacking.len() {
+            1 => "this line to the hook",
+            _ => "these lines to the hooks",
+        };
         err!(
-            "warning: core.hooksPath points to {}, so skiman installed no git hooks; add these lines to the hooks there:",
+            "warning: core.hooksPath points to {}, so skiman installed no git hooks; add {what} there:",
             dir.display()
         );
-        for name in git_hooks::hook_names() {
+        for name in lacking {
             err!("  {name}:\n    {}", git_hooks::line_to_add(name, binary));
         }
     }

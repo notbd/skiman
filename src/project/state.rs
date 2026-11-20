@@ -8,6 +8,7 @@
 //! [`Evaluated::fix`] names is tied to that table by a unit test.
 
 use std::collections::BTreeSet;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use super::command;
@@ -409,9 +410,15 @@ enum Disk {
     Side(Side),
 }
 
+/// An anchor that cannot be looked at (a folder on the way is `chmod 000`)
+/// is an error, not a gone folder: it is still there.
 fn read_disk(root: &Root, item: &Item) -> std::io::Result<Disk> {
-    if std::fs::symlink_metadata(item.anchor_dir(root)).is_err() {
-        return Ok(Disk::NoAnchor);
+    match std::fs::symlink_metadata(item.anchor_dir(root)) {
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            return Ok(Disk::NoAnchor);
+        }
+        Err(e) => return Err(e),
+        Ok(_) => {}
     }
     let disk = item.disk(root);
     if let Some(why) = broken_chain(&root.dir, &disk) {

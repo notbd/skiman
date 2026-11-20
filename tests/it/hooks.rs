@@ -353,31 +353,43 @@ fn rerunning_init_replaces_skimans_own_hooks_without_duplicating_them() {
     assert_linked(&sandbox, "pdf");
 }
 
+/// Once the hook holds the line, `init` asks for nothing more, as doctor
+/// says.
 #[test]
-fn init_leaves_a_pre_commit_hook_that_is_not_skimans_byte_identical_and_prints_the_line_to_add() {
+fn init_leaves_a_pre_commit_hook_that_is_not_skimans_byte_identical_and_asks_for_the_line_until_it_has_it()
+ {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let pre_commit = hooks_dir(&sandbox).join("pre-commit");
     let foreign = b"#!/bin/sh\n# my own checks\nexit 0\n";
     std::fs::write(&pre_commit, foreign).unwrap();
+    let reinit = || {
+        sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(sandbox.canon())
+            .assert()
+            .code(0)
+    };
 
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(sandbox.canon())
-        .assert()
-        .code(0)
-        .stderr_eq(str![[r#"
+    let first = reinit().stderr_eq(str![[r#"
 warning: [..]/canon/.git/hooks/pre-commit is not skiman's git hook, so skiman left it unchanged; add this line to it:
   '[..]/skiman' check --staged || exit 1
 
 "#]]);
 
     assert_eq!(std::fs::read(&pre_commit).unwrap(), foreign);
+    let stderr = String::from_utf8(first.get_output().stderr.clone()).unwrap();
+    let line = stderr.lines().nth(1).unwrap().trim();
+    let edited = format!("#!/bin/sh\n{line}\nexit 0\n");
+    std::fs::write(&pre_commit, &edited).unwrap();
+    reinit().stderr_eq("");
+    assert_eq!(std::fs::read_to_string(&pre_commit).unwrap(), edited);
 }
 
 #[test]
-fn init_writes_no_hook_when_core_hooks_path_points_elsewhere_and_prints_the_lines_to_add() {
+fn init_writes_no_hook_when_core_hooks_path_points_elsewhere_and_prints_the_lines_the_hooks_there_lack()
+ {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let elsewhere = sandbox.root().join("shared-hooks");
@@ -390,7 +402,7 @@ fn init_writes_no_hook_when_core_hooks_path_points_elsewhere_and_prints_the_line
     );
     let own_hooks = crate::support::tree(hooks_dir(&sandbox));
 
-    sandbox
+    let first = sandbox
         .skiman()
         .args(["init", "--session-hooks", "none"])
         .arg(sandbox.canon())
@@ -419,6 +431,32 @@ warning: core.hooksPath points to [..]/shared-hooks, so skiman installed no git 
         foreign
     );
     assert_eq!(crate::support::tree(hooks_dir(&sandbox)), own_hooks);
+
+    // A hook there that holds its line is not listed again.
+    let listed = String::from_utf8(first.get_output().stderr.clone()).unwrap();
+    let lines: Vec<&str> = listed.lines().map(str::trim).collect();
+    let (pre, post) = (lines[2], lines[4]);
+    std::fs::write(elsewhere.join("pre-commit"), format!("#!/bin/sh\n{pre}\n")).unwrap();
+    let again = || {
+        let output = sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(sandbox.canon())
+            .output()
+            .unwrap();
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let stderr = again();
+    assert!(stderr.contains("  post-commit:\n"), "{stderr}");
+    assert!(!stderr.contains("pre-commit"), "{stderr}");
+    for name in ["post-commit", "post-merge", "post-checkout"] {
+        std::fs::write(elsewhere.join(name), format!("#!/bin/sh\n{post}\n")).unwrap();
+    }
+    let stderr = again();
+    assert!(
+        stderr.contains("add this line to the hook there:\n  post-rewrite:\n"),
+        "{stderr}"
+    );
 }
 
 #[test]

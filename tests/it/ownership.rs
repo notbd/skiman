@@ -707,24 +707,40 @@ fn a_canon_in_a_tool_directory_is_refused_in_its_own_words() {
     assert!(out.contains(&nowhere), "{out}");
 }
 
-/// A canon made right in a tool directory is named as the canon, not as a
-/// path that resolves into it.
+/// `init` refuses a canon in an installed tool's directory, or inside it,
+/// before it writes anything. A canon made there anyway (the tool was not
+/// installed yet) is named as the canon, not as a path that resolves into it.
 #[test]
 fn a_canon_made_in_a_tool_directory_says_it_is_the_canon() {
     let sandbox = Sandbox::new();
     let dir = sandbox.tool_dir(Tool::ClaudeCode);
     std::fs::remove_dir_all(&dir).unwrap();
-    sandbox
-        .skiman()
-        .args(["init", "--session-hooks", "none"])
-        .arg(&dir)
-        .assert()
-        .code(3);
     let line = format!(
         "{} is the canon, so skiman writes nothing there; keep the canon in a folder of its own",
         dir.display()
     );
+    let init = |path: &Path| {
+        sandbox
+            .skiman()
+            .args(["init", "--session-hooks", "none"])
+            .arg(path)
+            .assert()
+    };
 
+    init(&dir)
+        .code(1)
+        .stdout_eq("")
+        .stderr_eq(format!("error: {line}\n"));
+    init(&dir.join("canon")).code(1).stderr_eq(format!(
+        "error: {} lies inside {}, the tool directory of claude-code; keep the canon in a folder of its own\n",
+        dir.join("canon").display(),
+        dir.display()
+    ));
+    assert!(!dir.exists());
+    assert!(!sandbox.config_home().join("skiman/config.toml").exists());
+
+    std::fs::remove_dir_all(sandbox.presence_dir(Tool::ClaudeCode)).unwrap();
+    init(&dir).code(3);
     let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
 
     assert!(out.lines().any(|l| l == line), "{out}");
@@ -732,11 +748,12 @@ fn a_canon_made_in_a_tool_directory_says_it_is_the_canon() {
 
 /// Through a HOME that is a link, the canon made in a tool directory is
 /// still in the tool's own folder: there is no link there to point elsewhere.
+/// Claude Code is not installed yet, so `init` makes the canon there.
 #[test]
 fn a_canon_made_in_a_tool_directory_through_a_linked_home_says_to_keep_it_apart() {
     let sandbox = Sandbox::new();
     let real = sandbox.tool_dir(Tool::ClaudeCode);
-    std::fs::remove_dir_all(&real).unwrap();
+    std::fs::remove_dir_all(sandbox.presence_dir(Tool::ClaudeCode)).unwrap();
     let home = sandbox.root().join("linked-home");
     std::os::unix::fs::symlink(sandbox.home(), &home).unwrap();
     let dir = home.join(real.strip_prefix(sandbox.home()).unwrap());
@@ -789,6 +806,57 @@ fn a_tool_directory_below_a_file_names_the_file() {
     for line in lines {
         assert!(out.contains(&line), "{out}");
     }
+}
+
+/// `init` given a tool directory that is a link (to dotfiles, say) refuses
+/// it like the folder itself, before it writes anything.
+#[test]
+fn init_refuses_a_tool_directory_that_is_a_link() {
+    let sandbox = Sandbox::new();
+    let dir = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&dir).unwrap();
+    let skills = sandbox.home().join("dotfiles/skills");
+    std::fs::create_dir_all(&skills).unwrap();
+    std::os::unix::fs::symlink(&skills, &dir).unwrap();
+
+    sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(&dir)
+        .assert()
+        .code(1)
+        .stderr_eq(format!(
+            "error: {} is the canon, so skiman writes nothing there; keep the canon in a folder of its own\n",
+            dir.display()
+        ));
+
+    assert_eq!(std::fs::read_dir(&skills).unwrap().count(), 0);
+    assert!(!sandbox.config_home().join("skiman/config.toml").exists());
+}
+
+/// A tool directory that is a link to a canon in a folder of its own does
+/// not stop `init` there: sync says to re-point the link.
+#[test]
+fn init_takes_a_canon_a_tool_directory_links_to() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let dir = sandbox.tool_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(sandbox.canon(), &dir).unwrap();
+
+    let out = sandbox
+        .skiman()
+        .args(["init", "--session-hooks", "none"])
+        .arg(sandbox.canon())
+        .assert()
+        .code(3);
+
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    let line = guarded_line(&dir, &sandbox.canon(), "which is the canon");
+    assert!(
+        stderr.lines().any(|l| l == format!("warning: {line}")),
+        "{stderr}"
+    );
 }
 
 /// A tool directory made between sync's first look and its write is read,

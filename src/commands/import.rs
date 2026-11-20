@@ -208,6 +208,12 @@ fn import(folder: Option<&Path>, yes: bool) -> Result<Exit, Failure> {
     refuse_special_files(&plan)?;
     refuse_moving_sources(&paths, &content, &manifest, &plan)?;
     let mut backups = Backups::new(&paths);
+    // The backup folder first, so one that cannot be made stops the run
+    // before the canon is written.
+    if !plan.moves.is_empty() {
+        let nothing = |e| Failure::operational(format!("{e}; nothing was changed"));
+        backups.dir().map_err(nothing)?;
+    }
     let mut moved = false;
     let done = match &writes {
         Some((_, change, todo)) => change.write(todo, &repo, &lock, &mut backups).map(|lines| {

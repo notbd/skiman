@@ -556,6 +556,38 @@ fn a_tool_directory_through_an_entry_the_import_moves_refuses_the_import() {
     assert_refused(&sandbox, &folder, 1, &[&through]);
 }
 
+/// A backup folder that cannot be made stops the import before the canon
+/// is written; once it can be made, the same command finishes.
+#[test]
+fn a_backup_folder_that_cannot_be_made_stops_the_import_before_anything_is_written() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let original = sandbox.tool_dir(Tool::ClaudeCode).join("old");
+    write(original.join("SKILL.md"), skill_md("old"));
+    let backups = sandbox.state_home().join("skiman/backups");
+    std::fs::create_dir_all(&backups).unwrap();
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // The canon's own skiman.toml and shared body: writing them backs nothing up.
+    let folder = import_folder(&sandbox, &read(sandbox.canon().join("skiman.toml")));
+    let body = read(sandbox.canon().join("instructions/shared.md"));
+    write(folder.join("instructions/shared.md"), body);
+
+    assert_refused(&sandbox, &folder, 4, &["nothing was changed"]);
+    std::fs::set_permissions(&backups, std::fs::Permissions::from_mode(0o755)).unwrap();
+    sandbox
+        .skiman()
+        .arg("import")
+        .arg(&folder)
+        .arg("--yes")
+        .assert()
+        .code(0);
+    assert!(!original.exists());
+    assert_eq!(
+        read(sandbox.canon().join("skills/notes/SKILL.md")),
+        skill_md("notes")
+    );
+}
+
 #[test]
 fn a_canon_whose_shared_body_or_skiman_toml_is_a_link_refuses_the_import_before_anything_is_written()
  {

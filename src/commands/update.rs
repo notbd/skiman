@@ -41,7 +41,7 @@ use crate::Exit;
 use crate::backup::Backups;
 use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
-use crate::change::{Change, Held, Want};
+use crate::change::{self, Change, Held, Want};
 use crate::commands::prompts;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -323,12 +323,20 @@ fn prepare(
         Current::read(paths, repo, name)
     })?;
     let mut target = fetch(paths, prompts, name, &current, git_ref)?;
-    // A snapshot that does not match the lock is replaced on either path.
+    // A snapshot that does not match the lock is replaced on either path;
+    // what the write puts in the backup is what `held` finds there.
     if Snapshot::from_folder(&repo.upstream_dir(name))?.tree_hash() != current.entry.snapshot {
         let is = if dry_run { "would be" } else { "is" };
-        target.notes.push(format!(
-            "upstream/{name} did not match skiman.lock; it {is} replaced by the snapshot the lock records, and what it held {is} moved to the backup"
-        ));
+        let want = Want::Folder(target.snapshot.files.clone());
+        match change::held(repo.root(), &format!("upstream/{name}"), &want)? {
+            Held::Nothing => target.notes.push(format!(
+                "upstream/{name} was missing; it {is} written again"
+            )),
+            Held::Other(_) => target.notes.push(format!(
+                "upstream/{name} did not match skiman.lock; it {is} replaced by the snapshot this update writes, and what it held {is} moved to the backup"
+            )),
+            Held::Same | Held::WrongType => {}
+        }
     }
     let merge = if target.entry.snapshot == current.entry.snapshot {
         None

@@ -4,7 +4,8 @@
 //! folder or an origin, what is wrong with linked skills, and each managed
 //! file that git ignores, so a commit leaves it out (warnings). When
 //! the staged snapshot breaks a rule that the working tree passes, a hint
-//! says so and prints a line that stages the working tree.
+//! says so and prints a line that stages the working tree, or names the
+//! ignored files the violations are about, which that line cannot stage.
 //! Read-only; takes no lock.
 
 use std::path::{Path, PathBuf};
@@ -88,7 +89,7 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     if staged
         && !report.violations.is_empty()
         && tracked.is_empty()
-        && let Some(hint) = stage_hint(repo.root())
+        && let Some(hint) = stage_hint(repo.root(), &report.violations)
     {
         out!("\n{hint}");
     }
@@ -208,18 +209,53 @@ fn linked_in_index(tree: &dyn Tree, staged: bool, root: &Path) -> Vec<rules::Vio
 /// After violations in the staged snapshot, when the working tree passes
 /// every rule: the hint that the report is about the index, with a line
 /// that stages each top-level path the rules read that is on disk or in the
-/// repo's own index (git refuses a path that matches nothing). `None` when
-/// the working tree breaks a rule too, or it or the index cannot be read.
-fn stage_hint(root: &Path) -> Option<String> {
+/// repo's own index (git refuses a path that matches nothing), and the
+/// managed files git ignores, which that line leaves out. When each
+/// violation is about an ignored file (its path, or the `SKILL.md` of the
+/// folder it names), the line cannot fix any of them: the hint names those
+/// files instead.
+/// `None` when the working tree breaks a rule too, or it or the index
+/// cannot be read.
+fn stage_hint(root: &Path, violations: &[rules::Violation]) -> Option<String> {
     if !rules::check_all(&WorkingTree::new(root)).ok()?.is_empty() {
         return None;
+    }
+    let ignored = ignored_managed(root);
+    let explains =
+        |path: &str, v: &rules::Violation| path == v.path || path == format!("{}/SKILL.md", v.path);
+    let explaining = |(path, _): &&(String, String)| violations.iter().any(|v| explains(path, v));
+    if violations
+        .iter()
+        .all(|v| ignored.iter().any(|(path, _)| explains(path, v)))
+    {
+        return Some(format!(
+            "The report above is about the staged snapshot (the git index), not about your files: \
+             the working tree passes every rule, but git ignores these files, so `git add` \
+             leaves them out:\n{}\n\nChange those rules, or stage the files with \
+             `git add -f`, then commit again.",
+            listing(ignored.iter().filter(explaining))
+        ));
     }
     let indexed = staged::in_real_index(root, &rules::TOP_LEVEL_PATHS)?;
     let paths: Vec<&str> = rules::TOP_LEVEL_PATHS
         .into_iter()
         .filter(|p| indexed.contains(p) || root.join(p).symlink_metadata().is_ok())
         .collect();
-    Some(hint_text(root, &paths.join(" ")))
+    let mut hint = hint_text(root, &paths.join(" "));
+    if !ignored.is_empty() {
+        hint.push_str(&format!(
+            "\n\nGit ignores these files, so the line above leaves them out:\n{}",
+            listing(ignored.iter())
+        ));
+    }
+    Some(hint)
+}
+
+/// One indented line per ignored file, with its rule.
+fn listing<'a>(ignored: impl Iterator<Item = &'a (String, String)>) -> String {
+    ignored
+        .map(|(path, rule)| format!("\n  {path} ({rule})"))
+        .collect()
 }
 
 /// The text of [`stage_hint`] for `paths` (separated by spaces). The root

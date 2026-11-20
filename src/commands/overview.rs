@@ -22,6 +22,7 @@ use crate::linked::summary::About;
 use crate::linked::{self, Linked, Shown};
 use crate::manifest::Manifest;
 use crate::paths::Paths;
+use crate::project::root::written_form;
 use crate::skiman_manual;
 use crate::sync;
 
@@ -107,7 +108,7 @@ fn overview() -> Result<Exit, Failure> {
     let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
     for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
         let path = folder.path.as_ref().expect("a shown folder has a path");
-        let (id, path) = (&folder.id, home_relative(path, paths.home()));
+        let (id, path) = (&folder.id, written_form(paths.home(), path));
         let Shown::Skills(skills) = shown else {
             out!("## Linked folder {id}: `{path}`\n");
             out!("Not on this machine.\n");
@@ -175,17 +176,9 @@ fn elsewhere_row(skill: &OutsideSkill, home: &Path) -> [String; 4] {
     [
         skill.name.clone(),
         skill.owner.clone(),
-        home_relative(&skill.location, home),
+        written_form(home, &skill.location),
         skill.read_by.join(", "),
     ]
-}
-
-/// `path`, written with `~/` when it is under `home`.
-fn home_relative(path: &Path, home: &Path) -> String {
-    match path.strip_prefix(home) {
-        Ok(rel) => format!("~/{}", rel.display()),
-        Err(_) => path.display().to_string(),
-    }
 }
 
 /// The day (`YYYY-MM-DD`) of the latest commit that added the `SKILL.md`

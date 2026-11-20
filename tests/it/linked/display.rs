@@ -27,15 +27,13 @@ fn setup(sandbox: &Sandbox) {
 }
 
 /// The cells of each line of `stdout`, a table whose columns are
-/// separated by two spaces or more, with `HOME` written as `~`.
-fn cells(stdout: &[u8], sandbox: &Sandbox) -> Vec<Vec<String>> {
-    let home = sandbox.home().display().to_string();
+/// separated by two spaces or more.
+fn cells(stdout: &[u8]) -> Vec<Vec<String>> {
     String::from_utf8(stdout.to_vec())
         .unwrap()
         .lines()
         .map(|line| {
-            line.replace(&home, "~")
-                .split("  ")
+            line.split("  ")
                 .map(str::trim)
                 .filter(|cell| !cell.is_empty())
                 .map(str::to_owned)
@@ -54,7 +52,7 @@ fn list_shows_each_linked_skill_with_its_folder_and_state() {
     assert_eq!(output.status.code(), Some(0));
     let row = |cells: [&str; 7]| cells.map(str::to_owned).to_vec();
     assert_eq!(
-        cells(&output.stdout, &sandbox),
+        cells(&output.stdout),
         [
             row([
                 "NAME",
@@ -224,7 +222,7 @@ fn a_single_skill_that_cannot_be_probed_is_left_out_like_a_folder_that_cannot_be
     let doctor = sandbox.skiman().arg("doctor").output().unwrap();
     chmod(0o755).unwrap();
 
-    let linked: Vec<Vec<String>> = cells(&list.stdout, &sandbox)
+    let linked: Vec<Vec<String>> = cells(&list.stdout)
         .into_iter()
         .filter(|row| row.get(1).is_some_and(|kind| kind == "linked"))
         .collect();

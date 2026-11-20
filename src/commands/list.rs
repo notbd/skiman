@@ -14,6 +14,7 @@ use crate::linked::{Holder, Linked, Shown};
 use crate::lockfile::{LockEntry, Lockfile};
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
+use crate::project::root::written_form;
 use crate::rules;
 use crate::source::{UrlKind, check_url};
 use crate::sync;
@@ -60,15 +61,8 @@ fn list() -> Result<Exit, Failure> {
     let linked = Linked::read(paths.home(), &repo, &manifest);
     let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
     for (folder, shown) in linked.shown(&repo.layout()?, &kept) {
-        let source = format!(
-            "{} ({})",
-            folder.id,
-            folder
-                .path
-                .as_ref()
-                .expect("a shown folder has a path")
-                .display()
-        );
+        let path = folder.path.as_ref().expect("a shown folder has a path");
+        let source = format!("{} ({})", folder.id, written_form(paths.home(), path));
         let row = |name: String, state: String| {
             let dash = || "-".to_owned();
             [

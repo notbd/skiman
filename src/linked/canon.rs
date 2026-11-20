@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::{Folder, Linked, State};
 use crate::fsutil::{self, absolute_lexical, temporary_of};
-use crate::sync::{Change, Item, ItemKind, Report};
-use crate::test_hook;
+use crate::sync::{Change, Item, ItemKind, Output, Report, link_if_free, make};
 use crate::tree::is_ignored;
 
 /// Makes `<canon>/linked` hold the link `<id>` for each read folder, leaves
@@ -17,8 +16,9 @@ use crate::tree::is_ignored;
 /// link (an id no longer registered, missing or breaking a rule, or a
 /// temporary name a killed sync left). Returns the ids whose link is
 /// confirmed to point at the registered path: only their skills are offered
-/// to the tool directories.
-pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
+/// to the tool directories. For [`Output::Plan`] nothing is written, and
+/// the ids returned are those whose link is there or would be made.
+pub fn reconcile(linked: &Linked, output: Output, report: &mut Report) -> BTreeSet<String> {
     let dir = linked.dir();
     let mut confirmed = BTreeSet::new();
     let wanted: Vec<(&str, &PathBuf)> = linked
@@ -32,12 +32,15 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
             )
         })
         .collect();
+    let mut missing = false;
     match std::fs::symlink_metadata(dir) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             if wanted.is_empty() {
                 return confirmed;
             }
-            if let Err(e) = std::fs::create_dir(dir) {
+            // A plan goes on as if `linked/` were made, empty.
+            missing = output == Output::Plan;
+            if !missing && let Err(e) = std::fs::create_dir(dir) {
                 report
                     .errors
                     .push(format!("cannot create {}: {e}", dir.display()));
@@ -58,13 +61,17 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
         }
         Ok(_) => {}
     }
-    let entries = match entries(dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            report
-                .errors
-                .push(format!("cannot read {}: {e}", dir.display()));
-            return confirmed;
+    let entries = if missing {
+        Vec::new()
+    } else {
+        match entries(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                report
+                    .errors
+                    .push(format!("cannot read {}: {e}", dir.display()));
+                return confirmed;
+            }
         }
     };
     let mut seen = BTreeSet::new();
@@ -105,29 +112,18 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
             (Some(want), _) if temporary_of(&name).is_none() => {
                 // As written, not folded lexically: `a/link/../b` is not `a/b`
                 // when `link` leads elsewhere.
-                if written == *want {
+                let relink = || fsutil::relink(&path, dir, &current, Some(want));
+                if written == *want
+                    || make(output, report, (Change::Retargeted, &path), relink) == Some(true)
+                {
                     confirmed.insert(text.into_owned());
-                    continue;
-                }
-                match fsutil::relink(&path, dir, &current, Some(want)) {
-                    Ok(true) => {
-                        report.changes.push((Change::Retargeted, path));
-                        confirmed.insert(text.into_owned());
-                    }
-                    Ok(false) => {}
-                    Err(e) => report
-                        .errors
-                        .push(format!("cannot retarget {}: {e}", path.display())),
                 }
             }
             (None, Some(State::Unreadable(_))) => {}
-            _ => match fsutil::relink(&path, dir, &current, None) {
-                Ok(true) => report.changes.push((Change::Removed, path)),
-                Ok(false) => {}
-                Err(e) => report
-                    .errors
-                    .push(format!("cannot remove {}: {e}", path.display())),
-            },
+            _ => {
+                let relink = || fsutil::relink(&path, dir, &current, None);
+                make(output, report, (Change::Removed, &path), relink);
+            }
         }
     }
     for (id, want) in wanted {
@@ -135,21 +131,17 @@ pub fn reconcile(linked: &Linked, report: &mut Report) -> BTreeSet<String> {
             continue;
         }
         let path = dir.join(id);
-        test_hook::at("sync", &format!("link:{}", path.display()));
-        // `symlink` never replaces: an entry that appeared since the
-        // listing occupies the id like one the listing found.
-        match std::os::unix::fs::symlink(want, &path) {
-            Ok(()) => {
-                report.changes.push((Change::Linked, path));
+        // Another spelling of the id (APFS is case-insensitive), or an entry
+        // that appeared since the listing, occupies it like one the listing found.
+        match link_if_free((output, report), (&path, &path, want)) {
+            Some(true) => {
                 confirmed.insert(id.to_owned());
             }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Some(false) => {
                 let message = occupied(&path, id);
                 report.items.push(note(dir, path, "occupied", message));
             }
-            Err(e) => report
-                .errors
-                .push(format!("cannot link {}: {e}", path.display())),
+            None => {}
         }
     }
     confirmed

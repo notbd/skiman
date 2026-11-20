@@ -594,3 +594,35 @@ fn a_relative_link_to_the_skill_is_owned_and_resolves_against_the_real_tool_dire
         .stderr_eq("");
     assert_eq!(tree(sandbox.home()), before);
 }
+
+/// A tool directory made between sync's first look and its write is read,
+/// not taken as empty: a skill someone put there is reported as foreign.
+#[test]
+fn a_tool_directory_made_while_sync_looks_is_read() {
+    let sandbox = Sandbox::builder()
+        .tool(Tool::Codex, crate::support::ToolSetup::PresenceOnly)
+        .build();
+    init(&sandbox);
+    let dir = sandbox.tool_dir(Tool::Codex);
+    let _ = std::fs::remove_dir_all(&dir);
+    let theirs = dir.join("theirs");
+    let run = format!(
+        "mkdir -p '{}' && printf -- '---\\nname: theirs\\ndescription: d\\n---\\n' > '{}/SKILL.md'",
+        theirs.display(),
+        theirs.display()
+    );
+
+    let sync = sandbox
+        .skiman()
+        .arg("sync")
+        .env("SKIMAN_TEST_HOOK", format!("sync:create:{}", dir.display()))
+        .env("SKIMAN_TEST_HOOK_RUN", run)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&sync.stderr);
+    assert!(
+        stderr.contains(&format!("foreign skill {}", theirs.display())),
+        "{sync:?}"
+    );
+}

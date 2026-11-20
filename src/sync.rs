@@ -35,6 +35,9 @@ pub enum Output {
     Normal,
     /// `sync --hook`: nothing on stdout unless there is something new to report; exit 0.
     Hook,
+    /// `doctor`: [`reconcile`] decides all a `Normal` sync would and
+    /// writes nothing; each write it would make is a change in the report.
+    Plan,
 }
 
 /// Something sync found and leaves alone. `sync` reports every item;
@@ -288,12 +291,19 @@ pub fn run_with(
     previous: Option<&PreviousCanon>,
     failed: &[PathBuf],
 ) -> (Exit, Report) {
+    // A plan writes nothing; this function records what it reported.
+    assert_ne!(
+        output,
+        Output::Plan,
+        "doctor runs reconcile, never run_with"
+    );
     let mut report = match Manifest::load(repo) {
         Ok(manifest) => {
             let linked = Linked::read(paths.home(), repo, &manifest);
             let previous_canon = previous.map(|p| p.root.clone());
             let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
-            crate::project::sync::reconcile(paths, repo, &manifest, &linked, &mut report);
+            let records = (&manifest, &linked);
+            crate::project::sync::reconcile(paths, repo, records, output, &mut report);
             report
         }
         Err(failure) => return (report_failure(failure, output), Report::default()),
@@ -315,7 +325,7 @@ pub fn run_with(
     for item in &report.items {
         let id = item.id();
         match output {
-            Output::Normal => err!("warning: {}", item.message()),
+            Output::Normal | Output::Plan => err!("warning: {}", item.message()),
             Output::Hook if !last.contains(&item.scope, &id) => {
                 out!("skiman: {}", item.message())
             }
@@ -334,8 +344,8 @@ pub fn run_with(
         err!("error: {error}");
     }
     let exit = match output {
-        Output::Normal => report.exit(),
         Output::Hook => Exit::Success,
+        _ => report.exit(),
     };
     (exit, report)
 }
@@ -344,8 +354,8 @@ pub fn run_with(
 pub fn report_failure(failure: Failure, output: Output) -> Exit {
     let exit = failure.report();
     match output {
-        Output::Normal => exit,
         Output::Hook => Exit::Success,
+        _ => exit,
     }
 }
 
@@ -354,6 +364,7 @@ pub fn report_failure(failure: Failure, output: Output) -> Exit {
 /// link for every wanted entry, removes owned entries nothing wants, and
 /// removes owned entries from tool directories of known tools that are not
 /// enabled. Then does the same for instruction locations and the shared body.
+/// For [`Output::Plan`] it writes nothing (see [`make`]).
 pub fn reconcile(
     paths: &Paths,
     repo: &Canon,
@@ -364,14 +375,18 @@ pub fn reconcile(
 ) -> Report {
     let home = paths.home();
     let mut report = Report::default();
-    if let Err(e) = skiman_manual::materialise(repo) {
+    let manual = match output {
+        Output::Plan => skiman_manual::needs_write(repo).map(|_| ()),
+        _ => skiman_manual::materialise(repo),
+    };
+    if let Err(e) = manual {
         report
             .errors
             .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
     }
     let kept = kept_names(paths, repo, manifest, linked);
     linked::canon::report_folders(linked, &mut report);
-    let offered = linked::canon::reconcile(linked, &mut report);
+    let offered = linked::canon::reconcile(linked, output, &mut report);
     let ownership = Ownership::new(paths, repo, previous_canon);
     let offers = |id: &str| offered.contains(id);
     let wanted = match wanted_entries(repo, manifest, linked, &kept, &offers, &mut report) {
@@ -395,17 +410,35 @@ pub fn reconcile(
             reconciled.push(through.clone());
             continue;
         }
+        let plan = output == Output::Plan;
+        // The tool directory itself may be missing; its parent chain is never replaced.
+        let missing = match missing_dir(through) {
+            Ok(missing) => missing,
+            // Making it fails, and that says why.
+            Err(_) if !plan => true,
+            Err(why) => {
+                let dir = dir.display();
+                report
+                    .errors
+                    .push(format!("cannot use {dir} as a tool directory: {why}"));
+                continue;
+            }
+        };
         // Created and written where the guard checked, never through `dir`
-        // again: a link on its way may change meanwhile. The tool directory
-        // itself may be missing; its parent chain is never replaced.
-        if let Err(e) = std::fs::create_dir_all(through) {
-            report
-                .errors
-                .push(format!("cannot create {}: {e}", dir.display()));
-            continue;
+        // again: a link on its way may change meanwhile.
+        if missing && !plan {
+            test_hook::at("sync", &format!("create:{}", dir.display()));
+            if let Err(e) = std::fs::create_dir_all(through) {
+                report
+                    .errors
+                    .push(format!("cannot create {}: {e}", dir.display()));
+                continue;
+            }
         }
         let real = match through.canonicalize() {
             Ok(real) => real,
+            // A plan goes on as if the missing folder were made, empty.
+            Err(_) if missing && plan => through.clone(),
             Err(e) => {
                 report
                     .errors
@@ -423,10 +456,13 @@ pub fn reconcile(
                 tool,
                 dir,
                 real: &real,
+                // Only a plan takes the folder as empty: one that was just made is read.
+                missing: missing && plan,
             };
             let names = Names {
                 wanted: &wanted,
                 kept: &kept,
+                output,
             };
             reconcile_tool_dir(&tool_dir, repo, linked, &names, &ownership, &mut report);
             reconciled.push(real);
@@ -438,22 +474,48 @@ pub fn reconcile(
     {
         let (dir, real) = (&target.path, &target.lands);
         if !reconciled.contains(real) && !guarded(linked, dir, real, &mut report) {
-            remove_owned_entries(
-                &ToolDir {
-                    tool: target.tool,
-                    dir,
-                    real,
-                },
-                &ownership,
-                &mut report,
-            );
+            let tool_dir = ToolDir {
+                tool: target.tool,
+                dir,
+                real,
+                missing: false,
+            };
+            remove_owned_entries(&tool_dir, (&ownership, output), &mut report);
         }
         reconciled.push(real.clone());
     }
-    let sweep = output == Output::Normal;
     let context = (repo, linked, &ownership);
-    reconcile_instruction_locations(&targets, context, sweep, &mut report);
+    reconcile_instruction_locations(&targets, context, output, &mut report);
     report
+}
+
+/// Makes one write of a reconcile with `write` and records `change` at
+/// `path`; for [`Output::Plan`] only records it. `Some(false)`: something
+/// else took `path` first and stays. `None`: the write failed (reported).
+pub fn make(
+    output: Output,
+    report: &mut Report,
+    (change, path): (Change, &Path),
+    write: impl FnOnce() -> std::io::Result<bool>,
+) -> Option<bool> {
+    let made = match output {
+        Output::Plan => true,
+        _ => write()
+            .map_err(|e| {
+                let verb = match change {
+                    Change::Linked => "link",
+                    Change::Retargeted => "retarget",
+                    _ => "remove",
+                };
+                let path = path.display();
+                report.errors.push(format!("cannot {verb} {path}: {e}"));
+            })
+            .ok()?,
+    };
+    if made {
+        report.changes.push((change, path.to_owned()));
+    }
+    Some(made)
 }
 
 /// A tool directory or an instruction location.
@@ -532,7 +594,7 @@ pub fn write_targets(home: &Path, manifest: &Manifest) -> Vec<WriteTarget> {
 fn reconcile_instruction_locations(
     targets: &[WriteTarget],
     (repo, linked, ownership): (&Canon, &Linked, &Ownership),
-    sweep: bool,
+    output: Output,
     report: &mut Report,
 ) {
     let target = repo.shared_body();
@@ -570,38 +632,30 @@ fn reconcile_instruction_locations(
             path,
             kind: ItemKind::RefusedLocation,
         };
-        match std::fs::symlink_metadata(&location) {
+        let real = location.parent().expect("named");
+        let taken = match std::fs::symlink_metadata(&location) {
+            // `symlink` never replaces: a file that appeared since the check
+            // is refused like one the check found.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                test_hook::at("sync", &format!("link:{}", location.display()));
-                // `symlink` never replaces: a file that appeared since the
-                // check is refused like one the check found.
-                match std::os::unix::fs::symlink(&target, &location) {
-                    Ok(()) => report.changes.push((Change::Linked, path)),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        report.items.push(refused(path))
-                    }
-                    Err(e) => report
-                        .errors
-                        .push(format!("cannot link {}: {e}", path.display())),
-                }
+                let link = || fsutil::link_new(&target, &location, &location);
+                make(output, report, (Change::Linked, &path), link) == Some(false)
             }
-            Err(e) => report
-                .errors
-                .push(format!("cannot inspect {}: {e}", path.display())),
+            Err(e) => {
+                let path = path.display();
+                report.errors.push(format!("cannot inspect {path}: {e}"));
+                false
+            }
             Ok(meta) => match ownership.owned_instruction(&location, &meta) {
-                Some(current) if current == target => {}
+                Some(current) if current == target => false,
                 Some(current) => {
-                    let real = location.parent().expect("named");
-                    match fsutil::relink(&location, real, &current, Some(&target)) {
-                        Ok(true) => report.changes.push((Change::Retargeted, path)),
-                        Ok(false) => report.items.push(refused(path)),
-                        Err(e) => report
-                            .errors
-                            .push(format!("cannot retarget {}: {e}", path.display())),
-                    }
+                    let relink = || fsutil::relink(&location, real, &current, Some(&target));
+                    make(output, report, (Change::Retargeted, &path), relink) == Some(false)
                 }
-                None => report.items.push(refused(path)),
+                None => true,
             },
+        };
+        if taken {
+            report.items.push(refused(path));
         }
         reconciled.push(location);
     }
@@ -621,13 +675,17 @@ fn reconcile_instruction_locations(
             && let Some(current) = ownership.owned_instruction(&location, &meta)
         {
             let real = location.parent().expect("named");
-            remove(&location, real, &current, path, report);
+            remove(output, (&location, real, &current), &path, report);
         }
         reconciled.push(location);
     }
+    // Only a sync that may read more than it changes looks for these.
+    if output == Output::Hook {
+        return;
+    }
     // A sync killed while it took one of these links aside left it under a
-    // temporary name; only a sync that may read more than it changes looks.
-    for location in reconciled.iter().filter(|_| sweep) {
+    // temporary name.
+    for location in &reconciled {
         let dir = location.parent().expect("named");
         let name = location.file_name().expect("named");
         // Names only: the folder is the tool's own, and its files come and go.
@@ -637,7 +695,7 @@ fn reconcile_instruction_locations(
                 && let Ok(meta) = std::fs::symlink_metadata(&path)
                 && let Some(current) = ownership.owned_instruction(&path, &meta)
             {
-                remove(&path, dir, &current, path.clone(), report);
+                remove(output, (&path, dir, &current), &path, report);
             }
         }
     }
@@ -823,18 +881,21 @@ fn read_entries(
 
 /// A tool directory of `tool`: `dir` as spelled, which messages show, and
 /// `real` its realpath as the write guard checked it, which every read
-/// and write goes through.
+/// and write goes through; `missing` when a plan takes it as made and empty.
 struct ToolDir<'a> {
     tool: &'a AgentTool,
     dir: &'a Path,
     real: &'a Path,
+    missing: bool,
 }
 
 /// The same for every tool directory in one sync: the entries it wants
-/// ([`wanted_entries`]) and the names kept links hold ([`kept_names`]).
+/// ([`wanted_entries`]), the names kept links hold ([`kept_names`]), and
+/// whether it writes ([`Output::Plan`] does not).
 struct Names<'a> {
     wanted: &'a [Wanted],
     kept: &'a BTreeMap<String, Holder>,
+    output: Output,
 }
 
 /// Links every wanted entry in the tool directory and removes the owned
@@ -849,8 +910,17 @@ fn reconcile_tool_dir(
     ownership: &Ownership,
     report: &mut Report,
 ) {
-    let ToolDir { tool, dir, real } = *tool_dir;
-    let Names { wanted, kept } = *names;
+    let ToolDir {
+        tool,
+        dir,
+        real,
+        missing,
+    } = *tool_dir;
+    let Names {
+        wanted,
+        kept,
+        output,
+    } = *names;
     let by_name: BTreeMap<&str, &Path> = wanted
         .iter()
         .map(|w| (w.name.as_str(), w.target.as_path()))
@@ -862,7 +932,12 @@ fn reconcile_tool_dir(
         path,
     };
     let mut handled = BTreeSet::new();
-    for (name, meta) in read_entries(real, dir, report) {
+    let entries = if missing {
+        Vec::new()
+    } else {
+        read_entries(real, dir, report)
+    };
+    for (name, meta) in entries {
         let (at, path) = (real.join(&name), dir.join(&name));
         let want = name.to_str().and_then(|n| by_name.get_key_value(n));
         let entry = ownership.classify(real, &name, &meta);
@@ -878,17 +953,16 @@ fn reconcile_tool_dir(
         match (entry, want) {
             (Entry::Owned(current), Some((name, target))) => {
                 handled.insert(*name);
-                if current != *target {
-                    match fsutil::relink(&at, real, &current, Some(target)) {
-                        Ok(true) => report.changes.push((Change::Retargeted, path)),
-                        Ok(false) => report.items.push(occupied(name, &at, path)),
-                        Err(e) => report
-                            .errors
-                            .push(format!("cannot retarget {}: {e}", path.display())),
-                    }
+                let relink = || fsutil::relink(&at, real, &current, Some(target));
+                if current != *target
+                    && make(output, report, (Change::Retargeted, &path), relink) == Some(false)
+                {
+                    report.items.push(occupied(name, &at, path));
                 }
             }
-            (Entry::Owned(current), None) => remove(&at, real, &current, path, report),
+            (Entry::Owned(current), None) => {
+                remove(output, (&at, real, &current), &path, report);
+            }
             (Entry::Foreign, None) => report.items.push(Item {
                 scope: scope.clone(),
                 kind: foreign(&name, tool.id, &at, &meta, repo, linked),
@@ -906,50 +980,94 @@ fn reconcile_tool_dir(
             continue;
         }
         let (at, path) = (real.join(name), dir.join(name));
-        match std::fs::symlink_metadata(&at) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                test_hook::at("sync", &format!("link:{}", path.display()));
-                // `symlink` never replaces: an entry that appeared since the
-                // check is occupied like one the check found.
-                match std::os::unix::fs::symlink(target, &at) {
-                    Ok(()) => report.changes.push((Change::Linked, path)),
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        report.items.push(occupied(name, &at, path))
-                    }
-                    Err(e) => report
-                        .errors
-                        .push(format!("cannot link {}: {e}", path.display())),
-                }
-            }
-            Err(e) => report
-                .errors
-                .push(format!("cannot inspect {}: {e}", path.display())),
-            // Another spelling of the name (APFS is case-insensitive) holds it.
-            Ok(_) => report.items.push(occupied(name, &at, path)),
+        // Another spelling of the name (APFS is case-insensitive), or an
+        // entry that appeared since the check, occupies it like one the check found.
+        if link_if_free((output, report), (&at, &path, target)) == Some(false) {
+            report.items.push(occupied(name, &at, path));
         }
     }
 }
 
+/// Makes the link `at` (shown as `path`) to `target` through [`make`] when
+/// nothing holds the name; `Some(false)` when something does (another
+/// spelling of it on a case-insensitive volume counts), `None` on an error
+/// it reports.
+pub fn link_if_free(
+    (output, report): (Output, &mut Report),
+    (at, path, target): (&Path, &Path, &Path),
+) -> Option<bool> {
+    match std::fs::symlink_metadata(at) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let link = || fsutil::link_new(target, at, path);
+            make(output, report, (Change::Linked, path), link)
+        }
+        Err(e) => {
+            let path = path.display();
+            report.errors.push(format!("cannot inspect {path}: {e}"));
+            None
+        }
+        Ok(_) => Some(false),
+    }
+}
+
 /// Removes every owned entry of a tool directory nothing is distributed to.
-fn remove_owned_entries(tool_dir: &ToolDir, ownership: &Ownership, report: &mut Report) {
+fn remove_owned_entries(
+    tool_dir: &ToolDir,
+    (ownership, output): (&Ownership, Output),
+    report: &mut Report,
+) {
     let ToolDir { dir, real, .. } = *tool_dir;
     for (name, meta) in read_entries(real, dir, report) {
         if let (true, Entry::Owned(current)) =
             (meta.is_symlink(), ownership.classify(real, &name, &meta))
         {
-            remove(&real.join(&name), real, &current, dir.join(name), report);
+            let (at, path) = (real.join(&name), dir.join(&name));
+            remove(output, (&at, real, &current), &path, report);
         }
     }
 }
 
 /// Removes skiman's own link at `link` (in `real_dir`, pointing at
-/// `current`), reported as `path`; one that became something else stays.
-fn remove(link: &Path, real_dir: &Path, current: &Path, path: PathBuf, report: &mut Report) {
-    match fsutil::relink(link, real_dir, current, None) {
-        Ok(true) => report.changes.push((Change::Removed, path)),
-        Ok(false) => {}
-        Err(e) => report
-            .errors
-            .push(format!("cannot remove {}: {e}", path.display())),
+/// `current`) through [`make`], reported as `path`; one that became
+/// something else stays.
+fn remove(
+    output: Output,
+    (link, real_dir, current): (&Path, &Path, &Path),
+    path: &Path,
+    report: &mut Report,
+) {
+    let relink = || fsutil::relink(link, real_dir, current, None);
+    make(output, report, (Change::Removed, path), relink);
+}
+
+/// Whether the tool directory `dir` is missing and can be made (`true`) or
+/// is a folder (`false`); otherwise why it cannot be used, judged before
+/// anything is written: it, or the first parent that is there, is a link
+/// that leads nowhere or round in a circle, is not a folder, or cannot be read.
+pub fn missing_dir(dir: &Path) -> Result<bool, String> {
+    // Whether `path` is a folder (`true`) or nothing (`false`).
+    let folder = |path: &Path| match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.to_string()),
+        // Not a link: what lstat said is what it is.
+        Ok(meta) if !meta.is_symlink() && meta.is_dir() => Ok(true),
+        Ok(meta) if !meta.is_symlink() => Err(format!("{} is not a folder", path.display())),
+        Ok(_) => match std::fs::metadata(path) {
+            Ok(meta) if meta.is_dir() => Ok(true),
+            Ok(_) => Err(format!("{} is not a folder", path.display())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(format!("{} is a link that leads nowhere", path.display()))
+            }
+            Err(e) => Err(e.to_string()),
+        },
+    };
+    if folder(dir)? {
+        return Ok(false);
     }
+    for parent in dir.ancestors().skip(1) {
+        if folder(parent)? {
+            break;
+        }
+    }
+    Ok(true)
 }

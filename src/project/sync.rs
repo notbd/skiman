@@ -20,17 +20,18 @@ use crate::linked::Linked;
 use crate::manifest::Manifest;
 use crate::paths::Paths;
 use crate::staging::Staging;
-use crate::sync::{Change, Item as Report, ItemKind, Report as SyncReport};
+use crate::sync::{Change, Item as Report, ItemKind, Output, Report as SyncReport};
 use crate::tree::WorkingTree;
 
 /// Reconciles every project root into `report`. An item that overlaps a
 /// linked folder is skipped; while a linked folder cannot be read, nothing
-/// is (`crate::linked`).
+/// is (`crate::linked`). For [`Output::Plan`] nothing is written: a mirror
+/// write is only a change in the report, and the synced hashes are not saved.
 pub fn reconcile(
     paths: &Paths,
     repo: &Canon,
-    manifest: &Manifest,
-    linked: &Linked,
+    (manifest, linked): (&Manifest, &Linked),
+    output: Output,
     report: &mut SyncReport,
 ) {
     if manifest.projects().is_empty() {
@@ -69,6 +70,7 @@ pub fn reconcile(
         repo,
         backups: Backups::new(paths),
         blocked: false,
+        plan: output == Output::Plan,
     };
     for resolved in root::resolve(paths.home(), repo, manifest) {
         match resolved {
@@ -92,7 +94,9 @@ pub fn reconcile(
             Ok(root) => reconcile_root(&root, linked, &mut synced, &mut writer, report),
         }
     }
-    if let Err(e) = synced.save(paths) {
+    if !writer.plan
+        && let Err(e) = synced.save(paths)
+    {
         report
             .errors
             .push(format!("cannot write {}: {e}", paths.state_dir().display()));
@@ -200,6 +204,17 @@ fn reconcile_root(
                 say(report, "conflict");
                 pending.changed.push(disk.clone());
             }
+            // What `Writer::mirror` checks before it writes, read-only.
+            State::ProjectChanged if writer.plan => {
+                if writer.blocked {
+                } else if let Some(why) = crate::staging::blocked(&swap_parent(repo).0, repo.root())
+                {
+                    writer.blocked = true;
+                    report.errors.push(why);
+                } else {
+                    report.changes.push((Change::Mirrored, disk.clone()));
+                }
+            }
             State::ProjectChanged => {
                 if let Some(content) = &evaluated.disk {
                     writer.mirror(
@@ -266,6 +281,8 @@ struct Writer<'a> {
     /// A staging for the mirror could not be opened: that is reported
     /// once, and nothing more is mirrored this run.
     blocked: bool,
+    /// [`Output::Plan`]: nothing is written.
+    plan: bool,
 }
 
 impl Writer<'_> {

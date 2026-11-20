@@ -453,6 +453,56 @@ skiman.toml:5: toml-value: `ref_kind` in [skills.pdf.source] must be one of bran
 "#]]);
 }
 
+/// A `url` that `update` and `import` refuse before they fetch breaks the
+/// rules too: what `check` accepts is a source they can read.
+#[test]
+fn a_source_url_that_update_refuses_is_reported() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    third_party(&sandbox, "pdf");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace(
+        "url = \"https://github.com/acme/skills.git\"\n",
+        "url = \"unsupported\"\n",
+    );
+    std::fs::write(&manifest, text).unwrap();
+
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:5: toml-value: `url` "unsupported" in [skills.pdf.source] is not an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path
+
+"#]]);
+
+    // Another user's home is not a local folder `update` reads.
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, text.replace("unsupported", "~bob/skills")).unwrap();
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:5: toml-value: `url` "~bob/skills" in [skills.pdf.source] is not an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path
+
+"#]]);
+}
+
+/// `source.path` names a folder below the upstream's root; the message
+/// gives the spelling to write when there is one.
+#[test]
+fn a_source_path_that_is_absolute_or_has_a_dot_dot_part_is_reported() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    third_party(&sandbox, "pdf");
+    third_party(&sandbox, "docx");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("path = \"pdf\"", "path = \"/skills/pdf\"")
+        .replace("path = \"docx\"", "path = \"docx/../../docx\"");
+    std::fs::write(&manifest, text).unwrap();
+
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:6: toml-value: `path` "/skills/pdf" in [skills.pdf.source] must name a folder below the upstream's root, without a leading `/` or `..`: write "skills/pdf"
+skiman.toml:10: toml-value: `path` "docx/../../docx" in [skills.docx.source] must name a folder below the upstream's root, without a leading `/` or `..`, and leaves the upstream
+
+"#]]);
+}
+
 #[test]
 fn invalid_toml_is_reported_with_its_line() {
     let sandbox = Sandbox::new();

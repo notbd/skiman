@@ -8,14 +8,13 @@ use toml_edit::{Document, Item, TableLike};
 
 use super::secrets::AllowEntry;
 use super::{Scope, Violation, rule};
-use crate::manifest::{LinkedProblem, linked_problems};
+use crate::manifest::{LinkedProblem, REF_KINDS, enabled_tools, linked_problems, strings};
 use crate::project::root::is_path_form;
+use crate::source::{check_url, folder_path};
 use crate::tree::Tree;
 
 pub const MANIFEST: &str = "skiman.toml";
 pub const LOCKFILE: &str = "skiman.lock";
-
-const REF_KINDS: &[&str] = &["branch", "tag", "commit"];
 
 /// A `[projects.<id>]` key that is no longer read (ADR 0013).
 const RETIRED_SKILL_DIRS: &str = "skill_dirs";
@@ -245,6 +244,12 @@ impl Records {
         })
     }
 
+    /// `skiman.toml` for its readers outside the rules, when it parsed.
+    pub fn manifest(&self) -> Option<crate::manifest::Manifest> {
+        self.manifest.doc.as_ref()?;
+        crate::manifest::Manifest::parse(&self.manifest.text).ok()
+    }
+
     /// Whether `skiman.toml` parsed.
     pub fn manifest_parsed(&self) -> bool {
         self.manifest.doc.is_some()
@@ -258,17 +263,7 @@ impl Records {
     /// `[tools].enabled` (string entries only; empty when absent); `None`
     /// when `skiman.toml` is missing or does not parse.
     pub fn enabled_tools(&self) -> Option<Vec<String>> {
-        let doc = self.manifest.doc.as_ref()?;
-        let enabled = doc
-            .get("tools")
-            .and_then(|tools| tools.get("enabled"))
-            .and_then(Item::as_array);
-        Some(
-            enabled
-                .into_iter()
-                .flat_map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)))
-                .collect(),
-        )
+        Some(enabled_tools(self.manifest.doc.as_ref()?.as_table()))
     }
 
     pub fn manifest_skills(&self) -> BTreeSet<String> {
@@ -477,19 +472,8 @@ impl Records {
                 out,
             );
             section.value("exclude", false, "an array of strings", is_strings, out);
-            let strings_of = |key: &str| -> Vec<String> {
-                table
-                    .get(key)
-                    .and_then(Item::as_array)
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            };
             let exclude_line = m.key_line(table, "exclude", line);
-            for entry in strings_of("exclude") {
+            for entry in strings(table.get("exclude")) {
                 if let Some(why) = crate::project::root::invalid_exclude(&entry) {
                     out.insert(m.violation(
                         exclude_line,
@@ -573,6 +557,19 @@ impl Records {
             ));
             return;
         };
+        // What `update` and `import` refuse before they fetch.
+        let text = |key| source.get(key).and_then(Item::as_str);
+        let problems = [
+            text("url").and_then(|url| Some(("url", url, check_url(url).err()?))),
+            text("path").and_then(|path| Some(("path", path, folder_path(path).err()?))),
+        ];
+        for (key, text, why) in problems.into_iter().flatten() {
+            out.insert(m.violation(
+                m.key_line(source, key, line),
+                rule::TOML_VALUE,
+                format!("`{key}` \"{text}\" in [skills.{name}.source] {why}"),
+            ));
+        }
         let source = m.section(source, format!("[skills.{name}.source]"), line);
         source.unknown_keys(&["url", "path", "ref", "ref_kind", "upstream_name"], out);
         source.value("url", true, "a string", is_string, out);
@@ -589,7 +586,7 @@ impl Records {
         source.value(
             "ref_kind",
             false,
-            "one of branch, tag, commit",
+            &format!("one of {}", REF_KINDS.join(", ")),
             ref_kind,
             out,
         );

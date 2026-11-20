@@ -57,20 +57,23 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     for unused in &report.unused_allows {
         out!("{unused}");
     }
-    for warning in rules::warnings_all(tree.as_ref()).map_err(io)? {
+    for warning in &report.warnings {
         err!("warning: {warning}");
     }
     // Not on the staged snapshot: the pre-commit hook would print one line
     // per skill on every commit.
     if !staged {
-        for gap in rules::missing_info(tree.as_ref()).map_err(io)? {
+        for gap in &report.missing_info {
             err!("warning: {gap}");
         }
-        for warning in linked_warnings(&paths, &repo)? {
-            err!("warning: {warning}");
-        }
-        if let Some(warning) = linked_not_ignored(&repo) {
-            err!("warning: {warning}");
+        // A `skiman.toml` that does not parse is a violation already.
+        if let Some(manifest) = &report.manifest {
+            for warning in linked_warnings(&paths, &repo, manifest)? {
+                err!("warning: {warning}");
+            }
+            if let Some(warning) = linked_not_ignored(&repo, manifest) {
+                err!("warning: {warning}");
+            }
         }
     }
     // Staging the working tree cannot take a path out of the index.
@@ -88,18 +91,18 @@ fn check(staged: bool) -> Result<Exit, Failure> {
     Ok(rules::exit_of(&report.violations))
 }
 
-/// What the linked skills on this machine warrant a warning for; nothing
-/// when `skiman.toml` does not parse (that is a violation already).
-fn linked_warnings(paths: &Paths, repo: &Canon) -> Result<Vec<String>, Failure> {
-    let Ok(manifest) = Manifest::load(repo) else {
-        return Ok(Vec::new());
-    };
-    let linked = Linked::read(paths.home(), repo, &manifest);
-    let kept = sync::kept_names(paths, repo, &manifest, &linked);
+/// What the linked skills on this machine warrant a warning for.
+fn linked_warnings(
+    paths: &Paths,
+    repo: &Canon,
+    manifest: &Manifest,
+) -> Result<Vec<String>, Failure> {
+    let linked = Linked::read(paths.home(), repo, manifest);
+    let kept = sync::kept_names(paths, repo, manifest, &linked);
     Ok(linked::check::warnings(
         repo.root(),
         &linked,
-        &manifest,
+        manifest,
         &repo.layout()?,
         &kept,
     ))
@@ -108,8 +111,8 @@ fn linked_warnings(paths: &Paths, repo: &Canon) -> Result<Vec<String>, Failure> 
 /// While `[linked]` tables exist in a canon that is a git repo: that git
 /// does not ignore `linked/`, and where to add the line, or that git
 /// cannot tell, and why.
-fn linked_not_ignored(repo: &Canon) -> Option<String> {
-    if Manifest::load(repo).ok()?.linked().is_empty() {
+fn linked_not_ignored(repo: &Canon, manifest: &Manifest) -> Option<String> {
+    if manifest.linked().is_empty() {
         return None;
     }
     match gitignore::check_ignore(repo.root()) {

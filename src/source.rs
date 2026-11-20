@@ -95,20 +95,21 @@ impl Source {
 /// What a recorded `source.url` names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UrlKind {
-    /// An absolute or `~` path.
+    /// An absolute path, `~`, or a path below `~/`.
     Local,
     /// An https:// or ssh:// URL, or `user@host:path`.
     Git,
 }
 
 /// Checks a recorded `source.url` against the spec's Source fetching rules
-/// before anything runs git on it (`import` and `update`; `add` records only
-/// what [`Source::parse`] accepted). The error says why it is refused.
+/// before anything runs git on it (`update`, and the rules, which `import`
+/// applies before it fetches; `add` records only what [`Source::parse`]
+/// accepted). The error says why it is refused.
 pub fn check_url(url: &str) -> Result<UrlKind, String> {
     if let Some(why) = dangerous(url) {
         return Err(why.to_owned());
     }
-    if url.starts_with('/') || url.starts_with('~') {
+    if url.starts_with('/') || url == "~" || url.starts_with("~/") {
         return Ok(UrlKind::Local);
     }
     if url.starts_with("https://") || url.starts_with("ssh://") || scp_path(url).is_some() {
@@ -118,6 +119,31 @@ pub fn check_url(url: &str) -> Result<UrlKind, String> {
         "is not an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path"
             .to_owned(),
     )
+}
+
+/// A recorded `source.path`, the folder inside the upstream, as every reader
+/// takes it: `""` is the upstream's root, and empty and `.` parts (`./`,
+/// `//`, a trailing `/`) are dropped. Refused when it starts with `/` or has
+/// a `..` part, so it names a folder below the root; the error says why,
+/// with the spelling to write when it stays below the root.
+pub fn folder_path(path: &str) -> Result<String, String> {
+    let (mut parts, mut leaves) = (Vec::new(), false);
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => leaves |= parts.pop().is_none(),
+            part => parts.push(part),
+        }
+    }
+    let folder = parts.join("/");
+    if !path.starts_with('/') && !path.split('/').any(|part| part == "..") {
+        return Ok(folder);
+    }
+    let rule = "must name a folder below the upstream's root, without a leading `/` or `..`";
+    Err(match leaves {
+        true => format!("{rule}, and leaves the upstream"),
+        false => format!("{rule}: write \"{folder}\""),
+    })
 }
 
 /// Why a source that git would read as an option or a remote helper is

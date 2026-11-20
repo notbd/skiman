@@ -489,7 +489,7 @@ fn a_hand_edited_snapshot_is_replaced_and_kept_in_the_backup() {
     let stdout = String::from_utf8_lossy(&update.get_output().stdout).into_owned();
     assert!(
         stdout.contains(
-            "  note: upstream/pdf did not match skiman.lock; it is replaced by the snapshot the lock records, and what it held is moved to the backup\n"
+            "  note: upstream/pdf did not match skiman.lock; it is replaced by the snapshot this update writes, and what it held is moved to the backup\n"
         ),
         "{stdout}"
     );
@@ -521,7 +521,7 @@ fn a_hand_edited_snapshot_with_no_new_version_is_replaced_with_the_note() {
     let stdout = String::from_utf8_lossy(&dry_run.code(0).get_output().stdout).into_owned();
     assert!(
         stdout.contains(
-            "  note: upstream/pdf did not match skiman.lock; it would be replaced by the snapshot the lock records, and what it held would be moved to the backup\n"
+            "  note: upstream/pdf did not match skiman.lock; it would be replaced by the snapshot this update writes, and what it held would be moved to the backup\n"
         ),
         "{stdout}"
     );
@@ -531,7 +531,7 @@ fn a_hand_edited_snapshot_with_no_new_version_is_replaced_with_the_note() {
     assert!(stdout.contains("no file of the skill changed"), "{stdout}");
     assert!(
         stdout.contains(
-            "  note: upstream/pdf did not match skiman.lock; it is replaced by the snapshot the lock records, and what it held is moved to the backup\n"
+            "  note: upstream/pdf did not match skiman.lock; it is replaced by the snapshot this update writes, and what it held is moved to the backup\n"
         ),
         "{stdout}"
     );
@@ -540,6 +540,37 @@ fn a_hand_edited_snapshot_with_no_new_version_is_replaced_with_the_note() {
         read(backup.join("repo/upstream/pdf/reference.md")),
         b"edited by hand\n"
     );
+    sandbox.skiman().arg("check").assert().code(0);
+}
+
+/// A snapshot that is gone is written again; the note says so, and no
+/// backup is promised or made, as nothing was there to keep.
+#[test]
+fn a_missing_snapshot_is_written_again_without_a_backup() {
+    let sandbox = Sandbox::new();
+    installed(&sandbox);
+    let upstream = sandbox.canon().join("upstream/pdf");
+    std::fs::remove_dir_all(&upstream).unwrap();
+
+    let dry_run = sandbox
+        .skiman()
+        .args(["update", "pdf", "--dry-run"])
+        .assert();
+    let stdout = String::from_utf8_lossy(&dry_run.code(0).get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("  note: upstream/pdf was missing; it would be written again\n"),
+        "{stdout}"
+    );
+    let update = sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+
+    let stdout = String::from_utf8_lossy(&update.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("  note: upstream/pdf was missing; it is written again\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("backup"), "{stdout}");
+    assert!(backup_dirs(&sandbox).is_empty());
+    assert!(upstream.join("reference.md").is_file());
     sandbox.skiman().arg("check").assert().code(0);
 }
 

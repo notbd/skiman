@@ -344,7 +344,7 @@ fn report_canon(repo: &Canon, exit: &mut Exit) -> std::io::Result<()> {
     let tree = WorkingTree::new(repo.root());
     for placed in Layout::read(&tree)?.skills() {
         if tree.kind(&placed.path())? == Some(Kind::Dir) {
-            for violation in rules::unresolved_conflicts(&tree, &placed.name)? {
+            for violation in rules::unresolved_conflicts(&tree, &placed.path())? {
                 problem!(exit, "{violation}");
             }
         }

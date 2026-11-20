@@ -232,6 +232,61 @@ fn an_up_to_date_skill_changes_nothing_and_creates_no_backup() {
     assert!(backup_dirs(&sandbox).is_empty());
 }
 
+/// A `skiman.toml` whose `ref` and `ref_kind` stay the same keeps its
+/// bytes, line endings included.
+#[test]
+fn an_up_to_date_skill_keeps_a_crlf_skiman_toml_as_it_is() {
+    let sandbox = Sandbox::new();
+    let up = installed(&sandbox);
+    let manifest = sandbox.canon().join("skiman.toml");
+    let crlf = read(&manifest).replace("\n", "\r\n");
+    write(&manifest, &crlf);
+
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(0)
+        .stdout_eq(format!("skill pdf: up to date at {}\n", up.head()));
+
+    assert_eq!(read(&manifest), crlf);
+}
+
+/// Spellings of one `source.path` folder read alike in a git upstream (as
+/// they already did in a local one); a path that leaves the upstream's root
+/// is refused before anything is fetched.
+#[test]
+fn spellings_of_one_source_path_update_alike_and_one_leaving_the_root_is_refused() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let up = sandbox.upstream("acme/skills");
+    up.write("skills/pdf/SKILL.md", PDF_SKILL_MD);
+    up.commit("v1");
+    sandbox
+        .skiman()
+        .args(["add", "acme/skills", "--skill", "pdf", "--yes"])
+        .assert()
+        .code(0);
+    let manifest = sandbox.canon().join("skiman.toml");
+    let recorded = read(&manifest);
+    let respelt = |path: &str| recorded.replace("\"skills/pdf\"", &format!("\"{path}\""));
+    assert_ne!(respelt("x"), recorded);
+    up.write("skills/pdf/forms.md", "v2\n");
+    up.commit("v2");
+
+    write(&manifest, respelt("./skills//pdf/"));
+    sandbox.skiman().args(["update", "pdf"]).assert().code(0);
+    assert!(sandbox.canon().join("skills/pdf/forms.md").is_file());
+
+    write(&manifest, respelt("skills/../../pdf"));
+    sandbox
+        .skiman()
+        .args(["update", "pdf"])
+        .assert()
+        .code(1)
+        .stderr_eq("error: skill pdf: [skills.pdf.source] in skiman.toml: the `path` `skills/../../pdf` must name a folder below the upstream's root, without a leading `/` or `..`, and leaves the upstream; nothing was fetched\n");
+}
+
 fn inode(path: impl AsRef<Path>) -> u64 {
     std::fs::metadata(path).unwrap().ino()
 }
@@ -760,7 +815,8 @@ fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
         .args(["add", "acme/skills", "--yes"])
         .assert()
         .code(0);
-    // A hand-written `path` may end in `/`, as `check` allows.
+    // A hand-written `path` may end in `/`, as `check` allows; it reads,
+    // and is named, without it.
     let manifest = sandbox.canon().join("skiman.toml");
     let text = read(&manifest);
     assert!(text.contains("path = \"skills/pdf\"\n"));
@@ -779,7 +835,7 @@ fn an_upstream_that_no_longer_has_the_skill_folder_is_refused_naming_it() {
         .code(1)
         .stdout_eq("")
         .stderr_eq(format!(
-            "error: skill pdf: https://github.com/acme/skills.git has no folder `skills/pdf/` at {commit}\n"
+            "error: skill pdf: https://github.com/acme/skills.git has no folder `skills/pdf` at {commit}\n"
         ));
     assert_eq!(tree(sandbox.canon()), before);
 }

@@ -94,6 +94,37 @@ fn an_import_run_again_after_it_finished_fetches_nothing_and_writes_nothing() {
     assert_eq!(world(&sandbox), before);
 }
 
+/// A `url` the rules refuse is refused before the import decides that the
+/// canon already holds it, though the canon records the same one.
+#[test]
+fn an_unsupported_url_is_refused_even_when_the_canon_holds_the_import() {
+    let sandbox = Sandbox::new();
+    let Setup { folder, commit, .. } = setup(&sandbox);
+    follow_main(&folder, &commit);
+    run(&sandbox, &folder, 0);
+    let url = "url = \"https://github.com/acme/skills.git\"";
+    for manifest in [
+        folder.join("skiman.toml"),
+        sandbox.canon().join("skiman.toml"),
+    ] {
+        write(
+            &manifest,
+            read(&manifest).replace(url, "url = \"unsupported\""),
+        );
+    }
+    let before = world(&sandbox);
+
+    let output = import(&sandbox, &folder);
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("toml-value: `url` \"unsupported\" in [skills.pdf.source] is not"),
+        "{stderr}"
+    );
+    assert_eq!(world(&sandbox), before);
+}
+
 #[test]
 fn a_blank_or_missing_shared_body_in_the_canon_is_the_same_as_an_empty_one_in_the_import_folder() {
     let sandbox = Sandbox::new();

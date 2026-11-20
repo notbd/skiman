@@ -11,16 +11,16 @@ use super::{Violation, rule};
 use crate::layout::Layout;
 use crate::tree::{Kind, Tree};
 
-/// One warning per skill folder under `skills/` that lacks any of them.
-pub fn gaps(tree: &dyn Tree) -> io::Result<Vec<Violation>> {
-    let records = Records::read(tree)?;
+/// One warning per skill folder under `skills/` that lacks any of them,
+/// from `records` and `layout` as read from `tree`.
+pub fn gaps(tree: &dyn Tree, records: &Records, layout: &Layout) -> io::Result<Vec<Violation>> {
     let mut out = Vec::new();
     // A `skiman.toml` that does not parse is a violation already; every
     // skill would look as if it had none of the keys.
     if !records.manifest_parsed() {
         return Ok(out);
     }
-    for placed in Layout::read(tree)?.skills() {
+    for placed in layout.skills() {
         let (name, path) = (&placed.name, placed.path());
         if tree.kind(&path)? != Some(Kind::Dir) {
             continue;

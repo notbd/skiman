@@ -41,7 +41,7 @@ use crate::Exit;
 use crate::backup::Backups;
 use crate::canon::Canon;
 use crate::canon_lock::CanonLock;
-use crate::change::{Change, Held, Want};
+use crate::change::{self, Change, Held, Want};
 use crate::commands::prompts;
 use crate::failure::{Failure, finish};
 use crate::fetch::{Cache, RefKind, ResolvedRef};
@@ -57,7 +57,7 @@ use crate::paths::Paths;
 use crate::rules::{self, CONFLICT_MARKERS, FRONTMATTER_RULES, Scope, Violation, rule};
 use crate::skill_md::SkillMd;
 use crate::snapshot::Snapshot;
-use crate::source::{UrlKind, check_url};
+use crate::source::{UrlKind, check_url, folder_path};
 use crate::staging;
 use crate::sync::{self, Output};
 use crate::test_hook;
@@ -207,10 +207,14 @@ impl Current {
                 "[skills.{name}.source] in skiman.toml has no `url`; run `skiman check`"
             )));
         }
-        if let Err(why) = check_url(&source.url) {
+        let url = check_url(&source.url)
+            .err()
+            .map(|why| ("url", &source.url, why));
+        let path = || folder_path(&source.path).err();
+        let problem = url.or_else(|| path().map(|why| ("path", &source.path, why)));
+        if let Some((key, text, why)) = problem {
             return Err(Failure::refused(format!(
-                "[skills.{name}.source] in skiman.toml: the `url` `{}` {why}; nothing was fetched",
-                source.url
+                "[skills.{name}.source] in skiman.toml: the `{key}` `{text}` {why}; nothing was fetched"
             )));
         }
         let entry = Lockfile::load(repo)?
@@ -226,7 +230,7 @@ impl Current {
                 "{skill} is not a folder; run `skiman check`"
             )));
         }
-        refuse_unresolved(repo, &skill, name)?;
+        refuse_unresolved(repo, &skill)?;
         let lock_text = read_text(&repo.lockfile())?.unwrap_or_default();
         Ok(Current {
             skill,
@@ -240,9 +244,9 @@ impl Current {
 
 /// Refuses (exit 1) a skill with unresolved conflicts, printing the
 /// `skiman check` lines.
-fn refuse_unresolved(repo: &Canon, skill: &str, name: &str) -> Result<(), Failure> {
+fn refuse_unresolved(repo: &Canon, skill: &str) -> Result<(), Failure> {
     let tree = WorkingTree::new(repo.root());
-    let conflicts = rules::unresolved_conflicts(&tree, name)
+    let conflicts = rules::unresolved_conflicts(&tree, skill)
         .map_err(|e| Failure::operational(format!("cannot read the canon: {e}")))?;
     if conflicts.is_empty() {
         return Ok(());
@@ -323,12 +327,20 @@ fn prepare(
         Current::read(paths, repo, name)
     })?;
     let mut target = fetch(paths, prompts, name, &current, git_ref)?;
-    // A snapshot that does not match the lock is replaced on either path.
+    // A snapshot that does not match the lock is replaced on either path;
+    // what the write puts in the backup is what `held` finds there.
     if Snapshot::from_folder(&repo.upstream_dir(name))?.tree_hash() != current.entry.snapshot {
         let is = if dry_run { "would be" } else { "is" };
-        target.notes.push(format!(
-            "upstream/{name} did not match skiman.lock; it {is} replaced by the snapshot the lock records, and what it held {is} moved to the backup"
-        ));
+        let want = Want::Folder(target.snapshot.files.clone());
+        match change::held(repo.root(), &format!("upstream/{name}"), &want)? {
+            Held::Nothing => target.notes.push(format!(
+                "upstream/{name} was missing; it {is} written again"
+            )),
+            Held::Other(_) => target.notes.push(format!(
+                "upstream/{name} did not match skiman.lock; it {is} replaced by the snapshot this update writes, and what it held {is} moved to the backup"
+            )),
+            Held::Same | Held::WrongType => {}
+        }
     }
     let merge = if target.entry.snapshot == current.entry.snapshot {
         None

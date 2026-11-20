@@ -125,7 +125,7 @@ fn sync_hook_does_not_write_skiman_manual_through_a_linked_folder_and_names_it()
     );
     assert_eq!(std::fs::read_link(&materialised).unwrap(), foreign);
     assert.code(0).stdout_eq("").stderr_eq(str![[r#"
-error: cannot write [..]/canon/.skiman/skiman-manual: [..]/canon/.skiman/skiman-manual is not a real folder (a link or a file is in the way)
+error: cannot write skiman-manual: [..]/canon/.skiman/skiman-manual is not a real folder (a link or a file is in the way)
 
 "#]]);
 }
@@ -244,7 +244,7 @@ fn the_old_manual_stays_while_the_new_one_cannot_be_written() {
     let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
 
     assert!(
-        out.contains(&format!("cannot write {}", manual.display())),
+        out.contains(&format!("cannot write skiman-manual: {}", manual.display())),
         "{out}"
     );
     assert!(!out.lines().any(|l| l == removes(&old)), "{out}");

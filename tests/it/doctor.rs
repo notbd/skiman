@@ -743,7 +743,7 @@ fn doctor_foresees_sync_when_the_manual_folder_is_a_link() {
     let out = assert_doctor_foresees_sync(&sandbox);
 
     assert!(
-        out.contains(&format!("cannot write {}", manual.display())),
+        out.contains(&format!("cannot write skiman-manual: {}", manual.display())),
         "{out}"
     );
 }

@@ -513,7 +513,8 @@ pub fn reconcile(
 /// there is removed, not followed). A check or removal that fails leaves
 /// the manual as it is.
 fn reconcile_manual(repo: &Canon, output: Output, report: &mut Report) {
-    let cannot = |e: std::io::Error| format!("cannot write {}: {e}", repo.manual_dir().display());
+    // Each error names its path.
+    let cannot = |e: std::io::Error| format!("cannot write {}: {e}", skiman_manual::NAME);
     let write = match skiman_manual::needs_write(repo) {
         Ok(write) => write,
         Err(e) => return report.errors.push(cannot(e)),

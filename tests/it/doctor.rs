@@ -1068,3 +1068,20 @@ fn doctor_and_sync_do_not_wait_on_a_manual_fifo() {
     assert_eq!(sync.status.code(), Some(0), "{sync:?}");
     assert!(read(&file).contains("name: skiman-manual"));
 }
+
+/// `~/.claude` is a link into the canon's git folder, so the tool directory
+/// sync would make lands there: refused by sync and doctor alike, and
+/// doctor's tool line does not say it is made.
+#[test]
+fn doctor_foresees_sync_when_a_missing_tool_directory_is_in_the_canons_git_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let claude = sandbox.presence_dir(Tool::ClaudeCode);
+    std::fs::remove_dir_all(&claude).unwrap();
+    std::os::unix::fs::symlink(sandbox.canon().join(".git/hooks"), &claude).unwrap();
+
+    let out = assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.contains("inside the canon"), "{out}");
+    assert!(!out.contains("next sync creates"), "{out}");
+}

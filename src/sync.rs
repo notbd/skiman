@@ -416,7 +416,7 @@ pub fn reconcile(
         if reconciled.contains(lands) {
             continue;
         }
-        if guarded(linked, dir, lands, &mut report) {
+        if guarded((repo, linked), (dir, lands, false), &mut report) {
             reconciled.push(lands.clone());
             refused.push(lands.clone());
             continue;
@@ -464,7 +464,7 @@ pub fn reconcile(
         };
         // A folder created as a link meanwhile, or one a plan reached past a
         // broken link, is checked where it leads.
-        if real != *lands && guarded(linked, dir, &real, &mut report) {
+        if real != *lands && guarded((repo, linked), (dir, &real, false), &mut report) {
             refused.push(real.clone());
             reconciled.push(real);
             continue;
@@ -491,7 +491,7 @@ pub fn reconcile(
         .filter(|t| t.place == Place::ToolDir && !t.links)
     {
         let (dir, real) = (&target.path, &target.lands);
-        if !reconciled.contains(real) && !guarded(linked, dir, real, &mut report) {
+        if !reconciled.contains(real) && !guarded((repo, linked), (dir, real, false), &mut report) {
             let tool_dir = ToolDir {
                 tool: target.tool,
                 dir,
@@ -666,7 +666,7 @@ fn reconcile_instruction_locations(
         .filter(|t| t.place == Place::Instructions && t.links)
     {
         let (path, lands) = (to.path.clone(), &to.lands);
-        if refused.contains(lands) || guarded(linked, &path, lands, report) {
+        if refused.contains(lands) || guarded((repo, linked), (&path, lands, true), report) {
             refused.push(lands.clone());
             continue;
         }
@@ -683,7 +683,7 @@ fn reconcile_instruction_locations(
             continue;
         }
         // Resolved again here, so checked again where it is written.
-        if location != *lands && guarded(linked, &path, &location, report) {
+        if location != *lands && guarded((repo, linked), (&path, &location, true), report) {
             refused.push(location);
             continue;
         }
@@ -734,7 +734,7 @@ fn reconcile_instruction_locations(
         if reconciled.contains(&location) || refused.contains(&location) {
             continue;
         }
-        if guarded(linked, &path, &location, report) {
+        if guarded((repo, linked), (&path, &location, true), report) {
             refused.push(location);
             continue;
         }
@@ -779,10 +779,57 @@ fn reconcile_instruction_locations(
     }
 }
 
-/// Reports `path` and returns `true` when it resolves to `target` inside a
-/// linked folder: skiman writes nothing there (exit 3).
-fn guarded(linked: &Linked, path: &Path, target: &Path, report: &mut Report) -> bool {
-    let Some(message) = linked.refusal(path, target) else {
+/// Reports `path` and returns `true` when skiman must not write there
+/// (exit 3): it resolves to `target` inside a linked folder, or into the
+/// canon itself or what its records, rules, git and machine-local state use
+/// (`rules::TOP_LEVEL_PATHS`, `linked/`, `.git/`, `.skiman/`), each as
+/// spelled. For a file (an instruction location, `file`) the folder it
+/// lands in counts, so a link beside `skiman.toml` is refused and
+/// `<canon>/.claude/CLAUDE.md` is not.
+fn guarded(
+    (repo, linked): (&Canon, &Linked),
+    (path, target, file): (&Path, &Path, bool),
+    report: &mut Report,
+) -> bool {
+    let canon = repo.root();
+    let folder = if file {
+        target.parent().unwrap_or(target)
+    } else {
+        target
+    };
+    let local = repo.local_dir();
+    let local = local.file_name().and_then(|n| n.to_str());
+    let mut kept = crate::rules::TOP_LEVEL_PATHS
+        .iter()
+        .copied()
+        .chain([linked::LINKED_DIR, ".git"])
+        .chain(local);
+    // The first part below the canon, as spelled; none for the canon itself.
+    let inside = match folder.strip_prefix(canon).map(|rest| rest.iter().next()) {
+        Ok(Some(first)) => kept.any(|k| first == k),
+        Ok(None) => true,
+        Err(_) => false,
+    };
+    let canons = || {
+        let shown = path.display();
+        // No link on the way: the canon sits in the tool's own folder.
+        if path == target {
+            return format!(
+                "{shown} is inside the canon, so skiman writes nothing there; keep the canon in a folder of its own"
+            );
+        }
+        let into = if target == canon {
+            "which is the canon"
+        } else {
+            "inside the canon"
+        };
+        format!(
+            "{shown} resolves to {}, {into}, so skiman writes nothing there; point it elsewhere, then run the command again",
+            target.display()
+        )
+    };
+    let message = linked.refusal(path, target).or_else(|| inside.then(canons));
+    let Some(message) = message else {
         return false;
     };
     report.items.push(Item {

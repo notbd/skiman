@@ -95,20 +95,21 @@ impl Source {
 /// What a recorded `source.url` names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UrlKind {
-    /// An absolute or `~` path.
+    /// An absolute path, `~`, or a path below `~/`.
     Local,
     /// An https:// or ssh:// URL, or `user@host:path`.
     Git,
 }
 
 /// Checks a recorded `source.url` against the spec's Source fetching rules
-/// before anything runs git on it (`import` and `update`; `add` records only
-/// what [`Source::parse`] accepted). The error says why it is refused.
+/// before anything runs git on it (`update`, and the rules, which `import`
+/// applies before it fetches; `add` records only what [`Source::parse`]
+/// accepted). The error says why it is refused.
 pub fn check_url(url: &str) -> Result<UrlKind, String> {
     if let Some(why) = dangerous(url) {
         return Err(why.to_owned());
     }
-    if url.starts_with('/') || url.starts_with('~') {
+    if url.starts_with('/') || url == "~" || url.starts_with("~/") {
         return Ok(UrlKind::Local);
     }
     if url.starts_with("https://") || url.starts_with("ssh://") || scp_path(url).is_some() {

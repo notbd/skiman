@@ -453,6 +453,34 @@ skiman.toml:5: toml-value: `ref_kind` in [skills.pdf.source] must be one of bran
 "#]]);
 }
 
+/// A `url` that `update` and `import` refuse before they fetch breaks the
+/// rules too: what `check` accepts is a source they can read.
+#[test]
+fn a_source_url_that_update_refuses_is_reported() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    third_party(&sandbox, "pdf");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace(
+        "url = \"https://github.com/acme/skills.git\"\n",
+        "url = \"unsupported\"\n",
+    );
+    std::fs::write(&manifest, text).unwrap();
+
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:5: toml-value: `url` "unsupported" in [skills.pdf.source] is not an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path
+
+"#]]);
+
+    // Another user's home is not a local folder `update` reads.
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, text.replace("unsupported", "~bob/skills")).unwrap();
+    check(&sandbox).code(1).stdout_eq(str![[r#"
+skiman.toml:5: toml-value: `url` "~bob/skills" in [skills.pdf.source] is not an https:// or ssh:// git URL, user@host:path, or a local absolute or ~ path
+
+"#]]);
+}
+
 #[test]
 fn invalid_toml_is_reported_with_its_line() {
     let sandbox = Sandbox::new();

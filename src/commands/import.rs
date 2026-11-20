@@ -577,8 +577,7 @@ fn fetch_sources(
             ))
         };
         let url = &source.url;
-        let kind = check_url(url)
-            .map_err(|why| refuse(&format!("unsupported `url` `{url}`: it {why}")))?;
+        let kind = check_url(url).expect("check_folder refused an unsupported `url`");
         if let Some(third) = fetched_before(paths, repo, &name, &source, prompts) {
             thirds.push(third);
             continue;

@@ -10,6 +10,7 @@ use super::secrets::AllowEntry;
 use super::{Scope, Violation, rule};
 use crate::manifest::{LinkedProblem, REF_KINDS, enabled_tools, linked_problems, strings};
 use crate::project::root::is_path_form;
+use crate::source::check_url;
 use crate::tree::Tree;
 
 pub const MANIFEST: &str = "skiman.toml";
@@ -550,6 +551,15 @@ impl Records {
             ));
             return;
         };
+        if let Some(url) = source.get("url").and_then(Item::as_str)
+            && let Err(why) = check_url(url)
+        {
+            out.insert(m.violation(
+                m.key_line(source, "url", line),
+                rule::TOML_VALUE,
+                format!("`url` \"{url}\" in [skills.{name}.source] {why}"),
+            ));
+        }
         let source = m.section(source, format!("[skills.{name}.source]"), line);
         source.unknown_keys(&["url", "path", "ref", "ref_kind", "upstream_name"], out);
         source.value("url", true, "a string", is_string, out);

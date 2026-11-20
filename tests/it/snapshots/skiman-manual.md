@@ -52,6 +52,19 @@ hold links to the canon.
   you run the same command again. If running it again is refused because
   its canon part is done, `skiman sync` finishes it. After an update
   finished that way, look at the skill's diff before you commit it.
+  A `skiman init` that stopped while switching to another canon is the
+  exception: run `skiman init` for the previous canon (ask the user for its
+  path if you do not know it), then run the init that stopped once more,
+  both with the same `--session-hooks` value. Do not adopt or register
+  what the first init, `skiman sync` or `skiman doctor` reports in
+  between: they can name the previous canon's own links as foreign skills.
+  When the previous canon's folder is gone (moved to the new path, say),
+  the first init creates an empty canon there: if it printed
+  `created canon <previous path>` and that folder was not there before the
+  first init, delete it once the second init is done. If a link named
+  `.<name>.skiman-tmp-<number>` is still left in a tool directory or beside
+  a global instruction file, check its target with `readlink`, and delete
+  that link only when it points into the previous canon.
 - After editing files by hand, run `skiman check`. It reports every rule
   violation with file and line. A skill needs `SKILL.md` with YAML frontmatter
   from line 1 holding `name` (lowercase letters, digits and single hyphens, at
@@ -155,7 +168,12 @@ reports the size limit of the enabled agent tools.
    `--dry-run` first shows each new version, the files it would change
    (scripts and executables flagged) and any conflicts, and changes nothing
    in the canon; show that to the user before updating a skill they
-   have not reviewed.
+   have not reviewed. The branch can move on after the dry run: for a git
+   upstream, `skiman update <name> --ref <commit>` with the full commit the
+   dry run showed applies that version and pins the skill to it. While it
+   is pinned, `skiman update` reports it up to date; `skiman list` shows
+   the pin. `--ref <branch>` follows the branch again and applies its
+   newest version at once, so dry-run that first.
 2. Exit code 3 with conflicts: resolve each file the message names by editing
    it in `<CANON>/skills/<name>/`:
    - Text between `<<<<<<< local (skiman)`, `=======` and
@@ -169,6 +187,12 @@ reports the size limit of the enabled agent tools.
      `.skiman-conflicts/`; delete that folder once they are resolved.
 3. Run `skiman check` until it reports no unresolved conflicts. Until then
    skiman refuses commits and further updates of that skill.
+
+If an update stopped part-way after it wrote conflicts, running it again is
+refused until they are resolved. Resolve them and run the update again: it
+may write the same conflicts again, because `skiman.lock` still records the
+old version. Resolve those too, and look at the skill's diff before you
+commit.
 
 ## Describe a skill
 

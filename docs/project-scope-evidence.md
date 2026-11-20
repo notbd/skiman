@@ -1,6 +1,6 @@
 # Project scope: evidence from the real agent tools
 
-Run on 2026-11-06 on the user's Mac, in a throwaway folder outside every git
+Run on 2026-11-06 on the maintainer's Mac, in a throwaway folder outside every git
 repo, with Claude Code 2.1.311 (`claude -p`), codex-cli 0.166.0 (`codex exec
 --skip-git-repo-check`) and agy 1.5.0 (`agy -p`). Each test file or skill
 held a random token that appeared nowhere else; each subject was asked,
@@ -239,8 +239,8 @@ $ agy -p "$Q"
 ```
 
 When `sync --hook` has something to report, agy expects JSON on stdout, so
-it logs one error line and goes on; the report reaches neither the user nor
-the model (measured with `agy -p` only):
+it logs one error line and goes on; the report reaches neither the person using
+agy nor the model (measured with `agy -p` only):
 
 ```
 E1119 02:56:08.690539     713 provider.go:80] session start hook "jsonhook__skiman_SessionStart_0_0" failed: failed to unmarshal result from hook jsonhook__skiman_SessionStart_0_0 via protojson: skiman: $R/home/.gemini/config/skills/zz-a5-demo is occupied by an entry skiman does not …

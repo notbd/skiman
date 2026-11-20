@@ -1,8 +1,8 @@
 # Phase 1 gate results (ticket #3)
 
-Run on 2026-11-04, 04:06 to 04:20 local time, on the user's Mac, against the real agent tools and the real tool directories, instruction locations and settings files. Experiment 6 (`skiman sync --hook` timing) belongs to #5.
+Run on 2026-11-04, 04:06 to 04:20 local time, on the maintainer's Mac, against the real agent tools and the real tool directories, instruction locations and settings files. Experiment 6 (`skiman sync --hook` timing) belongs to #5.
 
-Raw evidence (logs, marker files and backups) is kept outside the repo, because it contains copies of the user's global instructions.
+Raw evidence (logs, marker files and backups) is kept outside the repo, because it contains copies of the maintainer's global instructions.
 
 ## Agent tool versions
 
@@ -36,7 +36,7 @@ Session-start support per agent tool: Claude Code yes; Codex fires on startup an
 ## Method
 
 - Test names used the prefix `skiman-p1-154c4a-` (random suffix `154c4a`). Before creating anything, the names were checked to be free in `~/.claude/skills`, `~/.agents/skills`, `~/.codex/skills`, `~/.claude/settings.json`, `~/.codex/hooks.json` and `~/.claude/CLAUDE.md`.
-- Instruction locations: each one under test was atomically replaced (symlink to a temporary name, then rename) by a symlink to a file holding the user's full original content plus one marker line with its own random token (`CLAUDEMD-3b387932`, `CODEXMD-b478a68f`, `GEMINIMD-…`). Only the location under test was changed; each window lasted 9 to 46 seconds and was restored the same way, after checking the marker file was unchanged (nobody edited it meanwhile).
+- Instruction locations: each one under test was atomically replaced (symlink to a temporary name, then rename) by a symlink to a file holding the maintainer's full original content plus one marker line with its own random token (`CLAUDEMD-3b387932`, `CODEXMD-b478a68f`, `GEMINIMD-…`). Only the location under test was changed; each window lasted 9 to 46 seconds and was restored the same way, after checking the marker file was unchanged (nobody edited it meanwhile).
 - Subjects: fresh sessions with `claude -p`, `codex exec`, `agy -p`, and throwaway T3 Code sessions (Claude Sonnet 5.5, Codex `gpt-6.1-terra` with low effort, Antigravity Gemini 3.8 Flash). Each was asked, without tools, to quote any line starting with `skiman phase-1 marker`, the last line of its global instructions, and the verification token of every `skiman-p1-` skill. The tokens are random and appear only in the test files, so a correct token proves the content reached the session. For Codex the session rollout file was also searched for each token; for Antigravity the CLI log was read.
 - Hook markers: a command that appends the hook's stdin JSON (session id, `source`, transcript path, cwd) to a marker file outside the tool directories and prints nothing: `{ cat; echo; } >> <scratch folder>/markers/<kind>.jsonl 2>/dev/null; exit 0 # skiman-p1-154c4a <kind> marker`. Records were attributed by session id, so sessions started by other agents on the machine did not count.
 
@@ -53,7 +53,7 @@ Test entries: `~/.agents/skills/skiman-p1-154c4a-linked` (symlink to a skill fol
 
 - Skills: every run listed `skiman-p1-154c4a-linked=LINKED-0248495c` (symlinked folder), `-inner` and `-symmd`.
 - Symlinked `GEMINI.md`: the 24000-byte run quoted the marker token `GEMINI24000-669abb22`. Pass.
-- Limit: the files held about 9,800 to 10,600 characters (the user's content is mostly Chinese), yet the log reports the byte length, so the counted unit is bytes. Files up to 24000 bytes load without truncation; from 24001 bytes on, Antigravity truncates and appends its own notice (the injected text is 24020 to 24021 bytes). The binary's built-in documentation says: "Each rule file is capped at 24,000 bytes … and truncated on line boundaries when over the cap." Decision for #10: limit `24000` bytes, inclusive.
+- Limit: the files held about 9,800 to 10,600 characters (the maintainer's content is mostly Chinese), yet the log reports the byte length, so the counted unit is bytes. Files up to 24000 bytes load without truncation; from 24001 bytes on, Antigravity truncates and appends its own notice (the injected text is 24020 to 24021 bytes). The binary's built-in documentation says: "Each rule file is capped at 24,000 bytes … and truncated on line boundaries when over the cap." Decision for #10: limit `24000` bytes, inclusive.
 - Same built-in documentation, not tested here: "Always-on and global rules share a dedicated 20,000-token rules budget … Over-budget rules are demoted from full inline text to file path pointers." Ticket #10 must know this budget exists (see Open items).
 
 Observation, outside the criterion: an Antigravity session started through T3 Code (T3's `antigravity-acp` runtime) listed the test skills (including the symlinked one) but saw no global instructions at all (`MARKER: NONE`, `LASTLINE: NONE`) while `GEMINI.md` held the marker. T3's Antigravity runtime does not load `~/.gemini/GEMINI.md`, whether linked or copied; skiman cannot change that.
@@ -103,7 +103,7 @@ The marker entry (no matcher) was added to `~/.codex/hooks.json` for 04:18 to 04
 
 - Codex runs a hook only after the user trusts it in `/hooks` ([Codex hooks docs](https://developers.openai.com/codex/hooks.md); the binary's strings show the trust record as `hooks.state."…".trusted_hash` in `~/.codex/config.toml`, and this machine's `config.toml` has no `hooks.state` entry). The untrusted entry never ran, on the CLI or through T3 Code. The rollouts confirm that no hook ran at all in the untrusted sessions (no context item with `"hook":true`), while the bypass session has two (from other SessionStart entries already configured).
 - With trust bypassed for one invocation (the flag changes no stored state), SessionStart fires on startup and on resume, with `source` set accordingly.
-- Not done, by instruction: trusting the entry on the user's behalf. So the criterion "a marker command runs" is not met for an entry as skiman would install it, and the trusted case (CLI and T3 Code) is unconfirmed. Resume through T3 Code was not attempted: with an untrusted entry it cannot show anything.
+- Not done, by instruction: trusting the entry on the maintainer's behalf. So the criterion "a marker command runs" is not met for an entry as skiman would install it, and the trusted case (CLI and T3 Code) is unconfirmed. Resume through T3 Code was not attempted: with an untrusted entry it cannot show anything.
 - Codex `fork` source: not observed (`codex fork` is interactive only; not part of the criterion).
 - How to confirm: add a marker entry to `~/.codex/hooks.json`, open interactive `codex`, run `/hooks` and trust the entry, then start `codex exec`, `codex exec resume <id>` and a Codex session in T3 Code, and check the marker file for `startup` and `resume` records with those session ids. Afterwards remove the entry and its trust record.
 - Affected user stories: 10 and 54 (session refresh for Codex), and 4 (`init` adds session-start entries: the user must also trust the Codex entry in `/hooks` before it runs). Ticket that acts: #9.

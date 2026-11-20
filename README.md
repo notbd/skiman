@@ -1,22 +1,56 @@
 # skiman
 
-skiman keeps one person's agent skills and global instruction files in a
-single git repo, the canon, and distributes them to every agent tool that
-reads them (Claude Code, Codex, Antigravity). It also keeps a versioned copy
-of the project instruction files and project skills under the folders you
-register (`AGENTS.md`, `CLAUDE.md`, `.claude/skills/<n>` in each project).
-The canon holds own skills, which you write by hand, and third-party skills,
-which are tracked against their upstream with your local modifications kept
-on update. It also registers linked folders: folders of skills kept outside
-the canon, which skiman distributes and never writes. skiman links each
-skill into the agent tools' tool directories and the shared body of the global
-instructions into each tool's instruction location. Content skiman does not
-own is replaced only by `skiman adopt` and `skiman import`, and the originals
-go to a backup.
+One git repo for your agent skills and global instructions, linked into
+every agent tool that reads them.
+
+Claude Code, Codex and Antigravity each read skills from their own folder
+and global instructions from their own file. Kept by hand, the copies
+drift apart and nothing records what changed. skiman keeps one copy of
+each in a single git repo of yours, the canon, and links it into every
+tool. Git keeps the history; skiman checks each commit and keeps the
+links in step with the canon.
+
+```mermaid
+flowchart LR
+  PF["project files<br/>AGENTS.md, CLAUDE.md,<br/>.claude/skills/..."]
+  LF["linked folders<br/>(outside the canon)"]
+  subgraph canon["canon (a git repo)"]
+    P["projects/<br/>(the mirror)"]
+    I["instructions/shared.md"]
+    S["skills/"]
+    L["linked/"]
+  end
+  TD["tool directories<br/>~/.claude/skills<br/>~/.agents/skills<br/>~/.gemini/config/skills"]
+  IL["instruction locations<br/>~/.claude/CLAUDE.md<br/>~/.codex/AGENTS.md<br/>~/.gemini/GEMINI.md"]
+  PF -- "copied at every sync" --> P
+  P -. "skiman project restore" .-> PF
+  LF -- "linked into" --> L
+  S -- "linked into" --> TD
+  L -- "linked into" --> TD
+  I -- "linked into" --> IL
+```
+
+What the canon tracks:
+
+- Own skills, which you write by hand.
+- Third-party skills, tracked against their upstream: `skiman update`
+  merges a new upstream version and keeps your local modifications.
+- Linked folders: folders of skills kept outside the canon, such as a
+  team's, which skiman distributes and never writes.
+- The shared body of the global instructions, `instructions/shared.md`.
+- A versioned copy of the project instruction files and project skills
+  you adopt under the folders you register (`AGENTS.md`, `CLAUDE.md`,
+  `.claude/skills/<n>` in each project).
+
+Content skiman does not own is replaced only by `skiman adopt` and
+`skiman import`, and the originals go to a backup.
+
+## Requirements
+
+- macOS or Linux; CI runs both. Windows is not supported.
+- Rust 1.99 or later and git 2.43 or later.
 
 ## Install
-
-skiman needs Rust 1.99 or later and git 2.43 or later.
 
 ```sh
 cargo install --locked --path .
@@ -29,11 +63,36 @@ under `skills/` (nested ones too), which older versions read as skill folders
 without a `SKILL.md`. The pre-commit hook of an older version then refuses
 the commit.
 
+## Quick start
+
+1. `skiman init ~/skills --session-hooks claude-code` creates the canon at
+   `~/skills` with `git init`, installs its git hooks and a session-start
+   hook for Claude Code, and links the built-in `skiman-manual` skill and
+   the shared body into every agent tool on this machine. Name your own
+   tools' ids, comma-separated (such as `claude-code,antigravity`; skiman
+   adds no hook for Codex yet, see
+   [Codex and Antigravity](#codex-and-antigravity)), or `none`. A skill
+   folder or global instruction file already there stays as it is: `init`
+   reports it, and exits 3 when an existing file or name is in the way of
+   a link (a global instruction file, or an entry named like a skill
+   skiman links).
+2. `skiman new <name> -d <description>` creates an own skill;
+   `skiman add <owner>/<repo>` installs third-party skills. Either links
+   the new skills into every tool directory.
+3. Edit the skill's `SKILL.md`, or `instructions/shared.md`, in the canon.
+   The tools see the edit at once, through the links.
+4. Commit in the canon, as in any git repo. The pre-commit hook runs
+   `skiman check --staged` and refuses a commit that breaks a rule.
+
+Skills or global instructions already in your agent tools?
+`skiman import --guide` prints how to bring them in. To try skiman first
+without touching them, see [Verify the install](#verify-the-install).
+
 ## Usage
 
 | Command | What it does |
 |---|---|
-| `skiman init <path> --session-hooks <ids>\|none` | Create or reuse a canon, install its git hooks and session-start hooks, then sync. |
+| `skiman init <path> --session-hooks <ids>\|none` | Create or reuse a canon, install its git hooks and session-start hooks (`<ids>` comma-separated), then sync. |
 | `skiman new <name> -d <description>` | Create an own skill (`--group`). |
 | `skiman add <source>` | Install third-party skills from a git URL, a GitHub tree URL, `<owner>/<repo>` or a local folder (`--skill`, `--all`, `--name`, `--group`, `--ref`, `--dry-run`, `--yes`). |
 | `skiman update [names]` | Merge each third-party skill's new upstream version with its local modifications (`--ref` for one skill, `--dry-run`). |
@@ -137,9 +196,39 @@ replaces existing content. Files a project's own git repo tracks are left to
 that repo. Design and evidence: [docs/project-scope.md](docs/project-scope.md),
 [docs/adr/0006-project-items-in-copy-mode.md](docs/adr/0006-project-items-in-copy-mode.md).
 
+## How skiman works
+
+skiman changes files in the canon and never commits: you review a change
+with `git status` and `git diff` and commit it yourself. The canon's git
+hooks run `skiman check --staged` before each commit, and
+`skiman sync --hook` after each commit, merge, checkout and rebase; a
+session-start hook runs `skiman sync --hook` when an agent session
+starts. `sync --hook` prints only what it has not reported before and
+always exits 0, so it never blocks git or a session.
+
 Without a terminal, every flag that would otherwise be asked for is required
 (exit 2). Exit codes: 0 success, 1 rule violation or refused input, 2 usage
 error, 3 needs attention, 4 operational error.
+
+### What skiman keeps on each machine
+
+Outside the canon, in `${XDG_STATE_HOME:-~/.local/state}/skiman/`:
+
+- `backups/<timestamp>/`: what one command replaced or removed. skiman
+  never deletes what a backup holds, and each project edit that sync
+  copies into the mirror adds one, so delete old ones by hand.
+- `cache/`: one bare git repo per upstream URL, holding every commit `add`,
+  `update` and `import` fetched, whole even when the source names one
+  folder of the repo. Nothing prunes it; delete `cache/` to free the
+  space, and the next command that needs a commit fetches it again.
+
+`skiman add`, `skiman update` and `skiman import` read a local source
+folder as it is at that moment. A program that changes the folder while
+skiman reads it, say by replacing a file with a symlink, can make skiman
+copy a file from outside it, so add or import only from folders you
+trust.
+
+### Codex and Antigravity
 
 skiman adds no session-start hook for Codex yet: Codex runs only the hooks
 you have trusted with its `/hooks` command. Run `skiman sync` before you
@@ -185,3 +274,27 @@ Evidence: [docs/project-scope-evidence.md](docs/project-scope-evidence.md).
 
    Or run `skiman init <path> --session-hooks none` on a real canon path,
    then `skiman doctor`.
+
+## Uninstall
+
+1. Set `enabled = []` under `[tools]` in the canon's `skiman.toml`, then run
+   `skiman sync`: it removes every link it made in the tool directories and
+   instruction locations. Do not commit this edit while other machines use
+   the canon: their next sync would remove their links too.
+2. Run `skiman init <canon> --session-hooks none` to remove the
+   session-start hooks.
+3. Step 1 removed every link, so copy back what you still want:
+   `instructions/shared.md` to each instruction location (such as
+   `~/.claude/CLAUDE.md`), and the folder of each skill under `skills/`
+   into the tool directories (such as `~/.claude/skills/<name>`).
+4. Delete the git hooks skiman installed in the canon, the files that
+   `grep -l 'Managed by skiman' <canon>/.git/hooks/*` lists. Without
+   skiman, its pre-commit hook refuses every commit.
+5. Delete `${XDG_CONFIG_HOME:-~/.config}/skiman/`, and
+   `${XDG_STATE_HOME:-~/.local/state}/skiman/` once you no longer need its
+   backups.
+6. Run `cargo uninstall skiman`.
+7. In the canon, run `git restore skiman.toml` to drop the edit of step 1.
+
+Project files and linked folders stay as they are, and the canon stays a
+plain git repo.

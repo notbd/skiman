@@ -10,12 +10,12 @@ a work folder such as `~/Work/Acme-Corp`, project skills such as
 `~/Work/Acme-Corp/acme-core/skills/`, the `AGENTS.md` of code projects
 that their own git repo does not track. They have no history and no backup.
 
-The user registers one or more folders (project roots). skiman finds every
+You register one or more folders (project roots). skiman finds every
 project instruction file and project skill under them and keeps a copy of
 each in the canon (the mirror). The project files stay real files and
 stay where they are; the mirror follows them automatically, so the canon
-holds their history once the user commits it. The project is written only when the user asks, and
-whatever skiman replaces on either side goes to a backup first.
+holds their history once you commit it. The project is written only when
+you ask, and whatever skiman replaces on either side goes to a backup first.
 
 | Requirement | Where |
 |---|---|
@@ -44,34 +44,17 @@ Two decisions came out of measuring the real tools against two earlier drafts:
    overwrote project content that existed nowhere else, and a conflicted
    `git pull` could write conflict markers into a project. Now sync only
    copies project → mirror; mirror → project happens only through
-   `skiman project restore`, which the user runs and which backs up what it
+   `skiman project restore`, which you run and which backs up what it
    replaces.
 
 The analogy is a backup tool with history: the project is the live copy, the
 mirror is the versioned record, `restore` brings a version back. Projects
 never depend on skiman: uninstall it and every project works unchanged.
+The mirror lives in the canon rather than in a second store, so the same
+rules and hooks check it.
 
-## Terms (added to GLOSSARY.md)
-
-"Local" is avoided: the glossary lists "local skill" as a term to avoid, and
-Claude Code uses "local" for personal uncommitted files (`CLAUDE.local.md`).
-
-- **Project root** (项目根目录): a folder registered as `[projects.<id>]`;
-  skiman discovers project items under it.
-- **Project instruction file** (项目 instruction file): a file an agent tool
-  loads when it works inside a project folder, such as `AGENTS.md` there, or
-  a `.md` file anywhere under a project-level `.claude/rules/`.
-- **Project skill** (项目 skill): a skill folder in a project-level skill
-  directory, such as `<project>/.claude/skills/<name>`.
-- **Project item**: the unit skiman copies: one project instruction file or
-  one project skill folder.
-- **Mirror** (镜像): `projects/<root id>/<path relative to the root>` in the
-  canon: the recorded copy of a project item.
-- **Anchor**: the project folder an item belongs to: the item's path without
-  its pattern (`proj` for `proj/AGENTS.md` and `proj/.claude/skills/x`).
-- **Synced hash** (同步 hash): per machine, the content hash both sides had
-  when skiman last saw them equal; it tells which side changed. (Not "base":
-  the glossary reserves that word's meaning for the upstream snapshot.)
+Terms (project root, project item, mirror, anchor, synced hash) are
+defined in [GLOSSARY.md](../GLOSSARY.md).
 
 ## Design
 
@@ -101,8 +84,6 @@ only. Project items are not per tool, so `[tools].enabled` does not apply.
 path = "~/Work/Acme-Corp"
 exclude = ["_archive", "项目甲/草稿"]
 ```
-
-(An example: this change configures nothing on the user's machine.)
 
 - `<id>` follows the skill name rule; `path` is absolute or starts with `~/`
   (`project add` writes `~/` when under `HOME`). The path is shared by every
@@ -151,7 +132,7 @@ canon/
 
 `<root>/<rel>` on disk pairs with `projects/<id>/<rel>`: path arithmetic, so
 the mirror tree is the only record of what is managed, laid out exactly as
-the user sees it on disk.
+you see it on disk.
 
 `projects-synced.toml` holds, per root id, the root's realpath and one synced
 hash per item (a folder uses the existing tree hash). It sits in machine
@@ -213,20 +194,24 @@ roots.
 | 10 | D absent, M exists, S set | report "deleted in the project" (`restore` or `eject`) | 3 |
 | 11 | D exists, M absent, S set | report "deleted in the mirror" (`adopt <item>` or `eject`) | 3 |
 | 12 | D = M | record S if it differs | 0 |
-| 13 | S set, M = S, D ≠ S | copy D to M (old M to a backup), S = D; if D fails the safety rules (a skill whose `SKILL.md` was renamed away, a secret), report "blocked" with the violations and keep M | 0 / 3 |
+| 13 | S set, M = S, D ≠ S | copy D to M (old M to a backup), S = D; if D breaks a rule of gate 2 (a secret, conflict markers), report "blocked" with the violations and keep M | 0 / 3 |
 | 14 | S set, D = S, M ≠ S | report "mirror changed" (`restore <item>` writes it to the project, `adopt <item>` keeps the project's) | 3 |
 | 15 | otherwise (both differ from S, or S none and D ≠ M) | report "conflict" (`adopt <item>` or `restore <item>`) | 3 |
 
-`D` = disk, `M` = mirror, `S` = synced hash; first matching row wins. A
-missing intermediate folder (such as `.claude/skills` under an existing
-anchor) means D is absent, not occupied. Rows 10, 11, 14 and 15 end with one
+`D` = disk, `M` = mirror, `S` = synced hash; first matching row wins. A D
+that skiman cannot take as it is (a file over the size limit, a skill
+folder without `SKILL.md`, a symlink inside a skill) is reported "blocked"
+in place of rows 9 to 15, whatever M and S are; `restore <item>` writes the
+mirror's version, if there is one, over it. A missing intermediate folder
+(such as `.claude/skills` under an existing anchor) means D is absent, not
+occupied. Rows 10, 11, 14 and 15 end with one
 paste-ready command line naming every affected item.
 
 Sync writes only the mirror (row 13) and machine state. It never writes a
 project folder and never spawns git. `sync --hook` prints only new reports
 and always exits 0, as today; nothing in the project part prints outside
 that mechanism. Cost at session start: both sides of every item
-are read and hashed (measured on the user's two roots: 100 files, 835 KB,
+are read and hashed (measured on two real roots: 100 files, 835 KB,
 3.5 ms of hashing); a file over the size limit is reported "blocked" from
 its `lstat` size without being read.
 
@@ -338,8 +323,8 @@ locks, staging, backups under machine state.
   previous mirror content is in a backup.
 - **Edited in the mirror, or the mirror reset by git** (`git restore`,
   `git pull` from another machine): row 14, reported; nothing is written to
-  the project until the user picks `restore` or `adopt` for that item.
-- **Both edited**: conflict; the user picks a side per item, the other side
+  the project until you pick `restore` or `adopt` for that item.
+- **Both edited**: conflict; you pick a side per item, the other side
   goes to a backup.
 - **Deleted in the project**: reported; `restore <item>` brings it back,
   `eject` stops managing it.
@@ -358,6 +343,12 @@ locks, staging, backups under machine state.
 - **Another machine**: sync there copies nothing into the project; `restore
   <root>` writes every item whose project folder exists and whose file is
   missing; differing files show as conflicts, never overwritten.
+- **A project folder that Dropbox, OneDrive or iCloud syncs between
+  machines**: an edit reaches the second machine's project before the
+  canon's push does, so its sync copies the same change into its mirror,
+  and `git pull` there refuses ("Your local changes to the following files
+  would be overwritten by merge"). Commit first, then `git pull --rebase`:
+  git skips the local commit as already applied.
 - **An item later committed to a project's own git repo**: `doctor` reruns
   gate 1 on managed items and reports "now tracked by <repo>; eject it".
 
@@ -377,8 +368,8 @@ locks, staging, backups under machine state.
   step with its fix, managed items now tracked by a project repo, how many
   candidates are not adopted yet, how many items exist only in the mirror
   (row 7), leftover staging folders, mirror paths git ignores, and whether
-  `projects/` has uncommitted changes (skiman never commits; mirror changes
-  are committed by the user like any other change). While a git operation
+  `projects/` has uncommitted changes (skiman never commits; you commit
+  mirror changes like any other change). While a git operation
   in the canon pauses sync, doctor still reports each item.
 - `skiman-manual`: project items are real files, edit them in place; after
   creating a project `AGENTS.md`, rules file or project skill under a root,
@@ -390,21 +381,13 @@ locks, staging, backups under machine state.
 - `README.md`, `GLOSSARY.md`, ADR 0006 (project items: copy mode, one
   automatic direction, git-tracked items stay with their repo).
 
-### Decisions made for the user
-
-- Mirrors live in the canon, not a second store: one source of truth,
-  checked by the same rules and hooks. The user already keeps work-related
-  instructions there. Registering a root is an explicit act, and
-  `project add` says where content goes.
-- Company skills kept in a folder of their own are not project items: they
-  are registered as a linked folder (ADR 0010). `skill_dirs`, which mirrored
-  them, is retired (ADR 0013).
-
 ## Not in scope
 
 - Writing the project automatically (see Model); a file-watching daemon.
 - Three-way merging of conflicts: the synced hash is a hash only.
 - Files tracked by another git repo.
+- Company skills kept in a folder of their own: register the folder as a
+  linked folder (ADR 0010).
 - Files a project item points to (`@` import targets, documents named in
   `AGENTS.md`): only the item itself is mirrored.
 - `.claude/agents/` and other non-instruction locations (one data entry each
@@ -415,39 +398,3 @@ locks, staging, backups under machine state.
 - Claude Code loading a mirror folder's instructions when a session reads a
   file there (measured; avoided by not opening mirror files, see
   `skiman-manual`).
-
-## Test plan (`tests/project_*.rs`, sandbox harness)
-
-1. `project add` and root validation: every refusal, also for a hand-edited
-   `skiman.toml`.
-2. Discovery: every pattern (including `.claude/rules/**/*.md`); skill folders not entered; dir symlinks not followed; `.git`, `node_modules`, linked worktree, a `CACHEDIR.TAG` cache, `exclude` (name, path),
-   canon and state dir skipped; alias links ignored.
-3. Gates: tracked file, skill with one tracked file, git failure, secret,
-   symlink inside a skill, missing `SKILL.md`, git conflict markers; a skill
-   without frontmatter `name` is adopted.
-4. Adopt: new file, rules file and skill copied byte-identically with the
-   synced hash recorded; project untouched; `--dry-run` writes nothing; rerun is a no-op;
-   folder adopt never replaces; exact-path adopt of rows 11, 14, 15 with the
-   old mirror in a backup.
-5. Sync: every row of the state table, including the pause on each git
-   state, an oversized file, a `path` changed under recorded synced hashes,
-   hook mode printing each report once, the set-aside check catching a
-   concurrent change, a failing backup step keeping the set-aside copy, and
-   a tool-directory link into a former `skill_dirs` folder reported as foreign.
-6. Restore: missing items under a folder; exact-path replace with the old
-   project content in a backup; nothing replaced under a folder; a path the
-   project repo tracks is not written; a failing step 4 or 5 keeps the
-   original; leftover staging folder handling; a folder restore does not undo a
-   deletion; every project command refuses during a canon merge.
-7. Eject: item, folder, root (table removed), with mirror or project gone.
-8. Check: `project-path`, a retired `skill_dirs` key, the gate 2 rules (a skill
-   without frontmatter `name` passes).
-9. Doctor: the project section.
-
-Plus an end-to-end run with the real tools on a throwaway root: adopt, edit
-the project file through Claude Code, sync, see the mirror change.
-
-## Acceptance
-
-- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo test` (the CI job).

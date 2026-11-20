@@ -5,9 +5,10 @@
 use super::{COMPANY, append_manifest, contents, folder};
 use crate::support::{Sandbox, init, skill_md, tree, write};
 
-fn doctor(sandbox: &Sandbox) -> String {
+/// Runs `skiman doctor`, asserts exit `exit` and empty stderr, returns stdout.
+fn doctor(sandbox: &Sandbox, exit: i32) -> String {
     let output = sandbox.skiman().arg("doctor").output().unwrap();
-    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(output.status.code(), Some(exit), "{output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
     String::from_utf8(output.stdout).unwrap()
 }
@@ -41,7 +42,7 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
     let home = sandbox.home();
     let before = (tree(sandbox.canon()), tree(&home), contents(&[&company]));
 
-    let stdout = doctor(&sandbox);
+    let stdout = doctor(&sandbox, 3);
 
     assert_line(
         &stdout,
@@ -79,6 +80,13 @@ fn doctor_reports_each_linked_folder_and_its_problems() {
             linked.join("tools").display()
         ),
     );
+    // `tools` is not offered while `linked/tools` is in the way, so the next
+    // sync removes its skill's links.
+    for tool in crate::support::Tool::ALL {
+        let beta = sandbox.tool_dir(tool).join("beta");
+        let line = format!("{}: the next `skiman sync` removes it", beta.display());
+        assert_line(&stdout, &line);
+    }
     assert_eq!(
         (tree(sandbox.canon()), tree(&home), contents(&[&company])),
         before
@@ -94,7 +102,7 @@ fn doctor_reports_linked_that_is_a_file() {
     let linked = sandbox.canon().join("linked");
     std::fs::write(&linked, "x").unwrap();
 
-    let stdout = doctor(&sandbox);
+    let stdout = doctor(&sandbox, 3);
 
     assert_line(
         &stdout,
@@ -123,7 +131,7 @@ fn doctor_counts_no_project_item_inside_a_linked_folder() {
         .assert()
         .code(0);
 
-    let stdout = doctor(&sandbox);
+    let stdout = doctor(&sandbox, 0);
 
     assert!(
         stdout.contains("project root work: 1 project item(s) are not adopted yet"),
@@ -141,7 +149,7 @@ fn doctor_counts_no_project_item_inside_a_linked_folder() {
 
 /// A mirrored project item that came to overlap a linked folder gets no
 /// `project restore` suggestion, which would refuse: `doctor` names it as
-/// skipped, once, by the same overlap rule.
+/// not synced, once, in sync's words, though discovery sees it too.
 #[test]
 fn doctor_suggests_no_restore_for_a_mirrored_item_inside_a_linked_folder() {
     let sandbox = Sandbox::new();
@@ -177,7 +185,7 @@ fn doctor_suggests_no_restore_for_a_mirrored_item_inside_a_linked_folder() {
     std::fs::remove_dir_all(&inside).unwrap();
     append_manifest(&sandbox, COMPANY);
 
-    let stdout = doctor(&sandbox);
+    let stdout = doctor(&sandbox, 0);
 
     for path in [company.join("AGENTS.md"), inside.join("AGENTS.md")] {
         let shown = path.display().to_string();
@@ -187,8 +195,9 @@ fn doctor_suggests_no_restore_for_a_mirrored_item_inside_a_linked_folder() {
                 .any(|l| l.contains(&shown) && l.contains("restore")),
             "{stdout}"
         );
+        // Sync's own words, once: the item is mirrored, so sync's plan names it.
         let skipped = format!(
-            "project root work: {shown} is skipped: it overlaps linked folder `company` ({}), whose content skiman never copies or writes",
+            "{shown} is not synced: it overlaps linked folder `company` ({}), whose content skiman never copies or writes",
             company.display()
         );
         assert_eq!(

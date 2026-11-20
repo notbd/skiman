@@ -104,8 +104,10 @@ pub fn fetch_command(git_dir: &Path, prompts: Prompts) -> Command {
 /// A read-only git query in the user's repository at `dir` (`git -C <dir>`):
 /// the user's config stays in effect (ignore files, `core.excludesFile`), the
 /// calling git process's environment does not, and [`SAFE_CONFIG`] applies.
+/// `--no-optional-locks` keeps `git status` from refreshing the index.
 pub fn query_command(dir: &Path) -> Command {
     let mut cmd = Command::new("git");
+    cmd.arg("--no-optional-locks");
     for var in LOCAL_ENV_VARS {
         cmd.env_remove(var);
     }

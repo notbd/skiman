@@ -45,10 +45,11 @@ fn code_list(items: &[&str]) -> String {
         .join(", ")
 }
 
-/// Whether [`materialise`] writes `.skiman/skiman-manual/SKILL.md` (it is
-/// missing or its content differs), read-only. Fails when a folder on the
-/// way is not a real folder: a link there could lead the write out of the
-/// repo. Its one read is the one `materialise` makes anyway, so a sync whose
+/// Whether `.skiman/skiman-manual/SKILL.md` is to be written (it is missing
+/// or its content differs), read-only. Fails when a folder on the way is
+/// not a real folder (a link there could lead the write out of the repo)
+/// or `SKILL.md` itself is a folder; a link to a folder is replaced, as any
+/// other entry there. Its one read is the one `materialise` makes anyway, so a sync whose
 /// manual is current reads nothing more; it never waits for a writer (a
 /// FIFO there reads as empty, so it is replaced), and reads no more than one
 /// byte past the manual (`/dev/zero` ends too).
@@ -68,27 +69,20 @@ pub fn needs_write(repo: &Canon) -> io::Result<bool> {
     let most = wanted.len() as u64 + 1;
     match read.and_then(|f| f.take(most).read_to_end(&mut current)) {
         Ok(_) => Ok(current != wanted.as_bytes()),
+        // Only `SKILL.md` itself as a folder blocks the write.
+        Err(e)
+            if e.kind() == io::ErrorKind::IsADirectory
+                && !std::fs::symlink_metadata(&file).is_ok_and(|m| m.is_symlink()) =>
+        {
+            Err(io::Error::other(format!("{} is a folder", file.display())))
+        }
         Err(_) => Ok(true),
     }
 }
 
-/// Writes `.skiman/skiman-manual/SKILL.md` when [`needs_write`] says so,
-/// and removes the manual's folder from before its rename (derived content,
-/// so no backup; a link there is removed, not followed). Fails without
-/// writing when [`needs_write`] fails.
+/// Writes `.skiman/skiman-manual/SKILL.md`; sync calls it when
+/// [`needs_write`] says so.
 pub fn materialise(repo: &Canon) -> io::Result<()> {
-    let write = needs_write(repo)?;
-    let retired = repo.retired_manual_dir();
-    let removed = match std::fs::symlink_metadata(&retired) {
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(&retired),
-        Ok(_) => std::fs::remove_file(&retired),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e),
-    };
-    removed.map_err(|e| io::Error::other(format!("cannot remove {}: {e}", retired.display())))?;
-    if !write {
-        return Ok(());
-    }
     let dir = repo.manual_dir();
     std::fs::create_dir_all(&dir)?;
     fsutil::write_derived(&dir.join("SKILL.md"), content(repo).as_bytes())

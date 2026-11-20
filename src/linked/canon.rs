@@ -147,26 +147,6 @@ pub fn reconcile(linked: &Linked, output: Output, report: &mut Report) -> BTreeS
     confirmed
 }
 
-/// The problems `<canon>/linked` has for distribution, read-only (for
-/// `doctor`): `linked` that is not a folder, and a `linked/<id>` of a read
-/// folder that is not a link.
-pub fn problems(linked: &Linked) -> Vec<String> {
-    let dir = linked.dir();
-    match std::fs::symlink_metadata(dir) {
-        Ok(meta) if !meta.is_dir() => return vec![blocked(dir, &meta)],
-        Ok(_) => {}
-        Err(_) => return Vec::new(),
-    }
-    linked
-        .folders
-        .iter()
-        .filter(|f| matches!(f.state, State::Read(_)))
-        .map(|f| (dir.join(&f.id), &f.id))
-        .filter(|(path, _)| std::fs::symlink_metadata(path).is_ok_and(|m| !m.is_symlink()))
-        .map(|(path, id)| occupied(&path, id))
-        .collect()
-}
-
 /// `<canon>/linked` (`dir`, metadata `meta`) is a link or a file.
 fn blocked(dir: &Path, meta: &std::fs::Metadata) -> String {
     let what = if meta.is_symlink() {

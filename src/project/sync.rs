@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 
 use super::command;
 use super::content::Content;
-use super::git::operation_in_progress;
 use super::item::{Item, MIRROR_DIR, managed};
 use super::root::{self, Root};
 use super::state::{State, classify};
@@ -23,14 +22,22 @@ use crate::staging::Staging;
 use crate::sync::{Change, Item as Report, ItemKind, Output, Report as SyncReport};
 use crate::tree::WorkingTree;
 
-/// Reconciles every project root into `report`. An item that overlaps a
-/// linked folder is skipped; while a linked folder cannot be read, nothing
-/// is (`crate::linked`). For [`Output::Plan`] nothing is written: a mirror
-/// write is only a change in the report, and the synced hashes are not saved.
+/// The roots [`root::resolve`] gives: usable, or why not.
+pub type Roots = [Result<Root, root::Problem>];
+
+/// Reconciles every project root into `report`: `roots` from
+/// [`root::resolve`] when the caller has them (doctor), else resolved here
+/// once nothing pauses project sync. An item that overlaps a linked folder
+/// is skipped; while a linked folder cannot be read, or a git operation
+/// runs in the canon, nothing is (`crate::linked`). For [`Output::Plan`]
+/// nothing is written: a mirror write is only a change in the report, and
+/// the synced hashes are not saved; a pause does not stop it judging the
+/// items, read-only, and the roots that cannot be used are not reported
+/// (doctor says what each one needs).
 pub fn reconcile(
     paths: &Paths,
     repo: &Canon,
-    (manifest, linked): (&Manifest, &Linked),
+    (manifest, linked, roots): (&Manifest, &Linked, Option<&Roots>),
     output: Output,
     report: &mut SyncReport,
 ) {
@@ -38,7 +45,9 @@ pub fn reconcile(
         return;
     }
     let scope = repo.root().join(MIRROR_DIR).display().to_string();
-    if let Some(folder) = linked.unreadable() {
+    let plan = output == Output::Plan;
+    let unreadable = linked.unreadable();
+    if let Some(folder) = unreadable {
         report.items.push(note(
             &scope,
             repo.root().join(MIRROR_DIR),
@@ -49,19 +58,36 @@ pub fn reconcile(
             ),
             false,
         ));
-        return;
+        if !plan {
+            return;
+        }
+        // A plan still says what it sees of the items, read-only.
+        report.items.push(note(
+            &scope,
+            repo.root().join(MIRROR_DIR),
+            "paused-seen",
+            format!(
+                "any project items listed below are as they are now; which of them overlap linked folder `{}` is known, and their fixes work, once it can be read",
+                folder.id
+            ),
+            false,
+        ));
     }
-    if let Some(operation) = operation_in_progress(repo.root()) {
+    // A plan still says what the items need: the user settles them anyway.
+    let operation = super::operation(repo);
+    if let Some(operation) = &operation {
         report.items.push(note(
             &scope,
             repo.root().join(MIRROR_DIR),
             "paused",
             format!(
-                "the canon {operation}, so project items are not synced; finish that, then run `skiman sync`"
+                "{operation}, so project items are not synced; finish that, then run `skiman sync`"
             ),
             false,
         ));
-        return;
+        if !plan {
+            return;
+        }
     }
     let mut synced = Synced::load(paths);
     let configured: Vec<String> = manifest.projects().into_iter().map(|p| p.id).collect();
@@ -70,28 +96,28 @@ pub fn reconcile(
         repo,
         backups: Backups::new(paths),
         blocked: false,
-        plan: output == Output::Plan,
+        plan,
+        paused: operation.is_some() || unreadable.is_some(),
     };
-    for resolved in root::resolve(paths.home(), repo, manifest) {
+    let resolved_here;
+    let roots = match roots {
+        Some(roots) => roots,
+        None => {
+            resolved_here = root::resolve(paths.home(), repo, manifest);
+            &resolved_here
+        }
+    };
+    for resolved in roots {
         match resolved {
-            Err(problem) => {
-                let fix = if problem.absent {
-                    String::new()
-                } else {
-                    format!("; fix [projects.{}] in skiman.toml", problem.id)
-                };
-                report.items.push(note(
-                    &scope,
-                    repo.root().join(MIRROR_DIR).join(&problem.id),
-                    "root",
-                    format!(
-                        "project root `{}` is skipped: {}{fix}",
-                        problem.id, problem.message
-                    ),
-                    false,
-                ));
-            }
-            Ok(root) => reconcile_root(&root, linked, &mut synced, &mut writer, report),
+            Err(_) if plan => {}
+            Err(problem) => report.items.push(note(
+                &scope,
+                repo.root().join(MIRROR_DIR).join(&problem.id),
+                "root",
+                problem.skipped(),
+                false,
+            )),
+            Ok(root) => reconcile_root(root, linked, &mut synced, &mut writer, report),
         }
     }
     if !writer.plan
@@ -108,6 +134,8 @@ pub fn reconcile(
 #[derive(Default)]
 struct Pending {
     not_here: usize,
+    /// Row 7, which sync is silent on; [`Output::Plan`] counts them.
+    away: usize,
     deleted_in_project: Vec<PathBuf>,
     deleted_in_mirror: Vec<PathBuf>,
     changed: Vec<PathBuf>,
@@ -148,7 +176,24 @@ fn reconcile_root(
             let message = format!("{} is not synced: {why}", disk.display());
             report
                 .items
-                .push(note(&scope, disk, "linked", message, false));
+                .push(note(&scope, disk.clone(), "linked", message, false));
+            // While paused a plan still says what it sees of both sides, read-only;
+            // no `project adopt` or `restore` takes an item that overlaps.
+            if writer.plan && writer.paused {
+                let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
+                match classify(repo, root, item, recorded.as_deref()) {
+                    Ok(e) if e.state == State::Conflict => {
+                        let message = format!("{}: it and its mirror both changed", disk.display());
+                        report
+                            .items
+                            .push(note(&scope, disk, "conflict", message, true));
+                    }
+                    Ok(_) => {}
+                    Err(e) => report
+                        .errors
+                        .push(format!("cannot read {}: {e}", disk.display())),
+                }
+            }
             continue;
         }
         let recorded = synced.get(root, &item.rel).map(|(_, h)| h.clone());
@@ -173,15 +218,17 @@ fn reconcile_root(
         };
         match &evaluated.state {
             State::Forgotten => synced.remove(root, &item.rel),
-            State::Nothing | State::NotHere | State::New => {}
+            State::NotHere => pending.away += 1,
+            State::Nothing | State::New => {}
             State::InSync => {
                 if let Some(hash) = &evaluated.disk_hash {
                     synced.set(root, &item.rel, item.kind, hash);
                 }
             }
             State::NotOnMachine => pending.not_here += 1,
+            // Sync names a gone folder once; a plan names each item, as doctor did.
             State::ProjectGone => {
-                if gone_anchors.insert(item.anchor_dir(root)) {
+                if gone_anchors.insert(item.anchor_dir(root)) || writer.plan {
                     say(report, "gone");
                 }
             }
@@ -206,7 +253,7 @@ fn reconcile_root(
             }
             // What `Writer::mirror` checks before it writes, read-only.
             State::ProjectChanged if writer.plan => {
-                if writer.blocked {
+                if writer.paused || writer.blocked {
                 } else if let Some(why) = crate::staging::blocked(&swap_parent(repo).0, repo.root())
                 {
                     writer.blocked = true;
@@ -243,6 +290,13 @@ fn reconcile_root(
                 command("restore", std::slice::from_ref(&root.dir))
             ),
         );
+    }
+    if writer.plan && pending.away > 0 {
+        let (id, n) = (&root.id, pending.away);
+        let message = format!(
+            "project root {id}: {n} item(s) are only in the mirror: their project folders are not on this machine"
+        );
+        all("away", message);
     }
     if pending.deleted_in_project.len() > 1 {
         all(
@@ -283,6 +337,9 @@ struct Writer<'a> {
     blocked: bool,
     /// [`Output::Plan`]: nothing is written.
     plan: bool,
+    /// A git operation in the canon, or a linked folder that cannot be read,
+    /// pauses project sync; a plan still classifies.
+    paused: bool,
 }
 
 impl Writer<'_> {

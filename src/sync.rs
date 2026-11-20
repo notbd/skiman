@@ -239,6 +239,9 @@ pub struct Report {
     pub items: Vec<Item>,
     /// I/O failures (exit 4); sync goes on with the other entries.
     pub errors: Vec<String>,
+    /// For [`Output::Plan`]: the tool-directory entries sync leaves alone
+    /// without a report (not owned, foreign or in the way).
+    pub left: Vec<(PathBuf, Entry)>,
 }
 
 impl Report {
@@ -302,7 +305,7 @@ pub fn run_with(
             let linked = Linked::read(paths.home(), repo, &manifest);
             let previous_canon = previous.map(|p| p.root.clone());
             let mut report = reconcile(paths, repo, &manifest, &linked, previous_canon, output);
-            let records = (&manifest, &linked);
+            let records = (&manifest, &linked, None);
             crate::project::sync::reconcile(paths, repo, records, output, &mut report);
             report
         }
@@ -375,15 +378,7 @@ pub fn reconcile(
 ) -> Report {
     let home = paths.home();
     let mut report = Report::default();
-    let manual = match output {
-        Output::Plan => skiman_manual::needs_write(repo).map(|_| ()),
-        _ => skiman_manual::materialise(repo),
-    };
-    if let Err(e) = manual {
-        report
-            .errors
-            .push(format!("cannot write {}: {e}", repo.manual_dir().display()));
-    }
+    reconcile_manual(repo, output, &mut report);
     let kept = kept_names(paths, repo, manifest, linked);
     linked::canon::report_folders(linked, &mut report);
     let offered = linked::canon::reconcile(linked, output, &mut report);
@@ -401,34 +396,45 @@ pub fn reconcile(
     let targets = write_targets(home, manifest);
     // Tool directories that resolve to the same real directory are reconciled once.
     let mut reconciled = Vec::new();
+    // Those of them the guard refused: sync never makes them.
+    let mut refused = Vec::new();
     for target in targets
         .iter()
         .filter(|t| t.place == Place::ToolDir && t.links)
     {
-        let (tool, dir, through) = (target.tool, &target.path, &target.lands);
-        if reconciled.contains(through) || guarded(linked, dir, through, &mut report) {
-            reconciled.push(through.clone());
+        let (tool, dir, lands) = (target.tool, &target.path, &target.lands);
+        if reconciled.contains(lands) {
+            continue;
+        }
+        if guarded(linked, dir, lands, &mut report) {
+            reconciled.push(lands.clone());
+            refused.push(lands.clone());
             continue;
         }
         let plan = output == Output::Plan;
         // The tool directory itself may be missing; its parent chain is never replaced.
-        let missing = match missing_dir(through) {
-            Ok(missing) => missing,
-            // Making it fails, and that says why.
-            Err(_) if !plan => true,
-            Err(why) => {
-                let dir = dir.display();
-                report
-                    .errors
-                    .push(format!("cannot use {dir} as a tool directory: {why}"));
-                continue;
-            }
+        let (missing, through) = match missing_dir(lands) {
+            Ok(missing) => (missing, lands.clone()),
+            // Links on the way that lead nowhere until sync makes a folder for
+            // an earlier tool: sync makes that folder first, so this is that
+            // folder, or one it can make once every broken link leads somewhere.
+            Err(why) => match plan.then(|| followed(lands, &reconciled, &refused)) {
+                Some(Some(to)) if reconciled.contains(&to) => continue,
+                Some(Some(to)) => (true, to),
+                _ => {
+                    let dir = dir.display();
+                    report
+                        .errors
+                        .push(format!("cannot use {dir} as a tool directory: {why}"));
+                    continue;
+                }
+            },
         };
         // Created and written where the guard checked, never through `dir`
         // again: a link on its way may change meanwhile.
         if missing && !plan {
             test_hook::at("sync", &format!("create:{}", dir.display()));
-            if let Err(e) = std::fs::create_dir_all(through) {
+            if let Err(e) = std::fs::create_dir_all(&through) {
                 report
                     .errors
                     .push(format!("cannot create {}: {e}", dir.display()));
@@ -446,8 +452,10 @@ pub fn reconcile(
                 continue;
             }
         };
-        // A folder created as a link meanwhile is checked where it leads.
-        if real != *through && guarded(linked, dir, &real, &mut report) {
+        // A folder created as a link meanwhile, or one a plan reached past a
+        // broken link, is checked where it leads.
+        if real != *lands && guarded(linked, dir, &real, &mut report) {
+            refused.push(real.clone());
             reconciled.push(real);
             continue;
         }
@@ -487,6 +495,46 @@ pub fn reconcile(
     let context = (repo, linked, &ownership);
     reconcile_instruction_locations(&targets, context, output, &mut report);
     report
+}
+
+/// Writes `skiman-manual` when it is missing or out of date, once
+/// [`skiman_manual::needs_write`] passes, and first removes the manual's
+/// folder from before its rename (derived content, so no backup; a link
+/// there is removed, not followed). A check or removal that fails leaves
+/// the manual as it is.
+fn reconcile_manual(repo: &Canon, output: Output, report: &mut Report) {
+    let cannot = |e: std::io::Error| format!("cannot write {}: {e}", repo.manual_dir().display());
+    let write = match skiman_manual::needs_write(repo) {
+        Ok(write) => write,
+        Err(e) => return report.errors.push(cannot(e)),
+    };
+    let retired = repo.retired_manual_dir();
+    match std::fs::symlink_metadata(&retired) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            let retired = retired.display();
+            return report.errors.push(format!("cannot remove {retired}: {e}"));
+        }
+        Ok(meta) => {
+            let remove = || {
+                let gone = if meta.is_dir() {
+                    std::fs::remove_dir_all(&retired)
+                } else {
+                    std::fs::remove_file(&retired)
+                };
+                gone.map(|()| true)
+            };
+            if make(output, report, (Change::Removed, &retired), remove).is_none() {
+                return;
+            }
+        }
+    }
+    if write
+        && output != Output::Plan
+        && let Err(e) = skiman_manual::materialise(repo)
+    {
+        report.errors.push(cannot(e));
+    }
 }
 
 /// Makes one write of a reconcile with `write` and records `change` at
@@ -968,10 +1016,14 @@ fn reconcile_tool_dir(
                 kind: foreign(&name, tool.id, &at, &meta, repo, linked),
                 path,
             }),
-            (_, Some((name, _))) => {
+            (entry, Some((name, _))) => {
                 handled.insert(*name);
+                if output == Output::Plan && matches!(entry, Entry::Moved(_)) {
+                    report.left.push((path.clone(), entry));
+                }
                 report.items.push(occupied(name, &at, path));
             }
+            (entry, None) if output == Output::Plan => report.left.push((path, entry)),
             (Entry::ManagedElsewhere | Entry::NotASkill | Entry::Moved(_), None) => {}
         }
     }
@@ -1038,6 +1090,33 @@ fn remove(
 ) {
     let relink = || fsutil::relink(link, real_dir, current, None);
     make(output, report, (Change::Removed, path), relink);
+}
+
+/// Where `dir` lands once every link on its way that leads nowhere is mended
+/// by a folder in `reconciled` that sync makes for an earlier tool (not one
+/// of `refused`, which it never makes); `None` when every link leads
+/// somewhere (or cannot be told), or any broken link still leads nowhere
+/// afterwards.
+fn followed(dir: &Path, reconciled: &[PathBuf], refused: &[PathBuf]) -> Option<PathBuf> {
+    let resolved = linked::path::resolve(dir);
+    let broken: Vec<_> = resolved
+        .links
+        .iter()
+        .filter(|link| matches!(link.try_exists(), Ok(false)))
+        .collect();
+    if broken.is_empty() {
+        return None;
+    }
+    let made = |to: &Path| {
+        let mut made = reconciled.iter().filter(|d| !refused.contains(d));
+        made.any(|made| made.starts_with(to))
+    };
+    let mended = |link: &&PathBuf| {
+        std::fs::read_link(link)
+            .ok()
+            .is_some_and(|target| made(&linked::path::resolve(&link.with_file_name(target)).path))
+    };
+    broken.iter().all(mended).then_some(resolved.path)
 }
 
 /// Whether the tool directory `dir` is missing and can be made (`true`) or

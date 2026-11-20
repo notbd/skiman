@@ -207,6 +207,89 @@ fn the_first_sync_after_the_rename_gives_managing_skills_to_a_linked_skill() {
     assert_doctor_quiet_about_the_manual(&sandbox);
 }
 
+/// The doctor line for a removal of `path` the next sync makes.
+fn removes(path: &Path) -> String {
+    format!("{}: the next `skiman sync` removes it", path.display())
+}
+
+/// doctor foresees the first sync after the rename: it names the old
+/// manual's folder and links as removed and the new links as made, and
+/// leaves the old folder there; the sync then does exactly that.
+#[test]
+fn doctor_foresees_the_first_sync_after_the_rename() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == removes(&old)), "{out}");
+    for tool in Tool::ALL {
+        let link = sandbox.tool_dir(tool).join("managing-skills");
+        assert!(out.lines().any(|l| l == removes(&link)), "{out}");
+    }
+    assert!(!exists(&old), "the old manual folder is left");
+}
+
+/// The new manual's folder is a link: the manual cannot be written, so the
+/// old one stays too, and doctor says what sync says.
+#[test]
+fn the_old_manual_stays_while_the_new_one_cannot_be_written() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    let manual = sandbox.canon().join(".skiman/skiman-manual");
+    let elsewhere = sandbox.root().join("elsewhere");
+    std::fs::create_dir(&elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &manual).unwrap();
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(
+        out.contains(&format!("cannot write {}", manual.display())),
+        "{out}"
+    );
+    assert!(!out.lines().any(|l| l == removes(&old)), "{out}");
+    assert!(exists(old.join("SKILL.md")), "the old manual folder went");
+}
+
+/// A linked skill named `managing-skills` takes the old manual's name in
+/// the first sync after the rename; doctor foresees each retarget.
+#[test]
+fn doctor_foresees_a_linked_skill_taking_the_old_manuals_name() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    write_skill(&sandbox.home().join("work/company"), "managing-skills");
+    let manifest = sandbox.canon().join("skiman.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let text = format!("{text}\n[linked.company]\npath = \"~/work/company\"\n");
+    std::fs::write(&manifest, text).unwrap();
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == removes(&old)), "{out}");
+    for tool in Tool::ALL {
+        let link = sandbox.tool_dir(tool).join("managing-skills");
+        let line = format!("{}: the next `skiman sync` retargets it", link.display());
+        assert!(out.lines().any(|l| l == line), "{out}");
+    }
+}
+
+/// The old manual's place holds a link: sync removes the link, not what
+/// it leads to.
+#[test]
+fn the_old_manual_as_a_link_goes_without_what_it_leads_to() {
+    let sandbox = Sandbox::new();
+    let old = old_manual(&sandbox);
+    let kept = sandbox.root().join("kept");
+    std::fs::rename(&old, &kept).unwrap();
+    std::os::unix::fs::symlink(&kept, &old).unwrap();
+
+    let out = crate::doctor::assert_doctor_foresees_sync(&sandbox);
+
+    assert!(out.lines().any(|l| l == removes(&old)), "{out}");
+    assert!(std::fs::symlink_metadata(&old).is_err());
+    assert!(exists(kept.join("SKILL.md")), "what the link led to went");
+}
+
 #[test]
 fn sync_skips_a_tool_whose_presence_directory_is_missing_and_creates_a_missing_tool_directory() {
     let sandbox = Sandbox::builder()

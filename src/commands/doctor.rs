@@ -1,17 +1,25 @@
 //! `skiman doctor`: every problem of the setup in one place (stories 59, 79).
 //! One line per fact on stdout: the canon, the recorded binary, git,
 //! the git hooks and session-start hooks, each agent tool's locations and
-//! aliasing, then every entry skiman does not own (foreign entries on every
-//! run, occupied paths, dangling links, managed-elsewhere content), refused
-//! instruction locations, override and added instruction files, unresolved
-//! conflicts, leftover records and tmp leftovers.
+//! aliasing; then what the next sync does and reports, from sync's own
+//! decisions (`sync::Output::Plan`): each link it makes, retargets or
+//! removes and each project change it mirrors (`<path>: the next \`skiman
+//! sync\` links it`), each past the read-only checks sync makes before it
+//! writes, and everything it reports (foreign entries every time); then
+//! dangling links, managed-elsewhere content, override and added
+//! instruction files, unresolved conflicts, leftover records, tmp leftovers
+//! and the project scope. Not foreseen: what only the write shows
+//! (permissions, a full disk, a change in between), nor what a link made
+//! by hand into what skiman manages leads to once sync changed it.
 //!
-//! Read-only: never writes to the canon, its `.skiman/` folder, tool
-//! directories or machine state, and never takes the canon lock for longer
-//! than a test of whether it is held. Exit 0 whenever the diagnosis ran.
+//! Writes no file, and never takes the canon lock for longer than a test of
+//! whether it is held; its git queries take no optional lock, so the index
+//! stays as it is (git still runs the user's clean and process filters).
+//! Exit 3 when a line needs the user (what would make `skiman sync` exit
+//! 3, and each line [`problem!`] prints), 4 when something it checks
+//! cannot be read or used, otherwise 0.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Exit;
@@ -23,18 +31,27 @@ use crate::failure::{Failure, finish};
 use crate::git;
 use crate::git_hooks::{self, Hook};
 use crate::layout::Layout;
-use crate::linked::{self, Holder, Linked, State};
+use crate::linked::{Linked, State};
 use crate::manifest::Manifest;
-use crate::ownership::{Entry, Ownership};
+use crate::ownership::Entry;
 use crate::paths::Paths;
+use crate::project::{item, root};
 use crate::rules::{self, Scope, rule};
 use crate::session_hooks;
-use crate::sync::{self, Item, ItemKind};
+use crate::sync::{self, Change, Output};
 use crate::tools::{AgentTool, ManagedElsewhere, TOOLS};
 use crate::tree::{Kind, Tree, WorkingTree};
 
 pub fn run() -> Exit {
     finish(doctor())
+}
+
+/// `out!` for a line that needs the user: `exit` (an `&mut Exit`) becomes 3.
+macro_rules! problem {
+    ($exit:expr, $($arg:tt)*) => {{
+        *$exit = $exit.combine(Exit::NeedsAttention);
+        out!($($arg)*)
+    }};
 }
 
 fn doctor() -> Result<Exit, Failure> {
@@ -46,49 +63,78 @@ fn doctor() -> Result<Exit, Failure> {
     let root = repo.root().display().to_string();
     let io = |e| Failure::operational(format!("cannot read {root}: {e}"));
 
+    let exit = &mut Exit::Success;
     out!("canon: {root}");
     if config.binary.exists() {
         out!("recorded binary: {}", config.binary.display());
     } else {
-        out!(
+        problem!(
+            exit,
             "recorded binary: {} no longer exists; the git hooks and session-start hooks call it, so run `skiman init {root}` again with the skiman you use now",
             config.binary.display()
         );
     }
-    report_git();
-    report_git_hooks(&repo, &config.binary);
+    report_git(exit);
+    report_git_hooks(&repo, &config.binary, exit);
     let installed: Vec<&AgentTool> = sync::installed_tools(home, &manifest).collect();
-    report_session_hooks(home, &installed, &root, &config.binary);
-    report_tools(home, &manifest, &installed);
+    report_session_hooks(home, &installed, (&root, &config.binary), exit);
     let linked = Linked::read(home, &repo, &manifest);
-    let kept = sync::kept_names(&paths, &repo, &manifest, &linked);
-    report_linked(&repo, &manifest, &linked, &kept).map_err(io)?;
-    report_entries(&paths, &repo, &manifest, &linked, &kept, &installed).map_err(io)?;
-    report_instruction_locations(&paths, &repo, &installed);
-    report_canon(&repo).map_err(io)?;
+    let plan = sync::reconcile(&paths, &repo, &manifest, &linked, None, Output::Plan);
+    report_tools(home, &manifest, &installed);
+    report_distribution(home, (&linked, &plan), exit);
+    report_instruction_files(home, &installed);
+    report_canon(&repo, exit).map_err(io)?;
     report_tmp(&repo).map_err(io)?;
-    report_projects(&paths, &repo, &manifest, &linked);
-    Ok(Exit::Success)
+    report_projects(&paths, (&repo, &manifest, &linked), exit);
+    Ok(*exit)
 }
 
-fn report_git() {
+/// Prints what a sync plan would do and report; `exit` takes the exit the
+/// sync would have.
+fn report_plan(report: &sync::Report, exit: &mut Exit) {
+    for (change, path) in &report.changes {
+        let verb = match change {
+            Change::Linked => "links",
+            Change::Retargeted => "retargets",
+            Change::Removed => "removes",
+            Change::Mirrored => "mirrors",
+        };
+        out!("{}: the next `skiman sync` {verb} it", path.display());
+    }
+    for item in &report.items {
+        out!("{}", item.message());
+    }
+    for error in &report.errors {
+        out!("{error}");
+    }
+    *exit = exit.combine(report.exit());
+}
+
+fn report_git(exit: &mut Exit) {
     let (major, minor) = git::MIN_VERSION;
     match git::installed_version() {
-        Err(_) => out!("git: not found; skiman requires git {major}.{minor} or newer"),
+        Err(_) => problem!(
+            exit,
+            "git: not found; skiman requires git {major}.{minor} or newer"
+        ),
         Ok((version, found)) if found < git::MIN_VERSION => {
-            out!("git: version {version} is too old; skiman requires {major}.{minor} or newer")
+            problem!(
+                exit,
+                "git: version {version} is too old; skiman requires {major}.{minor} or newer"
+            )
         }
         Ok((version, _)) => out!("git: version {version}"),
     }
 }
 
-fn report_git_hooks(repo: &Canon, binary: &Path) {
+fn report_git_hooks(repo: &Canon, binary: &Path, exit: &mut Exit) {
     let root = repo.root().display();
     match git_hooks::status(repo.root(), binary) {
-        Err(failure) => out!("git hooks: unknown: {}", failure.message),
+        Err(failure) => problem!(exit, "git hooks: unknown: {}", failure.message),
         Ok(git_hooks::Status::NotAGitRepo) => {
             out!("git hooks: {root} is not in a git repo, so it has no git hooks")
         }
+        // Not a problem: doctor cannot tell whether the hooks there hold the lines.
         Ok(git_hooks::Status::HooksPathElsewhere(dir)) => out!(
             "git hooks: core.hooksPath points to {}, so skiman's git hooks do not run; add skiman's lines to the hooks there by hand",
             dir.display()
@@ -103,23 +149,33 @@ fn report_git_hooks(repo: &Canon, binary: &Path) {
                 match hook {
                     Hook::Installed => {}
                     Hook::Missing => {
-                        out!("git hook {path}: missing; run `skiman init {root}` again")
+                        problem!(
+                            exit,
+                            "git hook {path}: missing; run `skiman init {root}` again"
+                        )
                     }
-                    Hook::Outdated => out!(
+                    Hook::Outdated => problem!(
+                        exit,
                         "git hook {path}: skiman's, but not what `skiman init` writes now; run `skiman init {root}` again"
                     ),
+                    // Not a problem: doctor cannot tell whether it holds the line.
                     Hook::Foreign => out!(
                         "git hook {path}: not skiman's; add this line to it by hand: {}",
                         git_hooks::line_to_add(&name, binary)
                     ),
-                    Hook::Unreadable(e) => out!("git hook {path}: cannot read it: {e}"),
+                    Hook::Unreadable(e) => problem!(exit, "git hook {path}: cannot read it: {e}"),
                 }
             }
         }
     }
 }
 
-fn report_session_hooks(home: &Path, installed: &[&AgentTool], root: &str, binary: &Path) {
+fn report_session_hooks(
+    home: &Path,
+    installed: &[&AgentTool],
+    (root, binary): (&str, &Path),
+    exit: &mut Exit,
+) {
     for tool in installed.iter().filter(|t| t.session_hook.is_some()) {
         let id = tool.id;
         let (path, status) = session_hooks::status(home, tool, binary);
@@ -133,16 +189,20 @@ fn report_session_hooks(home: &Path, installed: &[&AgentTool], root: &str, binar
             (session_hooks::Status::Missing, None) => out!(
                 "{prefix} not installed in {path}; add it with `skiman init {root} --session-hooks {id}`"
             ),
-            (session_hooks::Status::Different, _) => out!(
+            (session_hooks::Status::Different, _) => problem!(
+                exit,
                 "{prefix} {path} holds a skiman hook that differs from what `skiman init` writes now; rewrite it with `skiman init {root} --session-hooks {id}`"
             ),
-            (session_hooks::Status::Unusable(reason), _) => out!("{prefix} unknown: {reason}"),
+            (session_hooks::Status::Unusable(reason), _) => {
+                problem!(exit, "{prefix} unknown: {reason}")
+            }
         }
     }
 }
 
 /// Each known tool: installed with its locations (and which other tool's
 /// they alias), enabled without a presence directory, or not enabled.
+/// Whether sync can use or make them is said by its plan, not here.
 fn report_tools(home: &Path, manifest: &Manifest, installed: &[&AgentTool]) {
     let enabled = manifest.enabled_tools();
     let mut dirs: Vec<(PathBuf, &str)> = Vec::new();
@@ -161,15 +221,16 @@ fn report_tools(home: &Path, manifest: &Manifest, installed: &[&AgentTool]) {
             continue;
         }
         let dir = tool.tool_dir(home);
-        let dir_note = match dir.canonicalize() {
-            Err(_) => " (missing; the next sync creates it)".to_owned(),
-            Ok(real) => alias_note(&mut dirs, real, tool.id, "directory"),
-        };
+        let dir_note = dir
+            .canonicalize()
+            .ok()
+            .map(|real| alias_note(&mut dirs, real, tool.id, "directory"))
+            .unwrap_or_default();
         let file = home.join(tool.instruction_file);
-        let file_note = match sync::instruction_location(&file) {
-            Err(e) => format!(" (cannot resolve its folder: {e})"),
-            Ok(location) => alias_note(&mut locations, location, tool.id, "location"),
-        };
+        let file_note = sync::instruction_location(&file)
+            .ok()
+            .map(|at| alias_note(&mut locations, at, tool.id, "location"))
+            .unwrap_or_default();
         out!(
             "{}: installed; tool directory {}{dir_note}; instruction file {}{file_note}",
             tool.id,
@@ -195,16 +256,13 @@ fn alias_note<'a>(
     }
 }
 
-/// Each linked folder, and what sync would report about it: missing,
-/// breaking a rule, not read, a skill that loses its name or is withheld,
-/// and `linked/` or `linked/<id>` in the way. Nothing when no folder is
-/// registered.
-fn report_linked(
-    repo: &Canon,
-    manifest: &Manifest,
-    linked: &Linked,
-    kept: &BTreeMap<String, Holder>,
-) -> std::io::Result<()> {
+/// Each linked folder, then what the next `skiman sync` does and reports,
+/// decided by sync's own reconcile without writing ([`sync::Output::Plan`]):
+/// the links it would make, retarget or remove, everything it would report
+/// (foreign entries every time), then what it leaves alone without a word:
+/// moves cut short, dangling links and managed-elsewhere content. `exit`
+/// takes the exit that sync would have.
+fn report_distribution(home: &Path, (linked, report): (&Linked, &sync::Report), exit: &mut Exit) {
     for folder in &linked.folders {
         if let (State::Read(_), Some(path)) = (&folder.state, &folder.path) {
             let names = Linked::skill_names(folder);
@@ -217,96 +275,22 @@ fn report_linked(
             };
             out!("linked folder {}: {} ({skills})", folder.id, path.display());
         }
-        for item in linked::canon::folder_items(linked, folder) {
-            out!("{}", item.message());
-        }
     }
-    let layout = Layout::read(&WorkingTree::new(repo.root()))?;
-    let (_, collisions) = linked.names(&layout, kept, |_| true);
-    for collision in collisions {
-        out!("{}", collision.message());
-    }
-    for withheld in linked::withheld(repo.root(), &layout, manifest, kept) {
-        out!("{}", withheld.message());
-    }
-    for problem in linked::canon::problems(linked) {
-        out!("{problem}");
-    }
-    Ok(())
-}
-
-/// Every tool-directory entry skiman does not own, classified like sync
-/// does, plus the managed-elsewhere paths that exist.
-fn report_entries(
-    paths: &Paths,
-    repo: &Canon,
-    manifest: &Manifest,
-    linked: &Linked,
-    kept: &BTreeMap<String, Holder>,
-    installed: &[&AgentTool],
-) -> std::io::Result<()> {
-    let mut ignored = sync::Report::default();
-    let wanted: BTreeMap<String, PathBuf> =
-        sync::wanted_entries(repo, manifest, linked, kept, &|_| true, &mut ignored)?
-            .into_iter()
-            .map(|w| (w.name, w.target))
-            .collect();
-    let home = paths.home();
-    let ownership = Ownership::new(paths, repo, None);
+    report_plan(report, exit);
     let mut managed = BTreeSet::new();
-    let mut reconciled = Vec::new();
-    for tool in installed {
-        let dir = tool.tool_dir(home);
-        let Ok(real) = dir.canonicalize() else {
-            continue;
-        };
-        if reconciled.contains(&real) {
-            continue;
-        }
-        let scope = real.display().to_string();
-        let item = |path: PathBuf, kind| Item {
-            scope: scope.clone(),
-            path,
-            kind,
-        };
-        let mut handled = BTreeSet::new();
-        for (name, meta) in entries(&dir)? {
-            let path = dir.join(&name);
-            let want = name.to_str().filter(|n| wanted.contains_key(*n));
-            if let Some(n) = want {
-                handled.insert(n.to_owned());
+    for (path, entry) in &report.left {
+        match entry {
+            Entry::Moved(copy) => out!("{}", backup::cut_short(path, copy)),
+            Entry::ManagedElsewhere => {
+                managed.insert(path.clone());
             }
-            match (ownership.classify(&real, &name, &meta), want) {
-                (Entry::Owned(_), _) => {}
-                (Entry::Moved(copy), _) => out!("{}", backup::cut_short(&path, &copy)),
-                (_, Some(n)) => {
-                    let kind = sync::occupied(n, &path, &wanted[n]);
-                    out!("{}", item(path, kind).message());
-                }
-                (Entry::Foreign, None) => {
-                    let kind = sync::foreign(&name, tool.id, &path, &meta, repo, linked);
-                    out!("{}", item(path, kind).message());
-                }
-                (Entry::ManagedElsewhere, None) => {
-                    managed.insert(path);
-                }
-                (Entry::NotASkill, None) if meta.is_symlink() && !path.exists() => out!(
-                    "dangling link {} -> {}: skiman does not own it and leaves it alone; delete it if nothing needs it",
-                    path.display(),
-                    std::fs::read_link(&path)?.display()
-                ),
-                (Entry::NotASkill, None) => {}
-            }
+            Entry::NotASkill if path.is_symlink() && !path.exists() => out!(
+                "dangling link {} -> {}: skiman does not own it and leaves it alone; delete it if nothing needs it",
+                path.display(),
+                std::fs::read_link(path).unwrap_or_default().display()
+            ),
+            _ => {}
         }
-        // Another spelling of a wanted name (APFS is case-insensitive) holds it.
-        for (name, target) in wanted.iter().filter(|(n, _)| !handled.contains(*n)) {
-            let path = dir.join(name);
-            if std::fs::symlink_metadata(&path).is_ok() {
-                let kind = sync::occupied(name, &path, target);
-                out!("{}", item(path, kind).message());
-            }
-        }
-        reconciled.push(real);
     }
     for tool in TOOLS {
         for entry in tool.managed_elsewhere {
@@ -324,47 +308,12 @@ fn report_entries(
             path.display()
         );
     }
-    Ok(())
 }
 
-/// The entries of `dir` with their own metadata, sorted by name; none when `dir` is missing.
-fn entries(dir: &Path) -> std::io::Result<Vec<(OsString, std::fs::Metadata)>> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        out.push((entry.file_name(), std::fs::symlink_metadata(entry.path())?));
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(out)
-}
-
-/// Instruction locations skiman does not own, and files a tool loads instead of them.
-fn report_instruction_locations(paths: &Paths, repo: &Canon, installed: &[&AgentTool]) {
-    let home = paths.home();
-    let ownership = Ownership::new(paths, repo, None);
-    let mut seen = Vec::new();
+/// Files a tool loads instead of, or on top of, its instruction location.
+fn report_instruction_files(home: &Path, installed: &[&AgentTool]) {
     for tool in installed {
         let path = home.join(tool.instruction_file);
-        match sync::instruction_location(&path) {
-            Err(e) => out!(
-                "instruction file {}: cannot resolve its folder: {e}",
-                path.display()
-            ),
-            Ok(location) if seen.contains(&location) => {}
-            Ok(location) => {
-                if let Ok(meta) = std::fs::symlink_metadata(&location)
-                    && ownership.owned_instruction(&location, &meta).is_none()
-                {
-                    let item = Item {
-                        scope: location.display().to_string(),
-                        path: path.clone(),
-                        kind: ItemKind::RefusedLocation,
-                    };
-                    out!("{}", item.message());
-                }
-                seen.push(location);
-            }
-        }
         for rel in tool.instruction_overrides {
             let file = home.join(rel);
             if std::fs::symlink_metadata(&file).is_ok() {
@@ -391,12 +340,12 @@ fn report_instruction_locations(paths: &Paths, repo: &Canon, installed: &[&Agent
 }
 
 /// Unresolved conflicts in every skill folder, and leftover records.
-fn report_canon(repo: &Canon) -> std::io::Result<()> {
+fn report_canon(repo: &Canon, exit: &mut Exit) -> std::io::Result<()> {
     let tree = WorkingTree::new(repo.root());
     for placed in Layout::read(&tree)?.skills() {
         if tree.kind(&placed.path())? == Some(Kind::Dir) {
             for violation in rules::unresolved_conflicts(&tree, &placed.name)? {
-                out!("{violation}");
+                problem!(exit, "{violation}");
             }
         }
     }
@@ -406,7 +355,7 @@ fn report_canon(repo: &Canon) -> std::io::Result<()> {
     };
     for violation in rules::check(&tree, &scope)? {
         if violation.rule == rule::LEFTOVER_RECORD {
-            out!("{violation}");
+            problem!(exit, "{violation}");
         }
     }
     Ok(())
@@ -443,39 +392,42 @@ fn report_tmp(repo: &Canon) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The project scope: every root, every item that is not in step with
-/// its fix, managed items a project repo now tracks, candidates not adopted
-/// yet and those skipped as overlapping a linked folder, items only the mirror holds, staging folders left by an earlier
-/// write, mirror paths git ignores, and uncommitted mirror changes.
-fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Linked) {
-    use crate::project::state::{State, classify};
-    use crate::project::{command, discover, git as pgit, item, root, synced::Synced};
+/// The project scope: every root, and why one cannot be used (not on this
+/// machine 0, a wrong configuration 3, a path that cannot be read 4), also
+/// while project sync is paused; then what the next sync reports about the
+/// items, judged by project sync itself on the same roots (also while a git
+/// operation in the canon pauses it); then managed items a project repo
+/// now tracks, candidates not adopted yet and those skipped as overlapping
+/// a linked folder, staging folders left by an earlier write, mirror paths
+/// git ignores, and uncommitted mirror changes.
+fn report_projects(
+    paths: &Paths,
+    (repo, manifest, linked): (&Canon, &Manifest, &Linked),
+    exit: &mut Exit,
+) {
+    use crate::project::{command, discover, git as pgit, synced::Synced};
     if manifest.projects().is_empty() {
         return;
     }
-    if let Some(operation) = pgit::operation_in_progress(repo.root()) {
-        out!("project items: not synced while the canon {operation}");
-    }
     let synced = Synced::load(paths);
     let tree = WorkingTree::new(repo.root());
-    let skip = discover::never_entered(paths, repo);
+    let resolved = root::resolve(paths.home(), repo, manifest);
     let mut mirror_paths = Vec::new();
-    for resolved in root::resolve(paths.home(), repo, manifest) {
-        let root = match resolved {
+    for root in &resolved {
+        let root = match root {
             Ok(root) => root,
             Err(problem) => {
-                out!("project root {}: skipped: {}", problem.id, problem.message);
+                let severity = match problem.kind {
+                    root::Kind::Absent => Exit::Success,
+                    root::Kind::Invalid => Exit::NeedsAttention,
+                    root::Kind::Unreadable => Exit::OperationalError,
+                };
+                *exit = exit.combine(severity);
+                out!("{}", problem.skipped());
                 continue;
             }
         };
-        let items = match item::managed(&tree, &root, &synced) {
-            Ok(items) => items,
-            Err(e) => {
-                out!("project root {}: cannot read its mirror: {e}", root.id);
-                continue;
-            }
-        };
-        let in_mirror = item::read_mirror(&tree, &root)
+        let in_mirror = item::read_mirror(&tree, root)
             .map(|m| m.items)
             .unwrap_or_default();
         mirror_paths.extend(in_mirror.iter().map(item::Item::mirror_rel));
@@ -485,38 +437,31 @@ fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Li
             root.dir.display(),
             in_mirror.len()
         );
-        let (mut not_here, mut on_disk) = (0, Vec::new());
-        // Neither mirrored nor restored, by the rule discovery uses below.
-        let mut skipped = Vec::new();
-        for item in &items {
-            if let Some(why) = linked.item_overlap(&item.disk(&root)) {
-                skipped.push((item.disk(&root), why));
-                continue;
-            }
-            let recorded = synced.get(&root, &item.rel).map(|(_, h)| h.clone());
-            let Ok(evaluated) = classify(repo, &root, item, recorded.as_deref()) else {
-                out!("{}: cannot read it", item.disk(&root).display());
-                continue;
-            };
-            if evaluated.disk_hash.is_some() {
-                on_disk.push(item.disk(&root));
-            }
-            match evaluated.state {
-                State::InSync | State::ProjectChanged => {}
-                State::NotHere => not_here += 1,
-                State::Forgotten | State::Nothing | State::New => {}
-                _ => out!("{}", evaluated.message(&root, item)),
-            }
-        }
-        if not_here > 0 {
-            out!(
-                "project root {}: {not_here} item(s) are only in the mirror: their project folders are not on this machine",
-                root.id
-            );
-        }
+    }
+    let mut report = sync::Report::default();
+    let records = (manifest, linked, Some(resolved.as_slice()));
+    crate::project::sync::reconcile(paths, repo, records, Output::Plan, &mut report);
+    report_plan(&report, exit);
+    // `project adopt` refuses then, so doctor does not point to it.
+    let paused = crate::project::paused_by(repo, linked);
+    if let Some(why) = &paused {
+        out!("project items not adopted yet are not counted: {why}");
+    }
+    let skip = discover::never_entered(paths, repo);
+    for root in resolved.iter().flatten() {
+        let Ok(items) = item::managed(&tree, root, &synced) else {
+            continue;
+        };
+        // Sync's plan names a managed item that overlaps a linked folder.
+        let on_disk: Vec<_> = items
+            .iter()
+            .map(|i| i.disk(root))
+            .filter(|d| linked.item_overlap(d).is_none() && std::fs::symlink_metadata(d).is_ok())
+            .collect();
         for (disk, tracking) in pgit::tracking_repos(&on_disk) {
             if let Ok(Some(top)) = tracking {
-                out!(
+                problem!(
+                    exit,
                     "{}: now tracked by the git repo {}; leave it to that repo with: {}",
                     disk.display(),
                     top.display(),
@@ -524,26 +469,24 @@ fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Li
                 );
             }
         }
-        let found = discover::discover(&root, &skip, linked);
-        for (item, why) in &found.skipped {
-            let disk = item.disk(&root);
-            if !skipped.iter().any(|(path, _)| *path == disk) {
-                skipped.push((disk, why.clone()));
-            }
+        let found = discover::discover(root, &skip, linked);
+        for error in &found.errors {
+            out!("{error}");
+            *exit = exit.combine(Exit::OperationalError);
         }
-        skipped.sort();
-        for (disk, why) in &skipped {
+        let adopted = |rel: &str| items.iter().any(|m| m.rel == rel);
+        for (item, why) in found.skipped.iter().filter(|(i, _)| !adopted(&i.rel)) {
             out!(
                 "project root {}: {} is skipped: {why}",
                 root.id,
-                disk.display()
+                item.disk(root).display()
             );
         }
-        let candidates: Vec<std::path::PathBuf> = found
+        let candidates: Vec<PathBuf> = found
             .items
             .iter()
-            .filter(|i| !items.iter().any(|m| m.rel == i.rel))
-            .map(|i| i.disk(&root))
+            .filter(|i| paused.is_none() && !adopted(&i.rel))
+            .map(|i| i.disk(root))
             .collect();
         let new = pgit::tracking_repos(&candidates)
             .values()
@@ -571,7 +514,10 @@ fn report_projects(paths: &Paths, repo: &Canon, manifest: &Manifest, linked: &Li
         );
     }
     for (path, rule) in pgit::ignored(repo.root(), &mirror_paths) {
-        out!("{path}: ignored by git ({rule}), so it never gets history; change that rule");
+        problem!(
+            exit,
+            "{path}: ignored by git ({rule}), so it never gets history; change that rule"
+        );
     }
     match pgit::uncommitted_mirror_changes(repo.root()) {
         Some(0) | None => {}

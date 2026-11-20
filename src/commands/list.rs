@@ -15,6 +15,7 @@ use crate::lockfile::{LockEntry, Lockfile};
 use crate::manifest::{Manifest, SourceRecord};
 use crate::paths::Paths;
 use crate::rules;
+use crate::source::{UrlKind, check_url};
 use crate::sync;
 use crate::tree::{Kind, Tree, WorkingTree, tree_hash};
 
@@ -164,23 +165,27 @@ pub(crate) fn source_text(source: &SourceRecord) -> String {
     }
 }
 
-/// The followed ref or pinned version, with the locked commit. `ref_kind`
-/// describes the ref of the last update, so it is shown only while
-/// `source.ref` is still the lock's `ref`.
+/// The followed ref or pinned version, with the locked commit; the URL
+/// tells a local folder, which has neither. `ref_kind` describes the ref
+/// of the last update, so it is shown only while `source.ref` is still the
+/// lock's `ref`.
 fn version(source: &SourceRecord, entry: Option<&LockEntry>) -> String {
+    if check_url(&source.url) == Ok(UrlKind::Local) {
+        return "local folder".to_owned();
+    }
     let commit = entry.and_then(|e| e.commit.as_deref());
-    let at = commit
-        .map(|c| format!(" (at {})", short(c)))
-        .unwrap_or_default();
+    let at = commit.map_or_else(
+        || " (no commit in skiman.lock)".to_owned(),
+        |c| format!(" (at {})", short(c)),
+    );
     let locked = entry.is_some_and(|e| e.git_ref == source.git_ref);
     let kind = source.ref_kind.filter(|_| locked);
     match (source.git_ref.as_deref(), kind) {
-        (None, _) if commit.is_none() => "local folder".to_owned(),
         (None, _) => format!("follows the default branch{at}"),
         (Some(r), Some("branch")) => format!("follows branch {r}{at}"),
         (Some(r), Some("tag")) => match commit {
             Some(c) => format!("pinned to tag {r} ({})", short(c)),
-            None => format!("pinned to tag {r}"),
+            None => format!("pinned to tag {r}{at}"),
         },
         (Some(r), Some(_)) => format!("pinned to commit {}", short(r)),
         // A hand-written or changed ref: its kind is derived at the next update.

@@ -1,5 +1,7 @@
 //! Reading `skiman.toml` (spec Data formats). Only what sync and the name
-//! checks need is read here; the rules on its content are `skiman check`'s.
+//! checks need is read here; the rules on its content are `skiman check`'s,
+//! which read a value through the same function where both look at it
+//! ([`enabled_tools`], [`project_entries`], [`linked_problems`], [`REF_KINDS`]).
 
 use std::collections::BTreeMap;
 
@@ -13,6 +15,9 @@ use crate::project::root::is_path_form;
 pub struct Manifest {
     doc: DocumentMut,
 }
+
+/// The values `[skills.<name>.source].ref_kind` can hold.
+pub const REF_KINDS: [&str; 3] = ["branch", "tag", "commit"];
 
 /// The `[skills.<name>]` table of one skill, as far as distribution needs it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,18 +51,9 @@ impl Manifest {
         Ok(Manifest { doc })
     }
 
-    /// `[tools].enabled`, in file order; empty when absent. Non-string items are skipped.
+    /// [`enabled_tools`] of this file.
     pub fn enabled_tools(&self) -> Vec<String> {
-        self.doc
-            .get("tools")
-            .and_then(|t| t.get("enabled"))
-            .and_then(Item::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
+        enabled_tools(self.doc.as_table())
     }
 
     /// Every `[skills.<name>]` table.
@@ -114,13 +110,24 @@ impl Manifest {
             url: field("url").unwrap_or_default(),
             path: field("path").unwrap_or_default(),
             git_ref: field("ref"),
-            ref_kind: field("ref_kind").and_then(|kind| {
-                ["branch", "tag", "commit"]
-                    .into_iter()
-                    .find(|known| *known == kind)
-            }),
+            ref_kind: field("ref_kind").and_then(|kind| REF_KINDS.into_iter().find(|k| *k == kind)),
         })
     }
+}
+
+/// `[tools].enabled` of a parsed `skiman.toml` (`root` is its top table),
+/// in file order; empty when absent.
+pub fn enabled_tools(root: &Table) -> Vec<String> {
+    strings(root.get("tools").and_then(|t| t.get("enabled")))
+}
+
+/// The string items of an array, in order; empty when `item` is absent or
+/// not an array. Items of another type are skipped; `skiman check` reports them.
+pub fn strings(item: Option<&Item>) -> Vec<String> {
+    let items = item.and_then(Item::as_array).into_iter().flatten();
+    items
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect()
 }
 
 /// One `[projects.<id>]` table, as far as the project scope needs it.
@@ -146,22 +153,12 @@ pub fn project_entries(root: &Table) -> Vec<ProjectEntry> {
     let Some(projects) = root.get("projects").and_then(Item::as_table_like) else {
         return Vec::new();
     };
-    let strings = |item: &Item, key: &str| -> Vec<String> {
-        item.get(key)
-            .and_then(Item::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
     projects
         .iter()
         .map(|(id, item)| ProjectEntry {
             id: id.to_owned(),
             path: item.get("path").and_then(Item::as_str).map(str::to_owned),
-            exclude: strings(item, "exclude"),
+            exclude: strings(item.get("exclude")),
         })
         .collect()
 }

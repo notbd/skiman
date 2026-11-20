@@ -525,8 +525,8 @@ fn doctor_lists_the_links_the_next_sync_makes() {
     }
 }
 
-/// A hook doctor tells you to add skiman's line to by hand is not a problem
-/// doctor can judge (it cannot tell whether the line is there): exit 0.
+/// A hook that is not skiman's and lacks skiman's line is the user's to
+/// keep: doctor says to add the line by hand, and exits 0.
 #[test]
 fn doctor_exits_0_for_a_hook_that_is_not_skimans() {
     let sandbox = Sandbox::new();
@@ -538,6 +538,111 @@ fn doctor_exits_0_for_a_hook_that_is_not_skimans() {
     assert!(
         out.contains("not skiman's; add this line to it by hand"),
         "{out}"
+    );
+}
+
+/// A hook that holds skiman's line: doctor does not run it, so it says only
+/// that the line is there, not that the hooks are installed (this one exits
+/// before the line).
+#[test]
+fn doctor_says_a_hook_holds_skimans_line_but_not_that_git_reaches_it() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let hook = sandbox.canon().join(".git/hooks/pre-commit");
+    write(
+        &hook,
+        format!("#!/bin/sh\nexit 0\n'{BINARY}' check --staged || exit 1\n"),
+    );
+
+    let out = doctor(&sandbox, 0);
+    assert_line(
+        &out,
+        &format!(
+            "git hook {}: holds skiman's line; whether git reaches it is not checked",
+            hook.display()
+        ),
+    );
+    assert!(!out.contains("git hooks: installed"), "{out}");
+}
+
+/// In the folder `core.hooksPath` names, `skiman init` writes nothing:
+/// doctor reports each hook there as it is, and only a hook git skips
+/// because it is not executable is a problem (exit 3).
+#[test]
+fn doctor_reports_each_hook_in_the_folder_core_hooks_path_names() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let shared = sandbox.root().join("shared-hooks");
+    sandbox.git(
+        sandbox.canon(),
+        ["config", "core.hooksPath", shared.to_str().unwrap()],
+    );
+    let pre_commit = shared.join("pre-commit");
+    write(
+        &pre_commit,
+        format!("#!/bin/sh\n'{BINARY}' check --staged || exit 1\n"),
+    );
+    std::fs::set_permissions(&pre_commit, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let post_commit = shared.join("post-commit");
+    write(
+        &post_commit,
+        format!("#!/bin/sh\n'{BINARY}' sync --hook || true\n"),
+    );
+    std::fs::set_permissions(&post_commit, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let out = doctor(&sandbox, 3);
+    for line in [
+        format!(
+            "git hooks: core.hooksPath points to {}, so `skiman init` writes no git hooks there",
+            shared.display()
+        ),
+        format!(
+            "git hook {}: holds skiman's line; whether git reaches it is not checked",
+            pre_commit.display()
+        ),
+        format!(
+            "git hook {0}: not executable, so git skips it; make it executable: chmod +x '{0}'",
+            post_commit.display()
+        ),
+        format!(
+            "git hook {}: add this line to it by hand: '{BINARY}' sync --hook || true",
+            shared.join("post-merge").display()
+        ),
+    ] {
+        assert_line(&out, &line);
+    }
+}
+
+/// `core.hooksPath=/dev/null` turns hooks off: one line, not a problem.
+#[test]
+fn doctor_exits_0_when_core_hooks_path_is_not_a_folder() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    sandbox.git(sandbox.canon(), ["config", "core.hooksPath", "/dev/null"]);
+
+    let out = doctor(&sandbox, 0);
+    assert_line(
+        &out,
+        "git hooks: core.hooksPath points to /dev/null, which is not a folder, so git runs no hooks",
+    );
+}
+
+/// git skips a hook that is not executable, so skiman's own script without
+/// its executable bit is a problem (exit 3).
+#[test]
+fn doctor_exits_3_for_skimans_hook_that_is_not_executable() {
+    let sandbox = Sandbox::new();
+    init(&sandbox, "none");
+    let hook = sandbox.canon().join(".git/hooks/pre-commit");
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let out = doctor(&sandbox, 3);
+    assert_line(
+        &out,
+        &format!(
+            "git hook {0}: not executable, so git skips it; make it executable: chmod +x '{0}'",
+            hook.display()
+        ),
     );
 }
 

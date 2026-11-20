@@ -428,12 +428,14 @@ fn an_import_killed_at_each_step_of_a_move_to_another_filesystem_finishes_when_r
                     .unwrap();
                 let stderr = String::from_utf8_lossy(&adopt.stderr);
                 assert_eq!(adopt.status.code(), Some(1), "{case}: {stderr}");
+                let then = format!(
+                    "; delete it; then, to adopt the skill, move that copy to {} and run the command again",
+                    original.display()
+                );
                 assert!(
                     stderr.contains("cut short")
                         && stderr.contains(&copy)
-                        && stderr.contains(
-                            "to adopt the skill, delete it and move that copy here first"
-                        ),
+                        && stderr.contains(&then),
                     "{case}: {stderr}"
                 );
             }

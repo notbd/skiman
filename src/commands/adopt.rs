@@ -213,10 +213,11 @@ fn read(
             "{} is managed by another tool; skiman leaves it alone",
             entry.display()
         ),
-        Entry::Moved(copy) => {
-            backup::cut_short(&entry, &copy)
-                + "; to adopt the skill, delete it and move that copy here first"
-        }
+        Entry::Moved(copy) => format!(
+            "{}; then, to adopt the skill, move that copy to {} and run the command again",
+            backup::cut_short(&entry, &copy),
+            entry.display()
+        ),
         Entry::NotASkill => format!(
             "{} is not a skill folder (a folder, or a link to one, holding SKILL.md)",
             entry.display()

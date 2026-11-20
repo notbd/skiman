@@ -458,23 +458,33 @@ fn report_projects(
             .map(|i| i.disk(root))
             .filter(|d| linked.item_overlap(d).is_none() && std::fs::symlink_metadata(d).is_ok())
             .collect();
-        for (disk, tracking) in pgit::tracking_repos(&on_disk) {
-            if let Ok(Some(top)) = tracking {
+        let found = discover::discover(root, &skip, linked);
+        let adopted = |rel: &str| items.iter().any(|m| m.rel == rel);
+        let candidates: Vec<PathBuf> = found
+            .items
+            .iter()
+            .filter(|i| paused.is_none() && !adopted(&i.rel))
+            .map(|i| i.disk(root))
+            .collect();
+        // One batch per root: its managed items and its candidates go to git
+        // together (one `rev-parse` and one `ls-files` per repo in it).
+        let asked: Vec<PathBuf> = on_disk.iter().chain(&candidates).cloned().collect();
+        let tracking = pgit::tracking_repos(&asked);
+        for disk in &on_disk {
+            if let Some(Ok(Some(top))) = tracking.get(disk) {
                 problem!(
                     exit,
                     "{}: now tracked by the git repo {}; leave it to that repo with: {}",
                     disk.display(),
                     top.display(),
-                    command("eject", std::slice::from_ref(&disk))
+                    command("eject", std::slice::from_ref(disk))
                 );
             }
         }
-        let found = discover::discover(root, &skip, linked);
         for error in &found.errors {
             out!("{error}");
             *exit = exit.combine(Exit::OperationalError);
         }
-        let adopted = |rel: &str| items.iter().any(|m| m.rel == rel);
         for (item, why) in found.skipped.iter().filter(|(i, _)| !adopted(&i.rel)) {
             out!(
                 "project root {}: {} is skipped: {why}",
@@ -482,15 +492,9 @@ fn report_projects(
                 item.disk(root).display()
             );
         }
-        let candidates: Vec<PathBuf> = found
-            .items
+        let new = candidates
             .iter()
-            .filter(|i| paused.is_none() && !adopted(&i.rel))
-            .map(|i| i.disk(root))
-            .collect();
-        let new = pgit::tracking_repos(&candidates)
-            .values()
-            .filter(|t| matches!(t, Ok(None)))
+            .filter(|c| matches!(tracking.get(*c), Some(Ok(None))))
             .count();
         if new > 0 {
             out!(

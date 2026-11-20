@@ -327,6 +327,30 @@ fn items_a_project_repo_tracks_are_skipped_and_its_untracked_items_are_adopted()
     assert!(!exists(mirror(&sandbox, "app/AGENTS.md")));
 }
 
+/// A folder whose name git would read as pathspec magic (`:x`) or a glob
+/// is asked about as the literal path: its tracked item is skipped.
+#[test]
+fn an_item_tracked_in_a_folder_named_like_a_pathspec_is_skipped() {
+    let sandbox = setup("");
+    let repo = root(&sandbox).join("app");
+    std::fs::create_dir_all(&repo).unwrap();
+    sandbox.git(&repo, ["init", "--quiet"]);
+    write(repo.join(":example/AGENTS.md"), "# tracked\n");
+    write(repo.join("[ab]/AGENTS.md"), "# tracked\n");
+    write(repo.join("a/AGENTS.md"), "# untracked\n");
+    sandbox.git(
+        &repo,
+        [
+            "--literal-pathspecs",
+            "add",
+            ":example/AGENTS.md",
+            "[ab]/AGENTS.md",
+        ],
+    );
+
+    assert_eq!(planned(&sandbox), set(&["app/a/AGENTS.md"]));
+}
+
 #[test]
 fn a_secret_blocks_the_item_with_the_allow_hint_and_the_pasted_entry_lets_it_in() {
     let sandbox = setup("");

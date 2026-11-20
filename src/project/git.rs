@@ -60,7 +60,8 @@ pub fn is_linked_worktree(dir: &Path) -> bool {
 /// For each of `items` (absolute paths of project items on disk): the
 /// project git repo that tracks it (`Ok(Some(top))`), `Ok(None)` when none
 /// does, or the git error. A folder counts as tracked when any file in it
-/// is. One `git rev-parse` per repo found and one `git ls-files` per repo.
+/// is. One `git rev-parse` per repo found and one `git ls-files` per repo:
+/// a caller passes every path it asks about in one call.
 pub fn tracking_repos(items: &[PathBuf]) -> BTreeMap<PathBuf, Result<Option<PathBuf>, String>> {
     let mut tops: BTreeMap<PathBuf, Result<PathBuf, String>> = BTreeMap::new();
     let mut by_top: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
@@ -136,8 +137,9 @@ fn tracked_under(top: &Path, items: &[PathBuf]) -> Result<Vec<PathBuf>, String> 
             }
         })
         .collect();
+    // Literal: a folder named `:x` or `a[1]` is that path, not pathspec magic or a glob.
     let output = query_command(top)
-        .args(["ls-files", "-z", "--"])
+        .args(["--literal-pathspecs", "ls-files", "-z", "--"])
         .args(&rels)
         .output()
         .map_err(|e| format!("cannot run git in {}: {e}", top.display()))?;

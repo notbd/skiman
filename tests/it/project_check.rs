@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::support::{Sandbox, aws_key, fingerprint, init, read, write};
+use crate::support::{Sandbox, aws_key, fingerprint, init, logging_git, read, write};
 
 fn append(path: impl AsRef<Path>, text: &str) {
     let mut old = read(&path);
@@ -411,6 +411,43 @@ fn doctor_reports_a_managed_item_that_a_project_git_repo_tracks_later() {
             project.display(),
             item.display()
         ),
+    );
+}
+
+/// Doctor asks git about a project repo once: its managed items and the
+/// candidates not adopted yet go in one batch.
+#[test]
+fn doctor_asks_git_about_a_project_repo_once() {
+    let (sandbox, root) = with_root();
+    let project = root.join("proj");
+    write(project.join("AGENTS.md"), "rules\n");
+    sandbox.git(&project, ["init", "-q"]);
+    adopt(&sandbox);
+    write(project.join("sub/AGENTS.md"), "new\n");
+    let (path, log) = logging_git(&sandbox);
+
+    let output = sandbox
+        .skiman()
+        .env("PATH", path)
+        .arg("doctor")
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_has(
+        &stdout,
+        &format!(
+            "project root work: 1 project item(s) are not adopted yet; see them with: skiman project adopt {} --dry-run",
+            root.display()
+        ),
+    );
+    let calls = read(&log);
+    let count = |what: &str| calls.lines().filter(|l| l.contains(what)).count();
+    assert_eq!(
+        (count(" rev-parse --show-toplevel"), count(" ls-files ")),
+        (1, 1),
+        "{calls}"
     );
 }
 

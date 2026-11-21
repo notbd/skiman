@@ -66,8 +66,11 @@ fn refused_source_forms_exit_1_and_write_nothing() {
             "the blob URL `https://github.com/acme/skills/blob/main/skills/pdf/README.md` does not point at a SKILL.md; give the URL of the skill's SKILL.md or of its folder".to_owned(),
         ),
     ] {
+        // Confined (macOS): if a check regresses, git's `ext::` helper cannot
+        // write `/tmp/pwned` or reach the network. Elsewhere this runs
+        // unconfined.
         sandbox
-            .skiman()
+            .skiman_confined()
             .args(["add", "--yes", "--", &source])
             .assert()
             .code(1)

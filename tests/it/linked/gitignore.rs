@@ -1,6 +1,8 @@
 //! The `/linked/` line of the canon's `.gitignore` (spec "`.gitignore`")
 //! and the working-tree warning of `skiman check`.
 
+use std::path::PathBuf;
+
 use super::{COMPANY, append_manifest, folder};
 use crate::support::{Sandbox, init, read};
 
@@ -69,6 +71,18 @@ fn in_a_canon_that_is_not_a_git_repo_the_line_is_added_unless_one_is_there() {
     assert_eq!(read(repo.join(".gitignore")), ".skiman/\n/linked/\n");
 }
 
+/// Makes the canon's `.gitignore` a link to a dotfiles file holding
+/// `.skiman/`; returns that file.
+fn gitignore_link(sandbox: &Sandbox) -> PathBuf {
+    let repo = sandbox.canon();
+    let real = sandbox.root().join("dotfiles/gitignore");
+    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+    std::fs::write(&real, ".skiman/\n").unwrap();
+    std::fs::remove_file(repo.join(".gitignore")).unwrap();
+    std::os::unix::fs::symlink(&real, repo.join(".gitignore")).unwrap();
+    real
+}
+
 /// A `.gitignore` that is a link (a canon managed with dotfiles) is never
 /// written through by `linked add`: it refuses before any record.
 #[test]
@@ -76,11 +90,7 @@ fn a_gitignore_that_is_a_link_stops_linked_add_with_nothing_written() {
     let sandbox = Sandbox::new();
     init(&sandbox);
     let repo = sandbox.canon();
-    let real = sandbox.root().join("dotfiles/gitignore");
-    std::fs::create_dir_all(real.parent().unwrap()).unwrap();
-    std::fs::write(&real, ".skiman/\n").unwrap();
-    std::fs::remove_file(repo.join(".gitignore")).unwrap();
-    std::os::unix::fs::symlink(&real, repo.join(".gitignore")).unwrap();
+    let real = gitignore_link(&sandbox);
     folder(&sandbox, "work/company", &["alpha"]);
     let manifest = read(repo.join("skiman.toml"));
 
@@ -90,6 +100,26 @@ fn a_gitignore_that_is_a_link_stops_linked_add_with_nothing_written() {
 
     assert_eq!(read(&real), ".skiman/\n");
     assert_eq!(read(repo.join("skiman.toml")), manifest);
+}
+
+/// When git already ignores `linked/` another way (`.git/info/exclude`, as
+/// `init`'s warning suggests), a `.gitignore` that is a link does not stop
+/// `linked add`: the folder is registered and the link's file is untouched.
+#[test]
+fn a_gitignore_that_is_a_link_does_not_stop_linked_add_when_git_ignores_linked_another_way() {
+    let sandbox = Sandbox::new();
+    init(&sandbox);
+    let repo = sandbox.canon();
+    let real = gitignore_link(&sandbox);
+    std::fs::create_dir_all(repo.join(".git/info")).unwrap();
+    std::fs::write(repo.join(".git/info/exclude"), "/linked/\n").unwrap();
+    folder(&sandbox, "work/company", &["alpha"]);
+
+    linked_add(&sandbox, "work/company").code(0);
+
+    assert!(repo.join(".gitignore").is_symlink());
+    assert_eq!(read(&real), ".skiman/\n");
+    assert!(read(repo.join("skiman.toml")).contains("[linked.company]"));
 }
 
 /// While `[linked]` tables exist, `check` on the working tree warns when

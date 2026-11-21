@@ -27,7 +27,7 @@ fn sync_links_a_skill_folder_created_by_hand() {
     write_skill(&sandbox.canon().join("skills"), "notes");
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .arg("sync")
         .assert()
         .code(0)
@@ -42,6 +42,17 @@ linked [..]/home/.gemini/config/skills/notes
     let target = sandbox.canon().join("skills/notes");
     for tool in Tool::ALL {
         assert_symlink(sandbox.tool_dir(tool).join("notes"), &target, &target);
+    }
+    // What the git hooks run, confined too (macOS): it links a skill made since.
+    write_skill(&sandbox.canon().join("skills"), "memo");
+    sandbox
+        .skiman_confined()
+        .args(["sync", "--hook"])
+        .assert()
+        .code(0);
+    let target = sandbox.canon().join("skills/memo");
+    for tool in Tool::ALL {
+        assert_symlink(sandbox.tool_dir(tool).join("memo"), &target, &target);
     }
 }
 

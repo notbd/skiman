@@ -15,7 +15,7 @@ fn init_on_a_missing_path_creates_the_canon_layout_and_the_user_config() {
     let repo = sandbox.canon();
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["init", "--session-hooks", "none"])
         .arg(&repo)
         .assert()
@@ -340,18 +340,27 @@ fn init_run_again_does_not_repeat_a_line_git_cannot_judge() {
     );
 }
 
-/// A line that names `.skiman/` but that a later line undoes does not
-/// count: `init` asks git, as it does for `linked/`.
+/// A `.skiman/` line that a later line undoes does not count, whether that
+/// line is its exact negation or a broader rule (`!.*/`): `init` asks git,
+/// as it does for `linked/`.
 #[test]
 fn init_adds_the_skiman_entry_when_a_later_line_undoes_the_one_there() {
-    let sandbox = Sandbox::new();
-    let repo = reused_repo(&sandbox);
-    std::fs::write(repo.join(".gitignore"), "/.skiman/\n!/.skiman/\n").unwrap();
+    for (before, after) in [
+        (
+            "/.skiman/\n!/.skiman/\n",
+            "/.skiman/\n!/.skiman/\n.skiman/\n/linked/\n",
+        ),
+        (
+            ".skiman/\n/linked/\n!.*/\n",
+            ".skiman/\n/linked/\n!.*/\n.skiman/\n",
+        ),
+    ] {
+        let sandbox = Sandbox::new();
+        let repo = reused_repo(&sandbox);
+        std::fs::write(repo.join(".gitignore"), before).unwrap();
 
-    init_reused(&sandbox).code(0);
+        init_reused(&sandbox).code(0);
 
-    assert_eq!(
-        read(repo.join(".gitignore")),
-        "/.skiman/\n!/.skiman/\n.skiman/\n/linked/\n"
-    );
+        assert_eq!(read(repo.join(".gitignore")), after);
+    }
 }

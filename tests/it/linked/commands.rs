@@ -24,7 +24,11 @@ fn linked_add_registers_the_folder_and_a_second_run_changes_no_record() {
     let company = folder(&sandbox, "work/company", &["alpha"]);
     let before = contents(&[&company]);
 
-    linked_add(&sandbox, &[home(&sandbox, "work/company")])
+    sandbox
+        .skiman_confined()
+        .args(["linked", "add"])
+        .arg(home(&sandbox, "work/company"))
+        .assert()
         .code(0)
         .stdout_eq(str![[r#"
 registered linked folder company: ~/work/company

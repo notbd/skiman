@@ -10,10 +10,9 @@
 //! `git merge-tree --write-tree --merge-base` merges them with git's default
 //! rename detection. Only objects are used: nothing is checked out.
 //!
-//! Conflicts are rebuilt from merge-tree's stage entries
-//! (impl-notes git-fetch-and-merge.md 5.4): text conflicts through
-//! `git merge-file -L` with the fixed labels, everything markers cannot
-//! express as conflict records next to the file, or under
+//! Conflicts are rebuilt from merge-tree's stage entries: text conflicts
+//! through `git merge-file -L` with the fixed labels, everything markers
+//! cannot express as conflict records next to the file, or under
 //! `.skiman-conflicts/` when the record's path is taken.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -207,7 +206,7 @@ impl MergeRepo {
 
 impl MergeRepo {
     /// Rebuilds the result of a merge with conflicts from the result `tree`
-    /// and the stage entries (impl-notes git-fetch-and-merge.md 5.4).
+    /// and the stage entries.
     fn write_conflicts(
         &self,
         tree: &str,

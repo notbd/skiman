@@ -208,6 +208,6 @@ fn pty_drives_a_scripted_interaction() {
     assert_eq!(code, 3);
 
     let mut skiman = sandbox.skiman_pty(["--version"]);
-    skiman.expect("skiman 0.1.0");
+    skiman.expect(concat!("skiman ", env!("CARGO_PKG_VERSION")));
     assert_eq!(skiman.wait().0, 0);
 }

@@ -13,10 +13,7 @@ fn version_prints_the_version_and_exits_0() {
         .arg("--version")
         .assert()
         .code(0)
-        .stdout_eq(str![[r#"
-skiman 0.1.0
-
-"#]])
+        .stdout_eq(format!("skiman {}\n", env!("CARGO_PKG_VERSION")))
         .stderr_eq("");
 }
 

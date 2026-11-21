@@ -144,7 +144,10 @@ fn folder_restore_writes_the_items_this_machine_never_had() {
     );
     write(mirror(&sandbox, "a/.claude/skills/x/notes.md"), "notes\n");
 
-    restore(&sandbox, &[root(&sandbox)])
+    sandbox
+        .skiman_confined()
+        .args(["project", "restore", "--yes"])
+        .arg(root(&sandbox))
         .assert()
         .code(0)
         .stdout_eq(str![[r#"
@@ -631,7 +634,10 @@ write [..]/home/work/b/AGENTS.md
 fn eject_of_an_item_moves_its_mirror_to_a_backup_and_leaves_the_project() {
     let sandbox = adopted(&[("a/sub/AGENTS.md", AGENTS), ("b/AGENTS.md", AGENTS)]);
 
-    eject(&sandbox, &[disk(&sandbox, "a/sub/AGENTS.md")])
+    sandbox
+        .skiman_confined()
+        .args(["project", "eject", "--yes"])
+        .arg(disk(&sandbox, "a/sub/AGENTS.md"))
         .assert()
         .code(0)
         .stdout_eq(str![[r#"

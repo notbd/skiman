@@ -24,7 +24,7 @@ fn new_creates_a_valid_skill_and_links_it_into_every_installed_tool_directory() 
     let repo = sandbox.canon();
 
     sandbox
-        .skiman()
+        .skiman_confined()
         .args(["new", "pdf", "-d", "Fill PDF forms"])
         .assert()
         .code(0)
